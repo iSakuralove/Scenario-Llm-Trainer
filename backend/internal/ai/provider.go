@@ -139,6 +139,12 @@ type ScenarioReplyRequest struct {
 	UserMessage         string
 	ResponseType        string
 	AllowedContent      string
+	DiagnosticIntent    string
+	CoachingAction      string
+	DiagnosticFocus     string
+	MissingEvidence     []string
+	RepeatedWithTurn    int
+	ToneStyle           string
 	ForbiddenTerms      []string
 	HintLevel           int
 	IsDistractor        bool

@@ -176,15 +176,7 @@ func (p *OpenAICompatibleProvider) RewriteScenarioReply(ctx context.Context, req
 	var out struct {
 		Reply string `json:"reply"`
 	}
-	prompt, err := renderPrompt("scenario_reply", map[string]interface{}{
-		"QuestionTitle":       req.QuestionTitle,
-		"UserMessage":         req.UserMessage,
-		"ResponseType":        req.ResponseType,
-		"AllowedContent":      req.AllowedContent,
-		"HintLevel":           req.HintLevel,
-		"ConversationSummary": req.ConversationSummary,
-		"RecentMessagesText":  formatScenarioContext(req.RecentMessages),
-	})
+	prompt, err := renderScenarioReplyPrompt(req)
 	if err != nil {
 		return "", err
 	}
@@ -201,15 +193,7 @@ func (p *OpenAICompatibleProvider) RewriteScenarioReplyStream(ctx context.Contex
 	var out struct {
 		Reply string `json:"reply"`
 	}
-	prompt, err := renderPrompt("scenario_reply", map[string]interface{}{
-		"QuestionTitle":       req.QuestionTitle,
-		"UserMessage":         req.UserMessage,
-		"ResponseType":        req.ResponseType,
-		"AllowedContent":      req.AllowedContent,
-		"HintLevel":           req.HintLevel,
-		"ConversationSummary": req.ConversationSummary,
-		"RecentMessagesText":  formatScenarioContext(req.RecentMessages),
-	})
+	prompt, err := renderScenarioReplyPrompt(req)
 	if err != nil {
 		return "", err
 	}
@@ -220,6 +204,24 @@ func (p *OpenAICompatibleProvider) RewriteScenarioReplyStream(ctx context.Contex
 		return "", err
 	}
 	return out.Reply, nil
+}
+
+func renderScenarioReplyPrompt(req ScenarioReplyRequest) (string, error) {
+	return renderPrompt("scenario_reply", map[string]interface{}{
+		"QuestionTitle":       req.QuestionTitle,
+		"UserMessage":         req.UserMessage,
+		"ResponseType":        req.ResponseType,
+		"AllowedContent":      req.AllowedContent,
+		"DiagnosticIntent":    req.DiagnosticIntent,
+		"CoachingAction":      req.CoachingAction,
+		"DiagnosticFocus":     req.DiagnosticFocus,
+		"MissingEvidenceText": strings.Join(req.MissingEvidence, "、"),
+		"RepeatedWithTurn":    req.RepeatedWithTurn,
+		"ToneStyle":           req.ToneStyle,
+		"HintLevel":           req.HintLevel,
+		"ConversationSummary": req.ConversationSummary,
+		"RecentMessagesText":  formatScenarioContext(req.RecentMessages),
+	})
 }
 
 func (p *OpenAICompatibleProvider) GenerateInterviewFeedback(ctx context.Context, req InterviewFeedbackRequest) (InterviewFeedback, error) {

@@ -32,6 +32,9 @@ func TestDiagnosticAgentBlocksRootCauseGuess(t *testing.T) {
 	if len(session.RevealedClueIDs) != 0 {
 		t.Fatalf("root cause guess should not reveal clues: %#v", session.RevealedClueIDs)
 	}
+	if !(strings.Contains(result.AssistantContent, "证据链") || strings.Contains(result.AssistantContent, "判断依据")) {
+		t.Fatalf("expected structured anti-guess content, got %q", result.AssistantContent)
+	}
 	if result.Meta.AgentTrace == nil || result.Meta.AgentTrace.Agent != "diagnostic_agent" {
 		t.Fatalf("expected diagnostic trace: %#v", result.Meta.AgentTrace)
 	}
@@ -59,18 +62,15 @@ func TestDiagnosticAgentRevealsSurfaceClue(t *testing.T) {
 	if len(session.RevealedClueIDs) != 1 || session.RevealedClueIDs[0] != "c1" {
 		t.Fatalf("session was not updated: %#v", session.RevealedClueIDs)
 	}
-	if !strings.Contains(result.AssistantContent, "有效线索") {
+	if !(strings.Contains(result.AssistantContent, "释放线索内容") || strings.Contains(result.AssistantContent, "命中")) {
 		t.Fatalf("unexpected assistant content: %q", result.AssistantContent)
-	}
-	if !strings.Contains(result.AssistantContent, "你抓住了关键因素") {
-		t.Fatalf("expected encouragement for key clue, got: %q", result.AssistantContent)
 	}
 	if strings.Contains(result.AssistantContent, question.Content.RootCause) {
 		t.Fatalf("assistant content leaked root cause: %q", result.AssistantContent)
 	}
 }
 
-func TestDiagnosticAgentEscalatesHintAfterRepeatedMisses(t *testing.T) {
+func TestDiagnosticAgentEscalatesHintAfterRepeatedBroadMisses(t *testing.T) {
 	session := sampleSession()
 	session.NoNewClueStreak = 2
 	session.HintLevel = 1
@@ -80,7 +80,7 @@ func TestDiagnosticAgentEscalatesHintAfterRepeatedMisses(t *testing.T) {
 	result, err := agent.Run(context.Background(), DiagnosticRequest{
 		Session:     session,
 		Question:    question,
-		UserMessage: "今天先随便看看",
+		UserMessage: "我想先看异常前后的访问路径变化和波动趋势",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -90,6 +90,9 @@ func TestDiagnosticAgentEscalatesHintAfterRepeatedMisses(t *testing.T) {
 	}
 	if session.NoNewClueStreak != 0 {
 		t.Fatalf("expected streak reset, got %d", session.NoNewClueStreak)
+	}
+	if !(strings.Contains(result.AssistantContent, "具体观察点") || strings.Contains(result.AssistantContent, "方向基本合理")) {
+		t.Fatalf("expected structured hint escalation content, got %q", result.AssistantContent)
 	}
 }
 
@@ -111,6 +114,9 @@ func TestDiagnosticAgentMarksDistractor(t *testing.T) {
 	}
 	if result.Meta.RevealedClueID != "d1" {
 		t.Fatalf("expected d1, got %q", result.Meta.RevealedClueID)
+	}
+	if !(strings.Contains(result.AssistantContent, "可排除观察") || strings.Contains(result.AssistantContent, "排除")) {
+		t.Fatalf("expected structured distractor content, got %q", result.AssistantContent)
 	}
 }
 

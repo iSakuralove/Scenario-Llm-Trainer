@@ -70,6 +70,7 @@ func (a *DiagnosticAgent) Run(ctx context.Context, req DiagnosticRequest) (Diagn
 		session:  req.Session,
 		question: question,
 		content:  content,
+		context:  buildDiagnosticContext(content, question, req.Session, req.Messages),
 		meta:     domain.ResponseMeta{HintLevel: req.Session.HintLevel},
 	}
 	steps := []Step{
@@ -115,10 +116,53 @@ type diagnosticState struct {
 	session          *domain.ScenarioSession
 	question         *domain.ScenarioQuestion
 	content          string
+	context          DiagnosticContext
 	meta             domain.ResponseMeta
 	assistantContent string
 	decisionMade     bool
 	semantic         SemanticDecision
+}
+
+type DiagnosticContext struct {
+	LastIntent       string
+	DiagnosticFocus  string
+	RepeatStreak     int
+	OffTrackStreak   int
+	GuessStreak      int
+	EvidenceCoverage int
+	RepeatedTurn     int
+}
+
+func buildDiagnosticContext(content string, question *domain.ScenarioQuestion, session *domain.ScenarioSession, messages []domain.ScenarioMessage) DiagnosticContext {
+	ctx := DiagnosticContext{
+		LastIntent:       classifyAgentIntent(content),
+		DiagnosticFocus:  diagnosticFocus(content),
+		EvidenceCoverage: len(sessionRevealedIDs(session)),
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		previous := strings.TrimSpace(messages[i].UserContent)
+		if previous == "" {
+			continue
+		}
+		intent := classifyAgentIntent(previous)
+		switch intent {
+		case agentIntentOffTrack, agentIntentNoise, agentIntentChattyOffTopic:
+			ctx.OffTrackStreak++
+		case agentIntentAnswerGuess, agentIntentHypothesis:
+			ctx.GuessStreak++
+		}
+		if ctx.RepeatedTurn == 0 && isRepeatedProbe(content, previous, question) {
+			ctx.RepeatedTurn = messages[i].TurnNumber
+			ctx.RepeatStreak++
+		}
+		if ctx.OffTrackStreak+ctx.GuessStreak+ctx.RepeatStreak == 0 {
+			break
+		}
+	}
+	if ctx.RepeatedTurn > 0 {
+		ctx.LastIntent = agentIntentRepeatProbe
+	}
+	return ctx
 }
 
 func (a *DiagnosticAgent) inputQualityCheckStep(req DiagnosticRequest, state *diagnosticState) Step {
@@ -133,9 +177,8 @@ func (a *DiagnosticAgent) inputQualityCheckStep(req DiagnosticRequest, state *di
 				state.meta.SemanticDecision = semanticDecisionRejectNoise
 				state.meta.AgentIntent = agentIntentNoise
 				state.meta.ResponseType = "redirect"
-				state.assistantContent = "这条输入还不足以作为排查问题。请提出一个具体的观察点，例如日志、指标、变更、配置或影响范围。"
+				state.assistantContent = "要求用户改成一个可验证的排查动作，示例范围仅限日志、指标、变更、配置、影响范围。"
 				state.decisionMade = true
-				state.session.NoNewClueStreak++
 				state.meta.HintLevel = state.session.HintLevel
 				return ToolResult{
 					Summary:  "识别为无意义或过短输入，拒绝释放线索",
@@ -159,11 +202,14 @@ func (a *DiagnosticAgent) agentRelevanceJudgeStep(req DiagnosticRequest, state *
 			if state.decisionMade {
 				return ToolResult{Summary: "已有输入质量决策，跳过相关性判断", Metadata: map[string]string{"skipped": "true"}}, nil
 			}
-			intent := classifyAgentIntent(state.content)
+			intent := state.context.LastIntent
+			if intent == "" {
+				intent = classifyAgentIntent(state.content)
+			}
 			state.meta.AgentIntent = intent
 			return ToolResult{
 				Summary:  "已完成提问意图分类",
-				Metadata: map[string]string{"agent_intent": intent},
+				Metadata: map[string]string{"agent_intent": intent, "diagnostic_focus": state.context.DiagnosticFocus},
 			}, nil
 		},
 	}
@@ -182,8 +228,7 @@ func (a *DiagnosticAgent) detectRootCauseLeakStep(req DiagnosticRequest, state *
 				state.meta.IsSanitized = true
 				state.meta.SemanticDecision = semanticDecisionBlockGuess
 				state.meta.RootSimilarity = float64(match) / 100
-				state.assistantContent = "目前信息尚不足以直接确认该结论。请先说明你的判断依据，并继续收集能支撑根因的证据。"
-				state.session.NoNewClueStreak++
+				state.assistantContent = "要求用户先补证据链，围绕日志、指标、变更或验证结果说明判断依据，不能确认根因。"
 				state.decisionMade = true
 				state.meta.HintLevel = state.session.HintLevel
 				return ToolResult{
@@ -219,8 +264,7 @@ func (a *DiagnosticAgent) embeddingSimilarityMatchStep(req DiagnosticRequest, st
 				state.meta.ResponseType = "insufficient"
 				state.meta.IsAnswerLeak = true
 				state.meta.IsSanitized = true
-				state.assistantContent = "目前信息尚不足以直接确认该结论。请先说明你的判断依据，并继续收集能支撑根因的证据。"
-				state.session.NoNewClueStreak++
+				state.assistantContent = "要求用户先补证据链，围绕日志、指标、变更或验证结果说明判断依据，不能确认根因。"
 				state.decisionMade = true
 			case semanticDecisionReleaseClue:
 				state.releaseClue(decision.MatchedClue)
@@ -229,7 +273,7 @@ func (a *DiagnosticAgent) embeddingSimilarityMatchStep(req DiagnosticRequest, st
 					state.releaseClue(clue)
 					state.meta.SemanticDecision = semanticDecisionGuidedRedirect
 					state.meta.MatchedClueID = clue.ClueID
-					state.assistantContent = "这个方向还需要更多证据支撑。先补一条基础观察：" + clue.Content
+					state.assistantContent = "提示用户已接近关键线索，并释放一条基础观察：" + clue.Content
 				}
 			}
 			metadata := map[string]string{
@@ -263,6 +307,11 @@ func (a *DiagnosticAgent) findTriggeredClueStep(req DiagnosticRequest, state *di
 			if state.decisionMade {
 				return ToolResult{Summary: "已有安全策略决策，跳过线索释放", Metadata: map[string]string{"skipped": "true"}}, nil
 			}
+			switch state.meta.AgentIntent {
+			case agentIntentRelevant, agentIntentEvidenceProbe, agentIntentBroadProbe:
+			default:
+				return ToolResult{Summary: "当前意图不允许直接释放线索", Metadata: map[string]string{"skipped": "true", "agent_intent": state.meta.AgentIntent}}, nil
+			}
 			clue, found := ai.FindTriggeredClue(state.question.Content.RevealStrategy, state.content, state.session.RevealedClueIDs)
 			if !found {
 				return ToolResult{Summary: "未命中新线索", Metadata: map[string]string{"clue_found": "false"}}, nil
@@ -295,11 +344,11 @@ func (state *diagnosticState) releaseClue(clue domain.Clue) {
 	state.decisionMade = true
 	if clue.IsDistractor {
 		state.meta.ResponseType = "redirect"
-		state.assistantContent = "这个方向可以排除：" + clue.Content
+		state.assistantContent = "说明该方向可先排除，并给出可排除观察：" + clue.Content
 		return
 	}
 	state.meta.ResponseType = "partial"
-	state.assistantContent = "你抓住了关键因素，继续沿这个方向验证。你获得了一条有效线索：" + clue.Content
+	state.assistantContent = "说明用户命中了有效线索，并释放线索内容：" + clue.Content
 }
 
 func applySemanticMeta(meta *domain.ResponseMeta, decision SemanticDecision) {
@@ -345,33 +394,74 @@ func nextSurfaceGuidanceClue(strategy domain.RevealStrategy, revealed []string) 
 
 func (a *DiagnosticAgent) computeHintStep(req DiagnosticRequest, state *diagnosticState) Step {
 	return Step{
-		Name: "compute_hint",
+		Name: "route_response_policy",
 		Kind: "tool",
 		Run: func(context.Context, *StepRecorder) (ToolResult, error) {
-			emitStage(req.OnStage, "agent_hint", "正在判断是否需要升级提示")
+			emitStage(req.OnStage, "agent_policy", "正在选择排查引导策略")
 			if state.decisionMade {
 				return ToolResult{Summary: "已有线索或安全决策，提示等级保持不变", Metadata: map[string]string{"skipped": "true"}}, nil
 			}
-			state.session.NoNewClueStreak++
 			state.meta.ResponseType = "redirect"
+			decision := semanticDecisionGuidedRedirect
+			action := "suggest_next_dimension"
 			hint := ai.NextHint(state.question.Content.RevealStrategy, state.session.RevealedClueIDs)
-			if state.session.NoNewClueStreak >= 3 && state.session.HintLevel < 3 {
-				state.session.HintLevel++
-				state.session.NoNewClueStreak = 0
+			switch {
+			case state.context.RepeatedTurn > 0 || state.meta.AgentIntent == agentIntentRepeatProbe:
+				decision = semanticDecisionRepeatRedirect
+				action = "repeat_redirect"
+				state.assistantContent = "提醒该方向已经覆盖过，并建议换到配置、指标或依赖链路等新视角。"
+			case state.meta.AgentIntent == agentIntentAnswerGuess || state.meta.AgentIntent == agentIntentHypothesis:
+				decision = semanticDecisionAskEvidence
+				action = "ask_for_evidence"
+				state.meta.ResponseType = "insufficient"
+				state.assistantContent = "要求用户补完整证据链，不能直接确认该判断。"
+			case state.meta.AgentIntent == agentIntentChattyOffTopic:
+				decision = semanticDecisionHumorousRedirect
+				action = "humorous_redirect"
+				state.assistantContent = "温和打断聊天式偏题，拉回主线，并要求给出可验证的排查观察点。"
+			case state.meta.AgentIntent == agentIntentOffTrack:
+				decision = semanticDecisionRequestRephrase
+				action = "request_rephrase"
+				state.assistantContent = "指出当前方向跑偏，要求重述为一个可验证的排查动作。"
+			case state.meta.AgentIntent == agentIntentBroadProbe:
+				decision = semanticDecisionNarrowScope
+				action = "narrow_scope"
+				state.session.NoNewClueStreak++
+				if state.session.NoNewClueStreak >= 3 && state.session.HintLevel < 3 {
+					state.session.HintLevel++
+					state.session.NoNewClueStreak = 0
+				}
+				state.assistantContent = "认可方向基本合理，但要求把范围收窄到日志、指标、变更、配置或依赖链路中的一个具体观察点。"
+			default:
+				state.session.NoNewClueStreak++
+				if state.session.NoNewClueStreak >= 3 && state.session.HintLevel < 3 {
+					state.session.HintLevel++
+					state.session.NoNewClueStreak = 0
+				}
+				switch state.session.HintLevel {
+				case 1:
+					state.assistantContent = "说明暂未解锁新线索，但鼓励继续从日志、指标、变更、配置或依赖链路等角度推进。"
+				case 2:
+					state.assistantContent = "说明仍未解锁新线索，并要求把排查动作说得更具体，例如哪类日志、哪个指标或哪次变更。"
+				default:
+					state.assistantContent = "给出一条方向提示：" + hint
+				}
 			}
 			state.meta.HintLevel = state.session.HintLevel
-			switch state.session.HintLevel {
-			case 1:
-				state.assistantContent = "暂未发现新的可释放线索。你可以换一个排查维度继续提问。"
-			case 2:
-				state.assistantContent = "暂未发现新的可释放线索。建议更具体地询问运行指标、日志或最近变更。"
-			default:
-				state.assistantContent = "方向提示：" + hint
+			if decision != "" {
+				state.meta.SemanticDecision = decision
 			}
 			state.decisionMade = true
 			return ToolResult{
-				Summary:  "未命中新线索，已更新提示等级",
-				Metadata: map[string]string{"decision": "hint_redirect", "hint_level": fmt.Sprintf("%d", state.session.HintLevel)},
+				Summary: "已根据排查行为选择内部引导策略",
+				Metadata: map[string]string{
+					"decision":         firstNonEmpty(decision, "hint_redirect"),
+					"action":           action,
+					"hint_level":       fmt.Sprintf("%d", state.session.HintLevel),
+					"agent_intent":     state.meta.AgentIntent,
+					"diagnostic_focus": state.context.DiagnosticFocus,
+					"repeat_turn":      fmt.Sprintf("%d", state.context.RepeatedTurn),
+				},
 			}, nil
 		},
 	}
@@ -409,6 +499,11 @@ func (a *DiagnosticAgent) rewriteTeachingReplyStep(req DiagnosticRequest, state 
 				UserMessage:         state.content,
 				ResponseType:        state.meta.ResponseType,
 				AllowedContent:      state.assistantContent,
+				DiagnosticIntent:    state.meta.AgentIntent,
+				CoachingAction:      firstNonEmpty(state.meta.SemanticDecision, state.meta.ResponseType),
+				DiagnosticFocus:     state.context.DiagnosticFocus,
+				RepeatedWithTurn:    state.context.RepeatedTurn,
+				ToneStyle:           "playful-guide",
 				ForbiddenTerms:      diagnosticRouterForbiddenTerms(state.question),
 				HintLevel:           state.session.HintLevel,
 				IsDistractor:        state.meta.IsDistractor,
@@ -471,4 +566,51 @@ func buildSafeConversationSummary(existing string, recentCount int) string {
 		return "已触发长对话上下文摘要。"
 	}
 	return fmt.Sprintf("已触发长对话上下文摘要，纳入最近 %d 条消息的安全摘要。", recentCount)
+}
+
+func diagnosticFocus(input string) string {
+	lower := strings.ToLower(input)
+	switch {
+	case containsAnyLower(lower, []string{"日志", "log", "slow log"}):
+		return "logs"
+	case containsAnyLower(lower, []string{"指标", "监控", "metric", "cpu", "内存", "延迟", "耗时"}):
+		return "metrics"
+	case containsAnyLower(lower, []string{"发布", "变更", "release", "deploy"}):
+		return "changes"
+	case containsAnyLower(lower, []string{"配置", "config"}):
+		return "config"
+	case containsAnyLower(lower, []string{"数据库", "连接", "sql", "explain", "慢查询"}):
+		return "database"
+	case containsAnyLower(lower, []string{"缓存", "cache"}):
+		return "cache"
+	case containsAnyLower(lower, []string{"网络", "依赖", "链路", "network"}):
+		return "dependency"
+	default:
+		return "general"
+	}
+}
+
+func isRepeatedProbe(current, previous string, question *domain.ScenarioQuestion) bool {
+	current = strings.TrimSpace(current)
+	previous = strings.TrimSpace(previous)
+	if current == "" || previous == "" {
+		return false
+	}
+	if ai.Similarity(current, previous) >= 0.62 {
+		return true
+	}
+	currentLower := strings.ToLower(current)
+	if containsAnyLower(currentLower, []string{"还是", "继续问", "刚才", "刚刚", "上一个", "同样", "依然"}) &&
+		diagnosticFocus(current) != "general" &&
+		diagnosticFocus(current) == diagnosticFocus(previous) {
+		return true
+	}
+	if question != nil {
+		for _, clue := range append(append(question.Content.RevealStrategy.SurfaceClues, question.Content.RevealStrategy.DeepClues...), question.Content.RevealStrategy.Distractors...) {
+			if ai.ContainsAny(current, clue.TriggerKeywords) && ai.ContainsAny(previous, clue.TriggerKeywords) {
+				return true
+			}
+		}
+	}
+	return false
 }
