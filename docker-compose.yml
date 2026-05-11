@@ -1,0 +1,52 @@
+name: teaching-mvp
+
+services:
+  api:
+    build:
+      context: ./backend
+    environment:
+      PORT: 8080
+      JWT_SECRET: local-dev-secret
+      STORE_MODE: postgres
+      DATABASE_URL: postgres://teaching:teaching@postgres:5432/teaching_mvp?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      STT_BASE_URL: ${STT_BASE_URL:-}
+      STT_API_KEY: ${STT_API_KEY:-}
+      STT_MODEL: ${STT_MODEL:-}
+      STT_TIMEOUT_SECONDS: ${STT_TIMEOUT_SECONDS:-}
+      ZETA_KEY: ${ZETA_KEY:-}
+      JIANYI_API_KEY: ${JIANYI_API_KEY:-}
+      DEEPSEEK_KEY: ${DEEPSEEK_KEY:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      EMBEDDING_FALLBACK_MODEL: ${EMBEDDING_FALLBACK_MODEL:-}
+      EMBEDDING_TIMEOUT_SECONDS: ${EMBEDDING_TIMEOUT_SECONDS:-}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+      - redis
+
+  postgres:
+    image: pgvector/pgvector:pg15
+    environment:
+      POSTGRES_DB: teaching_mvp
+      POSTGRES_USER: teaching
+      POSTGRES_PASSWORD: teaching
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./backend/migrations:/docker-entrypoint-initdb.d:ro
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres-data:

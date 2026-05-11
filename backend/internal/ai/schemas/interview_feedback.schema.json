@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "interview_feedback",
+  "title": "interview_feedback",
+  "description": "AI interview feedback extension",
+  "x-version": "1.0.0",
+  "x-task": "IV-05",
+  "type": "object",
+  "required": ["highlights", "deficiencies", "follow_up_question", "final_report"],
+  "properties": {
+    "highlights": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "deficiencies": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "follow_up_question": { "type": "string" },
+    "final_report": { "type": "string" }
+  }
+}

@@ -1,0 +1,43 @@
+生成一套中文运维/后端排障训练情景题，必须只返回 JSON 对象，不要 Markdown。
+输出第一个字符必须是 {，最后一个字符必须是 }，不得输出解释、标题、列表、注释、```json 或任何前后缀。
+
+字段必须完全匹配：
+{
+  "title": "...",
+  "description": "...",
+  "domain": "{{.Domain}}",
+  "difficulty": "{{.Difficulty}}",
+  "scenario_type": "{{.ScenarioType}}",
+  "tags": ["..."],
+  "content": {
+    "root_cause": "...",
+    "root_cause_keywords": ["..."],
+    "key_evidence": ["..."],
+    "standard_procedure": ["..."],
+    "architecture_diagram": "",
+    "architecture_diagram_spec": {
+      "direction": "TD",
+      "nodes": [{"id":"Client","label":"客户端"}, {"id":"Service","label":"服务(示例)"}],
+      "edges": [{"from":"Client","to":"Service","label":"请求","style":"solid"}]
+    },
+    "reference_links": ["..."],
+    "reveal_strategy": {
+      "surface_clues": [{"clue_id":"c1","trigger_keywords":["..."],"content":"...","is_distractor":false,"recommended_next_ask":"..."}],
+      "deep_clues": [{"clue_id":"c2","trigger_keywords":["..."],"prerequisite_clues":["c1"],"content":"...","is_distractor":false,"recommended_next_ask":"..."}],
+      "distractors": [{"clue_id":"d1","trigger_keywords":["..."],"content":"...","is_distractor":true}]
+    }
+  }
+}
+
+要求：
+- 至少 2 条 surface_clues，至少 1 条 deep_clues，至少 1 条 distractor。
+- root_cause 不要出现在 description 或 clue content 中。
+- 不要手写 Mermaid。必须输出 architecture_diagram_spec，由后端生成 Mermaid。
+- architecture_diagram 必须保留为空字符串。
+- architecture_diagram_spec.direction 只能是 TD 或 LR。
+- architecture_diagram_spec.nodes 至少 2 个，edges 至少 1 条。
+- architecture_diagram_spec.nodes[].id 只能使用英文字母开头的 A-Z/a-z/0-9/_，例如 Client、DNSResolver、BadIP；不要使用中文、连字符或空格作为 id。
+- architecture_diagram_spec.nodes[].label 可以使用中文、括号、冒号、斜杠等业务文本。
+- architecture_diagram_spec.edges[].style 只能省略、solid 或 dotted。
+- 本次生成 nonce：{{.Nonce}}。请围绕该 nonce 自主选择不同故障现象、指标和排查链路，避免重复模板题。
+- 标签参考：{{.TagsText}}。

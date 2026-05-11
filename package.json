@@ -1,0 +1,24 @@
+{
+  "name": "situational-teaching-workspace",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "npm run dev:all",
+    "dev:all": "node scripts/dev-all.mjs",
+    "dev:frontend": "npm --prefix frontend run dev -- --host 0.0.0.0",
+    "dev:backend": "node scripts/backend-local.mjs",
+    "dev:backend:docker": "docker compose up --build api",
+    "deps": "npm --prefix frontend install",
+    "sync:frontend": "npm --prefix frontend run build",
+    "sync:backend": "node scripts/backend-local.mjs --check",
+    "sync": "npm run sync:frontend && npm run sync:backend",
+    "clean:backend": "npm run reset:backend",
+    "clean:backend:start": "npm run reset:backend:start",
+    "reset:backend": "node scripts/reset-backend-data.mjs",
+    "reset:backend:start": "node scripts/reset-backend-data.mjs --start-api --detached",
+    "reset:docker": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reset-demo-data.ps1",
+    "test:backend": "cd backend && go test ./...",
+    "test:frontend": "npm --prefix frontend run lint && npm --prefix frontend run build",
+    "test": "npm run test:backend && npm run test:frontend"
+  }
+}

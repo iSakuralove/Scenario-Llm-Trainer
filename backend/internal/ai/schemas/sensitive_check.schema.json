@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sensitive_check",
+  "title": "sensitive_check",
+  "description": "Model-assisted sensitive information detection",
+  "x-version": "1.0.0",
+  "x-task": "SR-02 AI-03",
+  "type": "object",
+  "required": ["status", "sanitized", "findings", "summary"],
+  "properties": {
+    "status": { "type": "string", "enum": ["clear", "needs_review", "risk"] },
+    "sanitized": { "type": "boolean" },
+    "summary": { "type": "string" },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "required": ["type", "field", "excerpt", "severity", "suggestion", "confidence"],
+      "properties": {
+        "type": { "type": "string", "minLength": 1 },
+        "field": { "type": "string", "minLength": 1 },
+        "excerpt": { "type": "string", "minLength": 1 },
+        "severity": { "type": "string", "enum": ["low", "medium", "high"] },
+        "suggestion": { "type": "string", "minLength": 1 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    }
+  }
+}

@@ -1,0 +1,304 @@
+.profile-page {
+  gap: 18px;
+  color: #e6edf5;
+}
+
+.profile-page .page-header {
+  padding: 26px 28px 24px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at top right, rgba(92, 225, 198, 0.14), transparent 26%),
+    linear-gradient(135deg, #0b1016 0%, #0f1722 46%, #111a27 100%);
+}
+
+.profile-page .title-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  background: rgba(92, 225, 198, 0.12);
+  color: #8ef0db;
+}
+
+.profile-page .page-header h1 {
+  color: #f5f8fc;
+  font-size: 36px;
+  line-height: 1.05;
+}
+
+.profile-page .page-header p {
+  margin-top: 8px;
+  color: rgba(220, 228, 238, 0.76);
+  line-height: 1.7;
+}
+
+.profile-page .panel,
+.profile-page .metric {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(13, 19, 29, 0.96), rgba(17, 26, 39, 0.96));
+  box-shadow: 0 20px 46px rgba(0, 0, 0, 0.26);
+}
+
+.profile-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.75fr);
+  gap: 18px;
+  padding: 26px 28px;
+  background:
+    radial-gradient(circle at top right, rgba(255, 90, 54, 0.16), transparent 26%),
+    radial-gradient(circle at bottom left, rgba(92, 225, 198, 0.12), transparent 24%),
+    linear-gradient(135deg, #0c131d 0%, #121d2c 46%, #162233 100%);
+}
+
+.profile-hero-copy {
+  display: grid;
+  gap: 10px;
+}
+
+.profile-hero-kicker {
+  color: #8ef0db;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.profile-hero h2 {
+  margin: 0;
+  color: #f5f8fc;
+  font-size: 34px;
+  line-height: 1.08;
+}
+
+.profile-hero p {
+  margin: 0;
+  color: rgba(220, 228, 238, 0.74);
+  line-height: 1.72;
+}
+
+.profile-domain-ribbon {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 18px 18px 20px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.profile-domain-ribbon-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #f5f8fc;
+}
+
+.profile-domain-ribbon-head svg {
+  color: #8ef0db;
+}
+
+.profile-domain-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.profile-domain-chip-list span {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 14px;
+  border: 1px solid rgba(142, 240, 219, 0.22);
+  border-radius: 999px;
+  background: rgba(92, 225, 198, 0.08);
+  color: #8ef0db;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.profile-highlight-grid .profile-highlight-card {
+  min-height: 122px;
+  background: linear-gradient(180deg, rgba(18, 28, 40, 0.94), rgba(15, 23, 34, 0.94));
+}
+
+.profile-highlight-card span {
+  color: rgba(220, 228, 238, 0.66);
+}
+
+.profile-highlight-card strong {
+  color: #ffffff;
+}
+
+.profile-highlight-card small {
+  display: block;
+  margin-top: 8px;
+  color: rgba(220, 228, 238, 0.74);
+  line-height: 1.55;
+}
+
+.profile-main-grid {
+  align-items: start;
+}
+
+.profile-settings-panel,
+.profile-summary-panel,
+.profile-community-panel,
+.profile-admin-panel {
+  padding: 24px 26px;
+  background:
+    radial-gradient(circle at top right, rgba(92, 225, 198, 0.08), transparent 24%),
+    linear-gradient(180deg, rgba(15, 23, 34, 0.96), rgba(16, 25, 38, 0.96));
+}
+
+.profile-page .panel-title {
+  margin-bottom: 18px;
+  color: #f5f8fc;
+}
+
+.profile-page .panel-title svg {
+  color: #8ef0db;
+}
+
+.profile-settings-form {
+  display: grid;
+  gap: 16px;
+}
+
+.profile-settings-form label {
+  display: grid;
+  gap: 8px;
+  color: rgba(220, 228, 238, 0.76);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.profile-settings-form select,
+.profile-settings-form input,
+.profile-admin-panel select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 0 14px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #f6fafe;
+  color-scheme: dark;
+}
+
+.profile-settings-form select option,
+.profile-admin-panel select option {
+  background: #0c121b;
+  color: #f6fafe;
+}
+
+.profile-settings-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.profile-settings-actions .primary-button.compact {
+  min-height: 42px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #ff5a36 0%, #ff774c 100%);
+}
+
+.profile-settings-actions .primary-button.compact:not(:disabled):hover {
+  background: linear-gradient(90deg, #ff6942 0%, #ff8860 100%);
+}
+
+.profile-page .success-line {
+  color: #8ef0db;
+}
+
+.profile-page .inline-error {
+  border-color: rgba(255, 90, 54, 0.36);
+  background: rgba(64, 19, 12, 0.88);
+  color: #ffb19d;
+}
+
+.profile-summary-list,
+.profile-community-list,
+.admin-user-list {
+  display: grid;
+  gap: 12px;
+}
+
+.profile-summary-row,
+.profile-community-row,
+.admin-user-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 14px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.profile-summary-row:last-child,
+.profile-community-row:last-child,
+.admin-user-row:last-child {
+  border-bottom: 0;
+}
+
+.profile-summary-row strong,
+.profile-community-row strong,
+.admin-user-row strong {
+  color: #f5f8fc;
+}
+
+.profile-summary-row span,
+.profile-community-row span,
+.profile-community-row small,
+.admin-user-row span,
+.profile-page .empty-inline {
+  color: rgba(220, 228, 238, 0.72);
+  line-height: 1.58;
+}
+
+.profile-community-row small {
+  white-space: nowrap;
+}
+
+.profile-admin-panel .admin-user-row {
+  padding: 14px 0;
+}
+
+@media (max-width: 1180px) {
+  .profile-hero,
+  .profile-main-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .profile-page .page-header {
+    padding: 22px 20px 20px;
+  }
+
+  .profile-page .page-header h1 {
+    font-size: 32px;
+  }
+
+  .profile-hero,
+  .profile-settings-panel,
+  .profile-summary-panel,
+  .profile-community-panel,
+  .profile-admin-panel {
+    padding: 20px;
+  }
+
+  .profile-settings-actions,
+  .profile-summary-row,
+  .profile-community-row,
+  .admin-user-row {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-community-row small {
+    white-space: normal;
+  }
+}

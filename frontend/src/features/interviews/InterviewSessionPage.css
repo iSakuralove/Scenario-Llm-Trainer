@@ -1,0 +1,371 @@
+.interview-session-page {
+  color: #e6edf5;
+}
+
+.interview-session-page .panel,
+.interview-session-page .answer-panel,
+.interview-session-page .answer-template-panel {
+  border-color: rgba(255, 255, 255, 0.10);
+  border-radius: 18px;
+  background: #0d131d;
+  box-shadow: 0 20px 46px rgba(0, 0, 0, 0.27);
+}
+
+.interview-session-page .interview-question {
+  position: relative;
+  overflow: hidden;
+  padding: 24px 28px 22px;
+  background:
+    radial-gradient(circle at 92% 6%, rgba(92, 225, 198, 0.22), transparent 30%),
+    radial-gradient(circle at 12% 18%, rgba(59, 130, 246, 0.16), transparent 28%),
+    linear-gradient(180deg, rgba(13, 19, 29, 0.98), rgba(9, 12, 18, 0.98)),
+    #0d131d;
+}
+
+.interview-session-page .interview-question::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, rgba(142, 240, 219, 0.14), transparent 42%);
+  opacity: 0.55;
+}
+
+.interview-session-page .interview-question > * {
+  position: relative;
+  z-index: 1;
+}
+
+.interview-session-page .answer-panel {
+  background:
+    radial-gradient(circle at top right, rgba(87, 143, 255, 0.10), transparent 28%),
+    linear-gradient(180deg, rgba(13, 19, 29, 0.98), rgba(9, 12, 18, 0.98)),
+    #0d131d;
+}
+
+.interview-session-page .answer-template-panel {
+  background:
+    radial-gradient(circle at bottom right, rgba(92, 225, 198, 0.08), transparent 24%),
+    rgba(10, 14, 21, 0.98);
+}
+
+.interview-session-page .interview-question h2,
+.interview-session-page .panel-title,
+.interview-session-page .answer-template-toggle,
+.interview-session-page .answer-template-toggle > span:first-child,
+.interview-session-page .markdown-preview-header span,
+.interview-session-page .stream-status strong,
+.interview-session-page .metric strong {
+  color: #f6fafe;
+}
+
+.interview-session-page .interview-question h2 {
+  max-width: 15em;
+  margin: 18px 0 12px;
+  font-size: clamp(36px, 4.1vw, 52px);
+  font-weight: 950;
+  line-height: 1.05;
+  letter-spacing: -0.045em;
+  text-wrap: balance;
+  text-shadow: 0 14px 34px rgba(0, 0, 0, 0.32);
+}
+
+.interview-session-page .interview-question p {
+  max-width: 60rem;
+  margin: 0;
+  color: rgba(220, 228, 238, 0.82);
+  font-size: clamp(16px, 1.55vw, 18px);
+  line-height: 1.72;
+}
+
+.interview-session-page .interview-question p,
+.interview-session-page .voice-upload-row span,
+.interview-session-page .template-toggle-hint,
+.interview-session-page .template-step span,
+.interview-session-page .markdown-preview-header small,
+.interview-session-page .markdown-preview-hint,
+.interview-session-page .stream-status span,
+.interview-session-page .stream-status pre,
+.interview-session-page .stream-step,
+.interview-session-page .metric span {
+  color: rgba(220, 228, 238, 0.72);
+}
+
+.interview-session-page .scenario-meta span,
+.interview-session-page .panel-title svg,
+.interview-session-page .answer-template-toggle svg,
+.interview-session-page .voice-upload-row svg,
+.interview-session-page .markdown-preview-header svg {
+  color: #8ef0db;
+}
+
+.interview-session-page .scenario-meta span {
+  border: 1px solid rgba(142, 240, 219, 0.24);
+  background: rgba(142, 240, 219, 0.10);
+  font-weight: 850;
+  letter-spacing: 0.02em;
+}
+
+.interview-session-page .voice-upload-row,
+.interview-session-page .markdown-preview-panel,
+.interview-session-page .markdown-preview-panel .markdown-preview,
+.interview-session-page .voice-quality,
+.interview-session-page .voice-suggestion-box,
+.interview-session-page .voice-confirm-box,
+.interview-session-page .stream-status,
+.interview-session-page .metric {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(230, 237, 245, 0.88);
+}
+
+.interview-session-page .markdown-toolbar button,
+.interview-session-page .markdown-file-button,
+.interview-session-page .toolbar-menu-trigger,
+.interview-session-page .toolbar-group,
+.interview-session-page .ghost-button.compact,
+.interview-session-page .icon-button.compact-icon {
+  border-color: rgba(142, 240, 219, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e6edf5;
+}
+
+.interview-session-page .markdown-toolbar button:hover,
+.interview-session-page .markdown-file-button:hover,
+.interview-session-page .toolbar-menu.open .toolbar-menu-trigger,
+.interview-session-page .toolbar-menu-trigger:hover,
+.interview-session-page .ghost-button.compact:hover,
+.interview-session-page .icon-button.compact-icon:hover {
+  border-color: rgba(142, 240, 219, 0.38);
+  background: rgba(142, 240, 219, 0.10);
+  color: #ffffff;
+}
+
+.interview-session-page .toolbar-menu-trigger span,
+.interview-session-page .template-step strong,
+.interview-session-page .voice-quality strong,
+.interview-session-page .voice-suggestion-copy strong,
+.interview-session-page .voice-suggestion-item strong,
+.interview-session-page .voice-confirm-box strong {
+  color: #f6fafe;
+}
+
+.interview-session-page .toolbar-menu-options {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: #101924;
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.32);
+}
+
+.interview-session-page .toolbar-menu-options button {
+  color: rgba(230, 237, 245, 0.86);
+}
+
+.interview-session-page .toolbar-menu-options button:hover {
+  background: rgba(142, 240, 219, 0.10);
+  color: #ffffff;
+}
+
+.interview-session-page .markdown-workspace textarea,
+.interview-session-page textarea {
+  color-scheme: dark;
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: #f6fafe;
+}
+
+.interview-session-page .markdown-workspace textarea::placeholder,
+.interview-session-page textarea::placeholder {
+  color: rgba(220, 228, 238, 0.48);
+}
+
+.interview-session-page .markdown-preview-panel {
+  overflow: hidden;
+}
+
+.interview-session-page .markdown-preview-header {
+  border-color: rgba(255, 255, 255, 0.10);
+  background: rgba(142, 240, 219, 0.10);
+  color: #8ef0db;
+}
+
+.interview-session-page .markdown-preview-hint {
+  border-color: rgba(142, 240, 219, 0.30);
+  background: rgba(142, 240, 219, 0.12);
+  color: #ccfbf1;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.interview-session-page .markdown-preview {
+  color: rgba(230, 237, 245, 0.88);
+}
+
+.interview-session-page .markdown-composer.expanded {
+  inset: 18px;
+  border-color: rgba(142, 240, 219, 0.32);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 88% 0%, rgba(92, 225, 198, 0.16), transparent 28%),
+    radial-gradient(circle at 8% 12%, rgba(59, 130, 246, 0.14), transparent 30%),
+    #0a0f17;
+  box-shadow: 0 26px 90px rgba(0, 0, 0, 0.62);
+}
+
+.interview-session-page .markdown-composer.expanded::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: rgba(2, 6, 23, 0.66);
+  backdrop-filter: blur(10px);
+}
+
+.interview-session-page .markdown-composer.expanded .markdown-toolbar {
+  align-items: center;
+  padding: 2px;
+}
+
+.interview-session-page .markdown-composer.expanded .markdown-workspace {
+  min-height: 0;
+}
+
+.interview-session-page .markdown-composer.expanded .markdown-preview-panel,
+.interview-session-page .markdown-composer.expanded .markdown-preview-panel .markdown-preview {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.interview-session-page .markdown-composer.expanded .markdown-preview-panel .markdown-preview {
+  color: rgba(230, 237, 245, 0.90);
+}
+
+.interview-session-page .markdown-composer.expanded textarea {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.interview-session-page .template-step {
+  border-color: rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.interview-session-page .template-step:hover {
+  border-color: rgba(142, 240, 219, 0.34);
+  background: rgba(142, 240, 219, 0.10);
+}
+
+.interview-session-page .template-step.active,
+.interview-session-page .template-step:disabled {
+  border-color: rgba(142, 240, 219, 0.34);
+  background: rgba(142, 240, 219, 0.12);
+}
+
+.interview-session-page .template-step.active strong,
+.interview-session-page .template-step:disabled strong {
+  color: #8ef0db;
+}
+
+.interview-session-page .stream-status {
+  padding: 0;
+  border-color: rgba(142, 240, 219, 0.24);
+  background: rgba(142, 240, 219, 0.10);
+  color: #8ef0db;
+}
+
+.interview-session-page .interview-feedback-details {
+  display: grid;
+  gap: 10px;
+}
+
+.interview-session-page .interview-feedback-details summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 48px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.interview-session-page .interview-feedback-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.interview-session-page .interview-feedback-details summary > span:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.interview-session-page .interview-feedback-details small {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(220, 228, 238, 0.70);
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.interview-session-page .feedback-toggle-text {
+  flex: 0 0 auto;
+  border: 1px solid rgba(142, 240, 219, 0.22);
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #8ef0db;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.interview-session-page .feedback-toggle-text::before {
+  content: attr(data-closed-label);
+}
+
+.interview-session-page .interview-feedback-details[open] .feedback-toggle-text::before {
+  content: attr(data-open-label);
+}
+
+.interview-session-page .interview-feedback-body {
+  display: none;
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+
+.interview-session-page .interview-feedback-details[open] .interview-feedback-body {
+  display: grid;
+}
+
+.interview-session-page .interview-feedback-details pre {
+  max-height: 180px;
+}
+
+.interview-session-page .agent-stage-list.completed,
+.interview-session-page .report-agent-summary {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(220, 228, 238, 0.72);
+}
+
+.interview-session-page .agent-stage-list.completed span::before,
+.interview-session-page .report-agent-summary span::before {
+  background: #8ef0db;
+}
+
+.interview-session-page .agent-trace-summary {
+  background: rgba(142, 240, 219, 0.12);
+  color: #8ef0db;
+}
+
+.interview-session-page .stream-status.error {
+  border-color: rgba(255, 90, 54, 0.36);
+  background: rgba(255, 90, 54, 0.10);
+  color: #ffb19d;
+}
+
+.interview-session-page .voice-progress {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.interview-session-page .voice-progress span {
+  background: #8ef0db;
+}

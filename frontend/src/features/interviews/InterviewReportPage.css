@@ -1,0 +1,139 @@
+.interview-report-page {
+  color: #e6edf5;
+}
+
+.interview-report-page .page-header {
+  border-color: rgba(255, 255, 255, 0.10);
+  background:
+    radial-gradient(circle at top right, rgba(92, 225, 198, 0.12), transparent 26%),
+    linear-gradient(180deg, rgba(13, 19, 29, 0.98), rgba(9, 12, 18, 0.98)),
+    #0d131d;
+}
+
+.interview-report-page .page-header h1,
+.interview-report-page .panel-title,
+.interview-report-page .metric strong,
+.interview-report-page .report-overview strong,
+.interview-report-page .review-turn strong {
+  color: #f6fafe;
+}
+
+.interview-report-page .page-header p,
+.interview-report-page .metric span,
+.interview-report-page .report-overview span,
+.interview-report-page .report-overview p,
+.interview-report-page .report-text,
+.interview-report-page .review-turn span,
+.interview-report-page .submission-evidence small {
+  color: rgba(220, 228, 238, 0.72);
+}
+
+.interview-report-page .title-icon,
+.interview-report-page .panel-title svg,
+.interview-report-page .submission-evidence svg {
+  color: #8ef0db;
+}
+
+.interview-report-page .title-icon {
+  background: rgba(142, 240, 219, 0.12);
+}
+
+.interview-report-page .print-button,
+.interview-report-page .ghost-button,
+.interview-report-page .primary-button {
+  border-color: rgba(142, 240, 219, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e6edf5;
+}
+
+.interview-report-page .print-button:hover,
+.interview-report-page .ghost-button:hover,
+.interview-report-page .primary-button:hover {
+  border-color: rgba(142, 240, 219, 0.38);
+  background: rgba(142, 240, 219, 0.10);
+  color: #ffffff;
+}
+
+.interview-report-page .metric,
+.interview-report-page .panel,
+.interview-report-page .report-overview {
+  border-color: rgba(255, 255, 255, 0.10);
+  border-radius: 18px;
+  background: #0d131d;
+  box-shadow: 0 20px 46px rgba(0, 0, 0, 0.27);
+}
+
+.interview-report-page .metric {
+  background:
+    radial-gradient(circle at top right, rgba(92, 225, 198, 0.10), transparent 28%),
+    linear-gradient(180deg, rgba(13, 19, 29, 0.98), rgba(9, 12, 18, 0.98)),
+    #0d131d;
+}
+
+.interview-report-page .report-overview,
+.interview-report-page .panel {
+  background:
+    radial-gradient(circle at top right, rgba(87, 143, 255, 0.08), transparent 28%),
+    linear-gradient(180deg, rgba(13, 19, 29, 0.98), rgba(9, 12, 18, 0.98)),
+    #0d131d;
+}
+
+.interview-report-page .report-invalidated-panel {
+  border-color: rgba(255, 90, 54, 0.26);
+  background:
+    radial-gradient(circle at top right, rgba(255, 90, 54, 0.16), transparent 30%),
+    linear-gradient(180deg, rgba(18, 24, 34, 0.98), rgba(10, 14, 21, 0.98)),
+    #0d131d;
+}
+
+.interview-report-page .report-invalidated-panel p {
+  max-width: 760px;
+  margin: 0;
+  color: rgba(245, 248, 252, 0.78);
+  line-height: 1.8;
+}
+
+.interview-report-page .chart-box,
+.interview-report-page .review-turn,
+.interview-report-page .agent-stage-list.completed.report-agent-summary,
+.interview-report-page .submission-evidence {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(230, 237, 245, 0.88);
+}
+
+.interview-report-page .review-turn {
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.interview-report-page .report-agent-summary {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.interview-report-page .agent-trace-summary {
+  background: rgba(142, 240, 219, 0.12);
+  color: #8ef0db;
+}
+
+.interview-report-page .agent-stage-list.completed span::before,
+.interview-report-page .report-agent-summary span::before {
+  background: #8ef0db;
+}
+
+.interview-report-page .recharts-polar-angle-axis text,
+.interview-report-page .recharts-polar-radius-axis text {
+  fill: rgba(230, 237, 245, 0.76);
+}
+
+.interview-report-page .recharts-polar-grid-angle line,
+.interview-report-page .recharts-polar-grid-concentric polygon {
+  stroke: rgba(142, 240, 219, 0.22);
+}
+
+@media print {
+  .interview-report-page {
+    color: #0f172a;
+  }
+}

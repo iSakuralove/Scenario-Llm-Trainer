@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "scenario_reply",
+  "title": "scenario_reply",
+  "description": "AI scenario session reply",
+  "x-version": "1.0.0",
+  "x-task": "DG-02",
+  "type": "object",
+  "required": ["reply"],
+  "properties": {
+    "reply": { "type": "string", "minLength": 1 }
+  }
+}

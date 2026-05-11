@@ -1,0 +1,566 @@
+.scenario-session-page {
+  color: #e6edf5;
+}
+
+.scenario-session-page .context-pane,
+.scenario-session-page .chat-pane {
+  border-color: rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  background: #0d131d;
+  box-shadow: 0 20px 46px rgba(0, 0, 0, 0.27);
+}
+
+.scenario-session-page .context-pane {
+  background:
+    radial-gradient(circle at top right, rgba(92, 225, 198, 0.10), transparent 26%),
+    linear-gradient(180deg, rgba(13, 19, 29, 0.98), rgba(9, 12, 18, 0.98)),
+    #0d131d;
+}
+
+.scenario-session-page .chat-pane {
+  background:
+    radial-gradient(circle at top right, rgba(87, 143, 255, 0.10), transparent 28%),
+    linear-gradient(180deg, rgba(13, 19, 29, 0.98), rgba(9, 12, 18, 0.98)),
+    #0d131d;
+}
+
+.scenario-session-page .session-context-header,
+.scenario-session-page .chat-header,
+.scenario-session-page .composer,
+.scenario-session-page .scenario-answer-panel {
+  border-color: rgba(255, 255, 255, 0.10);
+}
+
+.scenario-session-page .panel-title,
+.scenario-session-page .chat-title-line strong,
+.scenario-session-page .scenario-answer-heading strong,
+.scenario-session-page .context-pane h2 {
+  color: #f6fafe;
+}
+
+.scenario-session-page .panel-title svg,
+.scenario-session-page .chat-title-line .icon-button svg {
+  color: #8ef0db;
+}
+
+.scenario-session-page .scenario-snapshot-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+}
+
+.scenario-session-page .scenario-snapshot-title > span:first-child {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.scenario-session-page .scenario-difficulty-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(142, 240, 219, 0.28);
+  border-radius: 999px;
+  background: rgba(142, 240, 219, 0.10);
+  color: #8ef0db;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.scenario-session-page .context-pane p,
+.scenario-session-page .chat-header span,
+.scenario-session-page .scenario-answer-heading span {
+  color: rgba(220, 228, 238, 0.72);
+}
+
+.scenario-session-page .session-context-body {
+  scrollbar-color: rgba(142, 240, 219, 0.46) rgba(255, 255, 255, 0.06);
+}
+
+.scenario-session-page .clue-status span,
+.scenario-session-page .mermaid-render-chip {
+  border: 1px solid rgba(142, 240, 219, 0.24);
+  background: rgba(142, 240, 219, 0.10);
+  color: #8ef0db;
+}
+
+.scenario-session-page .mermaid-box {
+  width: 100%;
+  max-width: 100%;
+  min-height: 300px;
+  resize: both;
+  overflow: auto;
+  border-color: rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.scenario-session-page .mermaid-content {
+  height: 100%;
+  min-height: 230px;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+    rgba(9, 12, 18, 0.46);
+  background-size: 42px 42px;
+  border-radius: 12px;
+}
+
+.scenario-session-page .mermaid-diagram svg {
+  color: #e6edf5;
+  font-family: inherit !important;
+}
+
+.scenario-session-page .mermaid-diagram svg .node rect,
+.scenario-session-page .mermaid-diagram svg .node circle,
+.scenario-session-page .mermaid-diagram svg .node ellipse,
+.scenario-session-page .mermaid-diagram svg .node polygon,
+.scenario-session-page .mermaid-diagram svg .node path {
+  stroke: rgba(142, 240, 219, 0.56) !important;
+  stroke-width: 1.5px !important;
+  fill: rgba(13, 19, 29, 0.98) !important;
+  filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.28));
+}
+
+.scenario-session-page .mermaid-diagram svg .nodeLabel,
+.scenario-session-page .mermaid-diagram svg .label,
+.scenario-session-page .mermaid-diagram svg .label text,
+.scenario-session-page .mermaid-diagram svg text {
+  color: #f6fafe !important;
+  fill: #f6fafe !important;
+  font-family: inherit !important;
+  font-size: 14px !important;
+  font-weight: 850 !important;
+  line-height: 1.35 !important;
+}
+
+.scenario-session-page .mermaid-diagram svg .edgeLabel,
+.scenario-session-page .mermaid-diagram svg .edgeLabel p,
+.scenario-session-page .mermaid-diagram svg .edgeLabel span {
+  color: #8ef0db !important;
+  background: rgba(13, 19, 29, 0.94) !important;
+  font-weight: 850 !important;
+}
+
+.scenario-session-page .mermaid-diagram svg .edgePaths path,
+.scenario-session-page .mermaid-diagram svg .flowchart-link {
+  stroke: rgba(142, 240, 219, 0.60) !important;
+  stroke-width: 2px !important;
+}
+
+.scenario-session-page .mermaid-diagram svg marker path {
+  fill: #8ef0db !important;
+  stroke: #8ef0db !important;
+}
+
+.scenario-session-page .mermaid-diagram svg .cluster rect {
+  stroke: rgba(87, 143, 255, 0.42) !important;
+  fill: rgba(87, 143, 255, 0.08) !important;
+}
+
+.scenario-session-page .mermaid-fullscreen-box {
+  background: #0d131d;
+}
+
+.scenario-session-page .mermaid-fallback,
+.scenario-session-page .mermaid-loading {
+  color: rgba(220, 228, 238, 0.68);
+}
+
+.scenario-session-page .mermaid-loading strong {
+  color: #f6fafe;
+}
+
+.scenario-session-page .message-thread {
+  background:
+    linear-gradient(180deg, rgba(9, 12, 18, 0.30), rgba(9, 12, 18, 0.70)),
+    #0a0e15;
+}
+
+.scenario-session-page .user-msg {
+  border: 1px solid rgba(142, 240, 219, 0.28);
+  background: linear-gradient(135deg, rgba(15, 118, 110, 0.96), rgba(20, 184, 166, 0.82));
+  color: #ffffff;
+}
+
+.scenario-session-page .assistant-msg,
+.scenario-session-page .assistant-note {
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.045);
+  color: rgba(230, 237, 245, 0.88);
+}
+
+.scenario-session-page .assistant-msg svg {
+  flex: 0 0 auto;
+  color: #8ef0db;
+}
+
+.scenario-session-page .assistant-msg.distractor {
+  background: rgba(148, 163, 184, 0.10);
+  color: rgba(203, 213, 225, 0.82);
+}
+
+.scenario-session-page .assistant-msg.streaming {
+  box-shadow: inset 3px 0 0 #8ef0db;
+}
+
+.scenario-session-page .assistant-msg.streaming span::after {
+  background: #8ef0db;
+}
+
+.scenario-session-page .agent-stage-list,
+.scenario-session-page .stream-status {
+  border-color: rgba(142, 240, 219, 0.24);
+  background: rgba(142, 240, 219, 0.10);
+  color: #8ef0db;
+}
+
+.scenario-session-page .agent-stage-list.completed {
+  border-color: rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(220, 228, 238, 0.72);
+}
+
+.scenario-session-page .agent-trace-summary {
+  background: rgba(142, 240, 219, 0.12);
+  color: #8ef0db;
+}
+
+.scenario-session-page .composer {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.scenario-session-page .composer textarea,
+.scenario-session-page .scenario-answer-panel textarea,
+.scenario-session-page .scenario-answer-panel input,
+.scenario-session-page .scenario-answer-panel select {
+  color-scheme: dark;
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: #f6fafe;
+}
+
+.scenario-session-page .composer textarea::placeholder,
+.scenario-session-page .scenario-answer-panel textarea::placeholder {
+  color: rgba(220, 228, 238, 0.48);
+}
+
+.scenario-session-page .scenario-answer-panel {
+  background:
+    radial-gradient(circle at bottom right, rgba(92, 225, 198, 0.08), transparent 24%),
+    rgba(10, 14, 21, 0.98);
+}
+
+.scenario-session-page .markdown-preview-panel,
+.scenario-session-page .markdown-preview-panel .markdown-preview {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(230, 237, 245, 0.88);
+}
+
+.scenario-session-page .markdown-preview-header {
+  border-color: rgba(255, 255, 255, 0.10);
+  background: rgba(142, 240, 219, 0.10);
+  color: #8ef0db;
+}
+
+.scenario-session-page .stream-status span,
+.scenario-session-page .stream-status pre,
+.scenario-session-page .stream-step {
+  color: rgba(220, 228, 238, 0.78);
+}
+
+.scenario-session-page .stream-status.error {
+  border-color: rgba(255, 90, 54, 0.36);
+  background: rgba(255, 90, 54, 0.10);
+  color: #ffb19d;
+}
+
+.scenario-session-page .session-context-resizer::before,
+.scenario-session-page .scenario-answer-resizer::before {
+  background: rgba(142, 240, 219, 0.28);
+}
+
+.scenario-session-page .session-context-resizer:hover::before,
+.scenario-session-page .session-context-resizer:focus-visible::before,
+.scenario-session-page .scenario-answer-resizer:hover::before,
+.scenario-session-page .scenario-answer-resizer:focus-visible::before {
+  background: #8ef0db;
+}
+
+.scenario-session-page .icon-button.compact-icon,
+.scenario-session-page .ghost-button.compact {
+  border-color: rgba(142, 240, 219, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e6edf5;
+}
+
+.scenario-session-page .icon-button.compact-icon:hover,
+.scenario-session-page .ghost-button.compact:hover {
+  border-color: rgba(142, 240, 219, 0.38);
+  background: rgba(142, 240, 219, 0.10);
+  color: #ffffff;
+}
+
+.scenario-review-page {
+  position: relative;
+  max-width: 1180px;
+  min-height: calc(100svh - 60px);
+  color: #e6edf5;
+}
+
+.scenario-review-page::before {
+  content: "";
+  position: fixed;
+  inset: 0 0 0 276px;
+  z-index: -1;
+  background:
+    linear-gradient(90deg, rgba(255, 90, 54, 0.80) 0 4px, transparent 4px 100%),
+    linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+    radial-gradient(circle at 78% 18%, rgba(142, 240, 219, 0.11), transparent 26%),
+    linear-gradient(180deg, #020409 0%, #07101a 100%);
+  background-size: auto, 100% 88px, 104px 100%, auto, auto;
+  pointer-events: none;
+}
+
+.sidebar-collapsed .scenario-review-page::before {
+  left: 0;
+}
+
+.scenario-review-page .page-header {
+  align-items: end;
+  padding: 18px 0 20px;
+  border-bottom: 2px solid rgba(255, 90, 54, 0.78);
+}
+
+.scenario-review-page .title-cluster {
+  align-items: center;
+  gap: 18px;
+}
+
+.scenario-review-page .title-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  background: rgba(142, 240, 219, 0.12);
+  color: #8ef0db;
+  box-shadow: inset 0 0 0 1px rgba(142, 240, 219, 0.28);
+}
+
+.scenario-review-page .page-header h1 {
+  color: #f6fafe;
+  font-size: 46px;
+  line-height: 1.05;
+}
+
+.scenario-review-page .page-header p {
+  max-width: 620px;
+  color: rgba(220, 228, 238, 0.72);
+  line-height: 1.65;
+}
+
+.scenario-review-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.scenario-review-page .ghost-button.compact {
+  min-height: 40px;
+  border-radius: 999px;
+  border-color: rgba(142, 240, 219, 0.22);
+  background: rgba(255, 255, 255, 0.05);
+  color: #f6fafe;
+  text-decoration: none;
+}
+
+.scenario-review-page .ghost-button.compact:not(:disabled):hover {
+  border-color: rgba(142, 240, 219, 0.42);
+  background: rgba(142, 240, 219, 0.12);
+  color: #ffffff;
+}
+
+.scenario-review-page .metric,
+.scenario-review-page .panel {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(142, 240, 219, 0.08), transparent 32%),
+    linear-gradient(180deg, rgba(13, 19, 29, 0.98), rgba(9, 12, 18, 0.98));
+  color: #e6edf5;
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.24);
+}
+
+.scenario-review-page > .metric-row .metric {
+  min-height: 112px;
+}
+
+.scenario-review-page .metric span,
+.scenario-review-page .report-overview span,
+.scenario-review-page .report-detail-block > span,
+.scenario-review-page .report-explanation span {
+  color: rgba(220, 228, 238, 0.68);
+}
+
+.scenario-review-page .metric strong {
+  color: #f6fafe;
+}
+
+.scenario-review-page .metric-row .metric:nth-child(1) strong,
+.scenario-review-page .score-metric-grid .metric:first-child strong {
+  color: #8ef0db;
+}
+
+.scenario-review-page .metric-row .metric:nth-child(2) strong {
+  color: #ffcf66;
+}
+
+.scenario-review-page .metric-row .metric:nth-child(4) strong {
+  color: #578fff;
+}
+
+.scenario-review-page .panel-title {
+  color: #f6fafe;
+}
+
+.scenario-review-page .panel-title svg {
+  color: #8ef0db;
+}
+
+.scenario-review-page .report-overview {
+  grid-template-columns: minmax(0, 1.5fr) repeat(2, minmax(150px, 0.55fr));
+  gap: 16px;
+}
+
+.scenario-review-page .report-overview > div {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.scenario-review-page .report-overview strong,
+.scenario-review-page .report-detail-block p,
+.scenario-review-page .report-explanation p,
+.scenario-review-page .review-turn strong,
+.scenario-review-page .matched-document strong,
+.scenario-review-page .evidence-event strong {
+  color: #f6fafe;
+}
+
+.scenario-review-page .score-metric-grid {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.scenario-review-page .score-metric-grid .metric {
+  min-height: 82px;
+  padding: 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: none;
+}
+
+.scenario-review-page .report-explanation,
+.scenario-review-page .report-detail-block {
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+  padding-top: 14px;
+}
+
+.scenario-review-page .report-list,
+.scenario-review-page .step-list,
+.scenario-review-page .evidence-list {
+  color: rgba(220, 228, 238, 0.76);
+  line-height: 1.65;
+}
+
+.scenario-review-page .evidence-event,
+.scenario-review-page .matched-document,
+.scenario-review-page .review-turn {
+  border-color: rgba(255, 255, 255, 0.09);
+}
+
+.scenario-review-page .evidence-event small,
+.scenario-review-page .matched-document small,
+.scenario-review-page .review-turn span,
+.scenario-review-page .empty-inline {
+  color: rgba(220, 228, 238, 0.66);
+}
+
+.scenario-review-page .matched-document small {
+  border: 1px solid rgba(142, 240, 219, 0.24);
+  background: rgba(142, 240, 219, 0.10);
+  color: #8ef0db;
+}
+
+.scenario-review-page .standard-answer {
+  border: 1px solid rgba(142, 240, 219, 0.24);
+  background: rgba(142, 240, 219, 0.10);
+  color: #dffdf8;
+}
+
+@media (max-width: 980px) {
+  .scenario-review-page::before {
+    inset: 0;
+  }
+
+  .scenario-review-page .page-header,
+  .scenario-review-page .title-cluster {
+    align-items: flex-start;
+  }
+
+  .scenario-review-page .page-header h1 {
+    font-size: 36px;
+  }
+
+  .scenario-review-page .report-overview,
+  .scenario-review-page .score-metric-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .scenario-review-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media print {
+  .scenario-review-page {
+    color: #0f172a;
+  }
+
+  .scenario-review-page::before {
+    display: none;
+  }
+
+  .scenario-review-page .metric,
+  .scenario-review-page .panel,
+  .scenario-review-page .report-overview > div,
+  .scenario-review-page .score-metric-grid .metric,
+  .scenario-review-page .standard-answer {
+    background: #ffffff;
+    color: #0f172a;
+    box-shadow: none;
+  }
+
+  .scenario-review-page .metric strong,
+  .scenario-review-page .panel-title,
+  .scenario-review-page .report-overview strong,
+  .scenario-review-page .report-detail-block p,
+  .scenario-review-page .report-explanation p,
+  .scenario-review-page .review-turn strong,
+  .scenario-review-page .matched-document strong,
+  .scenario-review-page .evidence-event strong {
+    color: #0f172a;
+  }
+}

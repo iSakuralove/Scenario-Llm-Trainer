@@ -1,0 +1,36 @@
+请把用户提交的真实故障案例结构化为情景题预览，只返回 JSON 对象，不要 Markdown。
+输出第一个字符必须是 {，最后一个字符必须是 }，不得输出解释、标题、列表、注释、```json 或任何前后缀。
+
+字段必须匹配 ScenarioContent：
+{
+  "root_cause": "待讲师审核确认的根因：...",
+  "root_cause_keywords": ["..."],
+  "key_evidence": ["..."],
+  "standard_procedure": ["补充现象", "..."],
+  "architecture_diagram": "",
+  "architecture_diagram_spec": {
+    "direction": "TD",
+    "nodes": [{"id":"Case","label":"原始案例"}, {"id":"Review","label":"讲师审核"}],
+    "edges": [{"from":"Case","to":"Review","label":"结构化","style":"solid"}]
+  },
+  "reference_links": ["..."],
+  "reveal_strategy": {
+    "surface_clues": [{"clue_id":"c1","trigger_keywords":["..."],"content":"...","is_distractor":false,"recommended_next_ask":"..."}],
+    "deep_clues": [],
+    "distractors": []
+  }
+}
+
+结构化图约束：
+- 不要手写 Mermaid。必须输出 architecture_diagram_spec，由后端生成 Mermaid。
+- architecture_diagram 必须保留为空字符串。
+- direction 只能是 TD 或 LR。
+- nodes 至少 2 个，edges 至少 1 条。
+- nodes[].id 只能使用英文字母开头的 A-Z/a-z/0-9/_，不要使用中文、连字符或空格。
+- nodes[].label 可以使用中文、括号、冒号、斜杠等业务文本。
+- edges[].style 只能省略、solid 或 dotted。
+
+案例标题：{{.Title}}
+专业域：{{.Domain}}
+标签：{{.TagsText}}
+原始描述：{{.RawContent}}

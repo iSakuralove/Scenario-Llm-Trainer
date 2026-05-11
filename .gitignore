@@ -1,0 +1,103 @@
+# Environment variables and local secrets
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.local
+
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Frontend build and test output
+dist/
+dist-ssr/
+build/
+frontend/dist/
+frontend/dist-ssr/
+frontend/build/
+playwright-report/
+test-results/
+output/
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Go build, coverage and profiling artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+.gocache/
+go.work
+go.work.sum
+
+# Python caches and virtual environments
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime data and temporary work
+backend/data/
+.gotmp/
+.worktrees/
+tmp/
+
+# Local tool state
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.playwright-mcp/
+.serena/logs/
+.serena/cache/
+.serena/project.local.yml
+.codex/cache/
+
+# Excluded from the GitHub source branch by policy
+交付/
+img/
+docs/report-figures/generated/
+
+# Binary media and archives are not committed to this source branch
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+*.tgz
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.bmp
+*.tif
+*.tiff
+*.svg
+*.ico
+*.mp3
+*.wav
+*.mp4
+*.mov
+*.avi
