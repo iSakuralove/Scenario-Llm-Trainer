@@ -92,6 +92,75 @@ test('scenario generation modal sends constraints payload and shows source badge
   await expectNoWhiteScreen(page)
 })
 
+test('scenario generation prepends result without changing list filters', async ({ page }) => {
+  const scenarioQueries: string[] = []
+  const generatedQuestion = {
+    ...scenarioQuestion('e2e-generation-prepend-question', 'E2E 生成后置顶题目'),
+    domain: 'security',
+    difficulty: 'L5',
+    tags: ['AI生成', '安全'],
+    status: 'active',
+    source: 'llm_generated',
+  }
+  const existingQuestion = {
+    ...scenarioQuestion('e2e-generation-existing-question', 'E2E 原有题目仍可见'),
+    domain: 'database',
+    difficulty: 'L2',
+    tags: ['E2E', '原有', '保留筛选'],
+    status: 'active',
+    source: 'seed',
+  }
+
+  await page.route('**/api/v1/scenarios/generate/jobs', async (route) => {
+    await fulfill(route, {
+      job: aiJob('e2e-generation-prepend-job', 'running', 35, {
+        stage: 'provider_call',
+      }),
+    })
+  })
+  await page.route('**/api/v1/ai/jobs/e2e-generation-prepend-job', async (route) => {
+    await fulfill(route, {
+      job: aiJob('e2e-generation-prepend-job', 'completed', 100, {
+        stage: 'persisted',
+        validated: true,
+        result_question_id: generatedQuestion.id,
+      }),
+      question_id: generatedQuestion.id,
+      question: generatedQuestion,
+    })
+  })
+  await page.route('**/api/v1/scenarios**', async (route) => {
+    const url = new URL(route.request().url())
+    if (route.request().method() !== 'GET' || url.pathname !== '/api/v1/scenarios') {
+      await route.fallback()
+      return
+    }
+    scenarioQueries.push(url.search)
+    await fulfill(route, { list: [existingQuestion], total: 18 })
+  })
+
+  await loginAs(page, 'admin')
+  await page.goto('/scenarios')
+  await page.locator('.filter-controls').getByLabel('难度').selectOption('L2')
+  await page.getByPlaceholder('输入或点选标签').fill('保留筛选')
+  await page.getByRole('button', { name: '下一页' }).click()
+  await expect.poll(() => scenarioQueries.at(-1) ?? '').toContain('page=2')
+
+  await page.getByRole('button', { name: /生成题目|鐢熸垚棰樼洰/ }).click()
+  await page.getByRole('button', { name: '开始生成' }).click()
+
+  await expect(page.locator('.scenario-card').first()).toContainText('E2E 生成后置顶题目')
+  await expect(page.locator('.scenario-card').nth(1)).toContainText('E2E 原有题目仍可见')
+  await expect(page.locator('.filter-controls').getByLabel('难度')).toHaveValue('L2')
+  await expect(page.getByPlaceholder('输入或点选标签')).toHaveValue('保留筛选')
+  await expect.poll(() => scenarioQueries.at(-1) ?? '').not.toContain('difficulty=L5')
+  await expect.poll(() => scenarioQueries.at(-1) ?? '').not.toContain('domain=security')
+  await expect.poll(() => scenarioQueries.at(-1) ?? '').not.toContain('tag=AI')
+  await expect.poll(() => scenarioQueries.at(-1) ?? '').toContain('difficulty=L2')
+  await expect.poll(() => scenarioQueries.at(-1) ?? '').toContain('tag=%E4%BF%9D%E7%95%99%E7%AD%9B%E9%80%89')
+  await expect.poll(() => scenarioQueries.at(-1) ?? '').toContain('page=2')
+})
+
 test('scenario generation modal closes immediately after submit while job is still running', async ({ page }) => {
   let releaseJobCreation: (() => void) | null = null
   const waitForJobCreation = new Promise<void>((resolve) => {

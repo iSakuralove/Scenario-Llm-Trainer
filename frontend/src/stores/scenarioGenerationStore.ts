@@ -7,6 +7,7 @@ import { useAIStatusStore } from './aiStatusStore'
 const SCENARIO_GENERATION_STORAGE_KEY = 'scenario-generation-active-job'
 const SCENARIO_GENERATION_DRAFT_KEY = 'scenario-generation-draft'
 const SCENARIO_GENERATION_POLL_MS = 900
+const SCENARIO_LIST_PAGE_SIZE = 9
 
 interface StoredScenarioGenerationJob {
   jobId: string
@@ -414,12 +415,8 @@ async function resumeScenarioGenerationJob(
 
     const provider = await resolveProvider(jobResult.job)
     await attachedHandlers?.onCompleted?.({ question: jobResult.question, job: jobResult.job })
-    await useScenarioGenerationStore.getState().refreshList(token, {
-      selectedDomain: jobResult.question.domain,
-      selectedDifficulty: jobResult.question.difficulty,
-      tagFilter: '',
-      page: 1,
-    })
+    await useScenarioGenerationStore.getState().refreshList(token)
+    promoteGeneratedQuestion(jobResult.question)
     clearStoredGenerationJob(jobId)
     stopElapsedTimer()
     set({
@@ -449,6 +446,16 @@ async function resumeScenarioGenerationJob(
       activePollingJobId = ''
     }
   }
+}
+
+function promoteGeneratedQuestion(question: ScenarioQuestion) {
+  const state = useScenarioGenerationStore.getState()
+  const wasAlreadyVisible = state.items.some((item) => item.id === question.id)
+  const items = [question, ...state.items.filter((item) => item.id !== question.id)].slice(0, SCENARIO_LIST_PAGE_SIZE)
+  useScenarioGenerationStore.setState({
+    items,
+    total: wasAlreadyVisible ? state.total : state.total + 1,
+  })
 }
 
 async function resolveProvider(job: AIJob) {

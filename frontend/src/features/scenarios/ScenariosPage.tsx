@@ -96,13 +96,7 @@ export function ScenariosPage() {
   }, [page, refreshList, selectedDomain, selectedDifficulty, setStoreError, tagFilter, token])
 
   useEffect(() => {
-    const onCompleted = ({ question }: { question: ScenarioQuestion }) => {
-      setFilters({
-        selectedDomain: question.domain,
-        selectedDifficulty: question.difficulty,
-        tagFilter: '',
-        page: 1,
-      })
+    const onCompleted = () => {
       notifyRouterTelemetryUpdated()
     }
 
@@ -115,7 +109,7 @@ export function ScenariosPage() {
       window.clearTimeout(timer)
       detachPage()
     }
-  }, [attachPage, detachPage, resumeActiveJob, setFilters, token])
+  }, [attachPage, detachPage, resumeActiveJob, token])
 
   async function startSession(question: ScenarioQuestion) {
     const res = await api.createScenarioSession(token, question.id)
