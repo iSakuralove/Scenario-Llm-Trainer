@@ -794,36 +794,45 @@ test('student can abandon a troubleshooting session', async ({ page }) => {
 })
 
 test('invalid mermaid is shown as a compact fallback', async ({ page }) => {
-  await page.route('**/api/v1/scenarios/*/sessions', async (route) => {
-    if (route.request().method() !== 'POST') {
-      await route.fallback()
-      return
-    }
+  const invalidQuestion = {
+    ...scenarioQuestion('e2e-invalid-mermaid-question', 'E2E 错误架构图题目'),
+    content: {
+      ...scenarioQuestion('e2e-invalid-mermaid-question', 'E2E 错误架构图题目').content,
+      architecture_diagram: 'graph TD\n  A[旧规则 --> B[失效]',
+    },
+  }
+
+  await page.route('**/api/v1/scenarios/sessions/e2e-invalid-mermaid-session', async (route) => {
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
         code: 200,
         message: 'success',
         data: {
-          session_id: 'e2e-invalid-mermaid-session',
-          status: 'active',
-          question_snapshot: {
-            ...scenarioQuestion('e2e-invalid-mermaid-question', 'E2E 错误架构图题目'),
-            content: {
-              ...scenarioQuestion('e2e-invalid-mermaid-question', 'E2E 错误架构图题目').content,
-              architecture_diagram: 'graph TD\n  A[旧规则 --> B[失效]',
-            },
+          session: {
+            id: 'e2e-invalid-mermaid-session',
+            user_id: 'user-demo',
+            question_id: invalidQuestion.id,
+            status: 'active',
+            current_turn: 0,
+            max_turns: 50,
+            revealed_clue_ids: [],
+            question_snapshot: invalidQuestion,
+            hint_level: 1,
+            no_new_clue_streak: 0,
+            started_at: new Date().toISOString(),
+            last_active_at: new Date().toISOString(),
           },
+          messages: [],
         },
       }),
     })
   })
 
   await loginAs(page, 'student')
-  await page.goto('/scenarios')
-  await page.getByRole('button', { name: '开始排查' }).first().click()
+  await page.goto('/scenarios/session/e2e-invalid-mermaid-session')
 
-  await expect(page.getByText(/Mermaid 暂不可渲染|架构图暂不可渲染/)).toBeVisible()
+  await expect(page.getByText('图形渲染失败，建议查看源码。')).toBeVisible()
   await expect(page.locator('body')).not.toContainText('Syntax error in text')
   await expect(page.locator('body')).not.toContainText('mermaid version')
 })

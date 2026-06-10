@@ -1,15 +1,18 @@
-import { useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import type { CSSProperties, PointerEvent } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Bot, CheckCircle2, ChevronDown, ChevronUp, FileText, Send } from 'lucide-react'
 import { api } from '../../api/client'
 import type { ScenarioQuestion } from '../../types'
-import { EmptyState, Loading, MarkdownComposer } from '../../components/common'
-import { MermaidRenderer } from '../../components/common/MermaidRenderer'
+import { EmptyState, Loading } from '../../components/common'
+import { MarkdownComposer } from '../../components/common/MarkdownComposer'
+import { MermaidLoading } from '../../components/common/MermaidLoading'
 import { useToken } from '../../lib/auth'
 import { redactSensitiveText } from '../../lib/redaction'
 import { useScenarioSessionStore } from '../../stores/scenarioSessionStore'
 import './ScenarioSessionPage.css'
+
+const MermaidRenderer = lazy(() => import('../../components/common/MermaidRenderer').then((module) => ({ default: module.MermaidRenderer })))
 
 const CONTEXT_WIDTH_MIN = 280
 const CONTEXT_WIDTH_MAX = 560
@@ -177,7 +180,9 @@ export function ScenarioSessionPage() {
               </span>
             </div>
           )}
-          <MermaidRenderer code={snapshotText(question.content.architecture_diagram)} />
+          <Suspense fallback={<MermaidLoading />}>
+            <MermaidRenderer code={snapshotText(question.content.architecture_diagram)} />
+          </Suspense>
           <div className="clue-status">
             <span>轮次 {activeSession.current_turn}/{activeSession.max_turns}</span>
             <span>提示等级 {activeSession.hint_level}</span>

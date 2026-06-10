@@ -5,26 +5,10 @@ test('scenario workspace supports hiding global navigation and resizing work are
   await page.setViewportSize({ width: 1200, height: 760 })
   await mockStudentLogin(page)
   const question = scenarioQuestion('e2e-session-workspace-question', 'E2E 会话工作区题目')
-
-  await page.route('**/api/v1/scenarios**', async (route) => {
-    const url = new URL(route.request().url())
-    if (route.request().method() !== 'GET' || url.pathname !== '/api/v1/scenarios') {
-      await route.fallback()
-      return
-    }
-    await fulfill(route, { list: [question], total: 1 })
-  })
-  await page.route('**/api/v1/scenarios/e2e-session-workspace-question/sessions', async (route) => {
-    await fulfill(route, {
-      session_id: 'e2e-session-workspace-session',
-      status: 'active',
-      question_snapshot: question,
-    })
-  })
+  await mockScenarioSessionDetail(page, 'e2e-session-workspace-session', question)
 
   await loginAs(page, 'student')
-  await page.goto('/scenarios')
-  await page.getByRole('button', { name: /开始排查/ }).first().click()
+  await page.goto('/scenarios/session/e2e-session-workspace-session')
 
   await expect(page.getByTestId('global-sidebar')).toBeVisible()
   await page.getByRole('button', { name: '隐藏全局导航' }).click()
@@ -76,6 +60,28 @@ test('scenario workspace supports hiding global navigation and resizing work are
   expect(answerAfter!.height).toBeGreaterThan(answerBefore!.height + 40)
 })
 
+async function mockScenarioSessionDetail(page: Page, sessionId: string, question: ReturnType<typeof scenarioQuestion>) {
+  await page.route(`**/api/v1/scenarios/sessions/${sessionId}`, async (route) => {
+    await fulfill(route, {
+      session: {
+        id: sessionId,
+        user_id: 'user-student',
+        question_id: question.id,
+        status: 'active',
+        current_turn: 0,
+        max_turns: 50,
+        revealed_clue_ids: [],
+        question_snapshot: question,
+        hint_level: 1,
+        no_new_clue_streak: 0,
+        started_at: new Date().toISOString(),
+        last_active_at: new Date().toISOString(),
+      },
+      messages: [],
+    })
+  })
+}
+
 async function mockStudentLogin(page: Page) {
   const studentUser = {
     id: 'user-student',
@@ -102,9 +108,55 @@ async function mockStudentLogin(page: Page) {
   await page.route('**/api/v1/users/me', async (route) => {
     await fulfill(route, studentUser)
   })
+  await page.route('**/api/v1/users/me/dashboard', async (route) => {
+    await fulfill(route, dashboardPayload(studentUser))
+  })
   await page.route('**/api/v1/system/ai', async (route) => {
     await fulfill(route, { provider: 'mock', model: 'mock', fallback: true })
   })
+}
+
+function dashboardPayload(user: {
+  id: string
+  username: string
+  email: string
+  role: string
+  profile: {
+    target_level: string
+    preferred_domains: string[]
+    capability_radar: Record<string, number>
+    weak_points: unknown[]
+    total_stats: { scenarios_solved: number; interviews_taken: number; average_score: number; streak_days: number }
+    updated_at: string
+  }
+  created_at: string
+}) {
+  return {
+    user,
+    stats: user.profile.total_stats,
+    capability_radar: user.profile.capability_radar,
+    weak_points: user.profile.weak_points,
+    recommendations: [],
+    learning_plan: {
+      generated_at: new Date().toISOString(),
+      summary: 'E2E 默认仪表盘摘要',
+      target_level: user.profile.target_level,
+      focus_domains: user.profile.preferred_domains,
+      domain_insights: [],
+      recommendations: [],
+      review_plan: [],
+    },
+    review_calendar: {
+      generated_at: new Date().toISOString(),
+      checkin_dates: [],
+      streak_days: 0,
+      today_checked: false,
+      today: new Date().toISOString().slice(0, 10),
+      review_plan: [],
+      focus_domains: user.profile.preferred_domains,
+      next_action: '完成一轮排查训练',
+    },
+  }
 }
 
 function scenarioQuestion(id: string, title: string) {

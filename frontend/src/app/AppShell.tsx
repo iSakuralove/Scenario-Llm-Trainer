@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { Suspense, lazy, useEffect } from 'react'
 import { Link, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 import {
   BookOpenCheck,
@@ -14,19 +14,21 @@ import {
 import { useAuthStore } from '../stores/authStore'
 import { useAIStatusStore } from '../stores/aiStatusStore'
 import { useLayoutStore } from '../stores/layoutStore'
-import { RoleGuard } from './RoleGuard'
+import { Loading } from '../components/common'
 import { DashboardPage } from '../features/learning/DashboardPage'
-import { ScenariosPage } from '../features/scenarios/ScenariosPage'
-import { ScenarioSessionPage } from '../features/scenarios/ScenarioSessionPage'
-import { ScenarioReviewPage } from '../features/scenarios/ScenarioReviewPage'
-import { InterviewsPage } from '../features/interviews/InterviewsPage'
-import { InterviewSessionRoute } from '../features/interviews/InterviewSessionRoute'
-import { InterviewReportPage } from '../features/interviews/InterviewReportPage'
-import { CommunityPage } from '../features/community/CommunityPage'
-import { ProfilePage } from '../features/profile/ProfilePage'
-import { SystemPage } from '../features/system/SystemPage'
+import { RoleGuard } from './RoleGuard'
 import { roleLabel } from '../lib/labels'
 import { aiModeLabel } from '../lib/ai'
+
+const ScenariosPage = lazy(() => import('../features/scenarios/ScenariosPage').then((module) => ({ default: module.ScenariosPage })))
+const ScenarioSessionPage = lazy(() => import('../features/scenarios/ScenarioSessionPage').then((module) => ({ default: module.ScenarioSessionPage })))
+const ScenarioReviewPage = lazy(() => import('../features/scenarios/ScenarioReviewPage').then((module) => ({ default: module.ScenarioReviewPage })))
+const InterviewsPage = lazy(() => import('../features/interviews/InterviewsPage').then((module) => ({ default: module.InterviewsPage })))
+const InterviewSessionRoute = lazy(() => import('../features/interviews/InterviewSessionRoute').then((module) => ({ default: module.InterviewSessionRoute })))
+const InterviewReportPage = lazy(() => import('../features/interviews/InterviewReportPage').then((module) => ({ default: module.InterviewReportPage })))
+const CommunityPage = lazy(() => import('../features/community/CommunityPage').then((module) => ({ default: module.CommunityPage })))
+const ProfilePage = lazy(() => import('../features/profile/ProfilePage').then((module) => ({ default: module.ProfilePage })))
+const SystemPage = lazy(() => import('../features/system/SystemPage').then((module) => ({ default: module.SystemPage })))
 
 export function AppShell() {
   const navigate = useNavigate()
@@ -102,19 +104,21 @@ export function AppShell() {
         </div>
       </aside>
       <main className="workspace">
-        <Routes>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/scenarios" element={<ScenariosPage />} />
-          <Route path="/scenarios/session/:id" element={<ScenarioSessionPage />} />
-          <Route path="/scenarios/session/:id/review" element={<ScenarioReviewPage />} />
-          <Route path="/interviews" element={<InterviewsPage />} />
-          <Route path="/interviews/session/:id" element={<InterviewSessionRoute />} />
-          <Route path="/interviews/session/:id/report" element={<InterviewReportPage />} />
-          <Route path="/community" element={<CommunityPage />} />
-          <Route path="/profile" element={<ProfilePage />} />
-          <Route path="/system" element={<RoleGuard allow={['admin']}><SystemPage /></RoleGuard>} />
-        </Routes>
+        <Suspense fallback={<Loading title="加载页面" />}>
+          <Routes>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/scenarios" element={<ScenariosPage />} />
+            <Route path="/scenarios/session/:id" element={<ScenarioSessionPage />} />
+            <Route path="/scenarios/session/:id/review" element={<ScenarioReviewPage />} />
+            <Route path="/interviews" element={<InterviewsPage />} />
+            <Route path="/interviews/session/:id" element={<InterviewSessionRoute />} />
+            <Route path="/interviews/session/:id/report" element={<InterviewReportPage />} />
+            <Route path="/community" element={<CommunityPage />} />
+            <Route path="/profile" element={<ProfilePage />} />
+            <Route path="/system" element={<RoleGuard allow={['admin']}><SystemPage /></RoleGuard>} />
+          </Routes>
+        </Suspense>
       </main>
     </div>
   )

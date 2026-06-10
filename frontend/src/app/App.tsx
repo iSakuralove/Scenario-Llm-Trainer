@@ -1,10 +1,11 @@
-﻿import { useEffect } from 'react'
+import { Suspense, lazy, useEffect } from 'react'
 import { BrowserRouter } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
 import { AppErrorBoundary } from './AppErrorBoundary'
-import { AppShell } from './AppShell'
 import { AuthPage } from '../features/auth/AuthPage'
 import '../App.css'
+
+const AppShell = lazy(() => import('./AppShell').then((module) => ({ default: module.AppShell })))
 
 export function App() {
   const bootstrap = useAuthStore((state) => state.bootstrap)
@@ -22,7 +23,11 @@ export function App() {
   return (
     <BrowserRouter>
       <AppErrorBoundary>
-        {token ? <AppShell /> : <AuthPage />}
+        {token ? (
+          <Suspense fallback={<div className="boot-screen">正在加载工作台...</div>}>
+            <AppShell />
+          </Suspense>
+        ) : <AuthPage />}
       </AppErrorBoundary>
     </BrowserRouter>
   )

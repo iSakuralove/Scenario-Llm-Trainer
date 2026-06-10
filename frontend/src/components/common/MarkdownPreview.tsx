@@ -1,6 +1,9 @@
+import { Suspense, lazy } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { MermaidRenderer } from './MermaidRenderer'
+import { MermaidLoading } from './MermaidLoading'
+
+const MermaidRenderer = lazy(() => import('./MermaidRenderer').then((module) => ({ default: module.MermaidRenderer })))
 
 export function MarkdownPreview({ content, emptyText = '预览会显示在这里。' }: { content: string; emptyText?: string }) {
   const text = content.trim()
@@ -22,7 +25,11 @@ export function MarkdownPreview({ content, emptyText = '预览会显示在这里
             const language = /language-(\w+)/.exec(className || '')?.[1]
             const code = String(children).replace(/\n$/, '')
             if (language === 'mermaid') {
-              return <MermaidRenderer code={code} />
+              return (
+                <Suspense fallback={<MermaidLoading />}>
+                  <MermaidRenderer code={code} />
+                </Suspense>
+              )
             }
             if (language) {
               return <CodeBlock code={code} language={language} />

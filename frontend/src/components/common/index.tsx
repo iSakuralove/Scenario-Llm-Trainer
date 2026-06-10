@@ -1,8 +1,6 @@
 import type { ReactNode } from 'react'
 import { Bot, Printer } from 'lucide-react'
 import { domains } from '../../lib/domain'
-export { MarkdownPreview } from './MarkdownPreview'
-export { MarkdownComposer } from './MarkdownComposer'
 
 export function HeaderBlock({ icon, title, description, action }: { icon: ReactNode; title: string; description: string; action?: ReactNode }) {
   return (

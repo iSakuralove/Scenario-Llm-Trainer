@@ -4,9 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --force",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "smoke": "node scripts/frontend-smoke.mjs",
     "e2e": "playwright test",
     "e2e:headed": "playwright test --headed",
     "preview": "vite preview"
