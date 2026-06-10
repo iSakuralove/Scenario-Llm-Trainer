@@ -25,12 +25,16 @@ CREATE TABLE IF NOT EXISTS scenario_vector_documents (
     metadata JSONB DEFAULT '{}',
     embedding_model TEXT,
     embedding_dim INT,
-    embedding vector,
+    embedding vector(1536),
     status TEXT DEFAULT 'active',
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(question_id, source_version, doc_type, doc_key)
 );
+
+ALTER TABLE scenario_vector_documents
+    ALTER COLUMN embedding TYPE vector(1536)
+    USING embedding::vector(1536);
 
 CREATE INDEX IF NOT EXISTS scenario_vector_documents_question_idx
     ON scenario_vector_documents(question_id, doc_type, status);

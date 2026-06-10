@@ -134,7 +134,7 @@ func TestInterviewSessionDetailReturnsSessionAndQuestion(t *testing.T) {
 		t.Fatalf("create interview status=%d message=%s", status, env.Message)
 	}
 	var created struct {
-		SessionID string                  `json:"session_id"`
+		SessionID string                   `json:"session_id"`
 		Question  domain.InterviewQuestion `json:"question"`
 	}
 	mustDecodeData(t, env, &created)

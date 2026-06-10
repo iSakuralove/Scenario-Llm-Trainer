@@ -155,9 +155,10 @@ func TestMemoryStoreExposesDefaultVectorStoreForSeedScenarios(t *testing.T) {
 func TestVectorSchemaIncludesPgvectorTableAndDegradesWhenExtensionUnavailable(t *testing.T) {
 	for _, required := range []string{
 		"CREATE TABLE IF NOT EXISTS scenario_vector_documents",
-		"embedding vector",
+		"embedding vector(1536)",
 		"embedding_dim INT",
 		"metadata JSONB",
+		"ALTER COLUMN embedding TYPE vector(1536)",
 		"CREATE INDEX IF NOT EXISTS scenario_vector_documents_embedding_hnsw",
 	} {
 		if !strings.Contains(VectorSchemaSQL, required) {
