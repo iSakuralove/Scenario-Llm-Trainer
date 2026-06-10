@@ -2,6 +2,13 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 const script = readFileSync(new URL('./dev-all.mjs', import.meta.url), 'utf8')
+const packageJSON = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+
+assert.equal(
+  packageJSON.scripts.dev,
+  'npm run dev:frontend',
+  'pnpm run dev should start only the frontend because the default backend is Docker',
+)
 
 assert.match(script, /includes\(['"]--docker['"]\)/, 'Docker backend mode should require an explicit --docker flag')
 assert.match(

@@ -12,7 +12,6 @@ export function ProfilePage() {
   const token = useToken()
   const user = useAuthStore((state) => state.user)
   const setSession = useAuthStore((state) => state.setSession)
-  const refreshToken = useAuthStore((state) => state.refreshToken)
   const savedTargetLevel = user?.profile.target_level ?? 'intermediate'
   const savedPreferredDomains = user?.profile.preferred_domains ?? ['database', 'network', 'os']
   const [targetLevelDraft, setTargetLevelDraft] = useState(savedTargetLevel)
@@ -40,7 +39,8 @@ export function ProfilePage() {
 
   async function save() {
     const updated = await api.updateProfile(token, targetLevelDraft, domainTextDraft.split(',').map((item) => item.trim()).filter(Boolean))
-    setSession(updated, token, refreshToken)
+    const latestAuth = useAuthStore.getState()
+    setSession(updated, latestAuth.token, latestAuth.refreshToken)
     setMessage('已保存个人档案')
   }
 

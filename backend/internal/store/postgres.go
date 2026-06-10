@@ -85,6 +85,7 @@ func (s *PostgresStore) Seed(ctx context.Context, hashPassword func(string) stri
 			Username:     "demo",
 			Email:        "demo@example.com",
 			PasswordHash: hashPassword("demo123"),
+			TokenVersion: 0,
 			Role:         domain.RoleStudent,
 			Profile:      defaultProfile(),
 			CreatedAt:    now,
@@ -94,6 +95,7 @@ func (s *PostgresStore) Seed(ctx context.Context, hashPassword func(string) stri
 			Username:     "instructor",
 			Email:        "instructor@example.com",
 			PasswordHash: hashPassword("instructor123"),
+			TokenVersion: 0,
 			Role:         domain.RoleInstructor,
 			Profile:      defaultProfile(),
 			CreatedAt:    now,
@@ -103,6 +105,7 @@ func (s *PostgresStore) Seed(ctx context.Context, hashPassword func(string) stri
 			Username:     "admin",
 			Email:        "admin@example.com",
 			PasswordHash: hashPassword("admin123"),
+			TokenVersion: 0,
 			Role:         domain.RoleAdmin,
 			Profile:      defaultProfile(),
 			CreatedAt:    now,
@@ -138,6 +141,7 @@ func (s *PostgresStore) CreateUser(username, email, passwordHash string) (*domai
 		Username:     usernameKey,
 		Email:        emailKey,
 		PasswordHash: passwordHash,
+		TokenVersion: 0,
 		Role:         domain.RoleStudent,
 		Profile:      defaultProfile(),
 		CreatedAt:    time.Now(),
@@ -156,7 +160,7 @@ func (s *PostgresStore) CreateUser(username, email, passwordHash string) (*domai
 
 func (s *PostgresStore) ListUsers() []domain.User {
 	rows, err := s.pool.Query(context.Background(), `
-		SELECT id, username, email, password_hash, role, profile, created_at
+		SELECT id, username, email, password_hash, token_version, role, profile, created_at
 		FROM users
 		ORDER BY lower(username) ASC
 	`)
@@ -178,7 +182,7 @@ func (s *PostgresStore) ListUsers() []domain.User {
 func (s *PostgresStore) FindUserByIdentifier(identifier string) (*domain.User, bool) {
 	key := strings.ToLower(strings.TrimSpace(identifier))
 	row := s.pool.QueryRow(context.Background(), `
-		SELECT id, username, email, password_hash, role, profile, created_at
+		SELECT id, username, email, password_hash, token_version, role, profile, created_at
 		FROM users
 		WHERE lower(username) = $1 OR lower(email) = $1
 		LIMIT 1
@@ -188,7 +192,7 @@ func (s *PostgresStore) FindUserByIdentifier(identifier string) (*domain.User, b
 
 func (s *PostgresStore) GetUser(id string) (*domain.User, bool) {
 	row := s.pool.QueryRow(context.Background(), `
-		SELECT id, username, email, password_hash, role, profile, created_at
+		SELECT id, username, email, password_hash, token_version, role, profile, created_at
 		FROM users
 		WHERE id = $1
 	`, id)
@@ -216,6 +220,26 @@ func (s *PostgresStore) UpdateUserRole(userID string, role string) (*domain.User
 }
 
 func (s *PostgresStore) UpdateUserPassword(userID string, passwordHash string) (*domain.User, error) {
+	if strings.TrimSpace(passwordHash) == "" {
+		return nil, errors.New("password hash is required")
+	}
+	tag, err := s.pool.Exec(context.Background(), `
+		UPDATE users SET password_hash = $2, token_version = COALESCE(token_version, 0) + 1, updated_at = NOW() WHERE id = $1
+	`, userID, passwordHash)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, errors.New("user not found")
+	}
+	user, ok := s.GetUser(userID)
+	if !ok {
+		return nil, errors.New("user not found")
+	}
+	return user, nil
+}
+
+func (s *PostgresStore) UpgradeUserPasswordHash(userID string, passwordHash string) (*domain.User, error) {
 	if strings.TrimSpace(passwordHash) == "" {
 		return nil, errors.New("password hash is required")
 	}
@@ -1030,16 +1054,17 @@ func (s *PostgresStore) upsertUser(ctx context.Context, user *domain.User) error
 		return err
 	}
 	_, err = s.pool.Exec(ctx, `
-		INSERT INTO users (id, username, email, password_hash, role, profile, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+		INSERT INTO users (id, username, email, password_hash, token_version, role, profile, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
 		ON CONFLICT (id) DO UPDATE SET
 		    username = EXCLUDED.username,
 		    email = EXCLUDED.email,
 		    password_hash = EXCLUDED.password_hash,
+		    token_version = EXCLUDED.token_version,
 		    role = EXCLUDED.role,
 		    profile = EXCLUDED.profile,
 		    updated_at = NOW()
-	`, user.ID, user.Username, user.Email, user.PasswordHash, user.Role, profileJSON, user.CreatedAt)
+	`, user.ID, user.Username, user.Email, user.PasswordHash, user.TokenVersion, user.Role, profileJSON, user.CreatedAt)
 	return err
 }
 
@@ -1049,9 +1074,9 @@ func (s *PostgresStore) insertUser(ctx context.Context, user *domain.User) error
 		return err
 	}
 	_, err = s.pool.Exec(ctx, `
-		INSERT INTO users (id, username, email, password_hash, role, profile, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
-	`, user.ID, user.Username, user.Email, user.PasswordHash, user.Role, profileJSON, user.CreatedAt)
+		INSERT INTO users (id, username, email, password_hash, token_version, role, profile, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+	`, user.ID, user.Username, user.Email, user.PasswordHash, user.TokenVersion, user.Role, profileJSON, user.CreatedAt)
 	return err
 }
 
@@ -1278,7 +1303,7 @@ type scanner interface {
 func scanUser(row scanner) (*domain.User, bool) {
 	var user domain.User
 	var profileJSON []byte
-	if err := row.Scan(&user.ID, &user.Username, &user.Email, &user.PasswordHash, &user.Role, &profileJSON, &user.CreatedAt); err != nil {
+	if err := row.Scan(&user.ID, &user.Username, &user.Email, &user.PasswordHash, &user.TokenVersion, &user.Role, &profileJSON, &user.CreatedAt); err != nil {
 		return nil, false
 	}
 	if err := unmarshal(profileJSON, &user.Profile); err != nil {

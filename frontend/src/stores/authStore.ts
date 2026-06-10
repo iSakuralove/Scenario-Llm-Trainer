@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { api } from '../api/client'
+import { api, configureAuthSessionController } from '../api/client'
 import type { User } from '../types'
 
 interface AuthState {
@@ -56,3 +56,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ user: null, token: '', refreshToken: '', isReady: true })
   },
 }))
+
+configureAuthSessionController({
+  getRefreshToken: () => useAuthStore.getState().refreshToken,
+  setSession: (user, token, refreshToken) => useAuthStore.getState().setSession(user, token, refreshToken),
+  logout: () => useAuthStore.getState().logout(),
+})

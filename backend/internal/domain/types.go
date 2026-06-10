@@ -32,6 +32,7 @@ type User struct {
 	Username     string      `json:"username"`
 	Email        string      `json:"email"`
 	PasswordHash string      `json:"-"`
+	TokenVersion int         `json:"-"`
 	Role         string      `json:"role"`
 	Profile      UserProfile `json:"profile"`
 	CreatedAt    time.Time   `json:"created_at"`

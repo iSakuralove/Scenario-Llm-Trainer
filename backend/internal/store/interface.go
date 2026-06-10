@@ -9,6 +9,7 @@ type Store interface {
 	GetUser(id string) (*domain.User, bool)
 	UpdateUserRole(userID string, role string) (*domain.User, error)
 	UpdateUserPassword(userID string, passwordHash string) (*domain.User, error)
+	UpgradeUserPasswordHash(userID string, passwordHash string) (*domain.User, error)
 	UpdateProfile(userID string, targetLevel string, preferredDomains []string) (*domain.User, error)
 	SaveUserProfile(userID string, profile domain.UserProfile) (*domain.User, error)
 

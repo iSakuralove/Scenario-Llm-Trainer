@@ -14,6 +14,16 @@ func TestCommunityPostSchemaMigratesModerationSummaryColumn(t *testing.T) {
 	}
 }
 
+func TestUserSchemaIncludesTokenVersion(t *testing.T) {
+	required := "token_version INT DEFAULT 0"
+	if !strings.Contains(SchemaSQL, required) {
+		t.Fatalf("user schema must include %q", required)
+	}
+	if !strings.Contains(LegacyCompatibilitySQL, "ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS token_version INT DEFAULT 0;") {
+		t.Fatal("legacy migration must backfill users.token_version")
+	}
+}
+
 func TestCommunityPostDockerInitSchemaIncludesModerationColumns(t *testing.T) {
 	root := filepath.Join("..", "..", "migrations", "001_schema.sql")
 	content, err := os.ReadFile(root)
@@ -25,6 +35,7 @@ func TestCommunityPostDockerInitSchemaIncludesModerationColumns(t *testing.T) {
 		"forked_from_scenario_id TEXT",
 		"moderation_summary JSONB",
 		"sensitive_check JSONB DEFAULT '{}'",
+		"token_version INT DEFAULT 0",
 		"updated_at TIMESTAMPTZ DEFAULT NOW()",
 	} {
 		if !strings.Contains(schema, required) {
@@ -69,7 +80,7 @@ func TestDockerInitSchemaIncludesVectorDocuments(t *testing.T) {
 	for _, required := range []string{
 		"CREATE EXTENSION IF NOT EXISTS vector;",
 		"CREATE TABLE IF NOT EXISTS scenario_vector_documents",
-		"embedding vector",
+		"embedding vector(1536)",
 		"scenario_vector_documents_embedding_hnsw",
 	} {
 		if !strings.Contains(schema, required) {

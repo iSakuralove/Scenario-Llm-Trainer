@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS users (
     username VARCHAR(50) UNIQUE NOT NULL,
     email VARCHAR(100) UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
+    token_version INT DEFAULT 0,
     role VARCHAR(20) DEFAULT 'student',
     profile JSONB DEFAULT '{}',
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -197,6 +198,7 @@ ALTER TABLE IF EXISTS community_posts DROP CONSTRAINT IF EXISTS community_posts_
 ALTER TABLE IF EXISTS community_posts DROP CONSTRAINT IF EXISTS community_posts_converted_question_id_fkey;
 
 ALTER TABLE IF EXISTS users ALTER COLUMN id TYPE TEXT USING id::text;
+ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS token_version INT DEFAULT 0;
 ALTER TABLE IF EXISTS scenario_questions ALTER COLUMN id TYPE TEXT USING id::text;
 ALTER TABLE IF EXISTS scenario_questions ALTER COLUMN created_by TYPE TEXT USING created_by::text;
 ALTER TABLE IF EXISTS scenario_sessions ALTER COLUMN id TYPE TEXT USING id::text;

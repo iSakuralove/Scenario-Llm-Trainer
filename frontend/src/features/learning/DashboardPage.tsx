@@ -11,7 +11,6 @@ import { domainLabel } from '../../lib/domain'
 
 export function DashboardPage() {
   const token = useToken()
-  const refreshToken = useAuthStore((state) => state.refreshToken)
   const setSession = useAuthStore((state) => state.setSession)
   const [data, setData] = useState<Awaited<ReturnType<typeof api.dashboard>> | null>(null)
   const [isCheckingIn, setCheckingIn] = useState(false)
@@ -35,7 +34,8 @@ export function DashboardPage() {
     setCheckinMessage('')
     try {
       const res = await api.checkin(token)
-      setSession(res.user, token, refreshToken)
+      const latestAuth = useAuthStore.getState()
+      setSession(res.user, latestAuth.token, latestAuth.refreshToken)
       setData((prev) => prev
         ? {
             ...prev,

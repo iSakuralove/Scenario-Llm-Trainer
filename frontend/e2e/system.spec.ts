@@ -743,6 +743,49 @@ async function mockAdminLogin(page: Page) {
       body: JSON.stringify({ code: 200, message: 'ok', data: adminUser }),
     })
   })
+  await page.route('**/api/v1/users/me/dashboard', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        code: 200,
+        message: 'ok',
+        data: {
+          user: adminUser,
+          stats: adminUser.profile.total_stats ?? { scenarios_solved: 0, interviews_taken: 0, average_score: 0, streak_days: 0 },
+          capability_radar: adminUser.profile.capability_radar ?? {},
+          weak_points: adminUser.profile.weak_points ?? [],
+          recommendations: [],
+          learning_plan: {
+            generated_at: new Date().toISOString(),
+            summary: 'E2E 默认仪表盘摘要',
+            target_level: adminUser.profile.target_level ?? 'advanced',
+            focus_domains: adminUser.profile.preferred_domains ?? [],
+            domain_insights: [],
+            recommendations: [],
+            review_plan: [],
+          },
+          review_calendar: {
+            generated_at: new Date().toISOString(),
+            checkin_dates: [],
+            streak_days: 0,
+            today_checked: false,
+            today: new Date().toISOString().slice(0, 10),
+            review_plan: [],
+            focus_domains: adminUser.profile.preferred_domains ?? [],
+            next_action: '完成一轮排查训练',
+          },
+        },
+      }),
+    })
+  })
+  await page.route('**/api/v1/system/ai', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 200, message: 'ok', data: { provider: 'mock', model: 'mock', fallback: true } }),
+    })
+  })
 }
 
 async function mockSystemStatus(page: Page, overrides?: () => Record<string, unknown>) {

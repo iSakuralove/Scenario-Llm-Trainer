@@ -6,7 +6,7 @@ services:
       context: ./backend
     environment:
       PORT: 8080
-      JWT_SECRET: local-dev-secret
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set to a long random string}
       STORE_MODE: postgres
       DATABASE_URL: postgres://teaching:teaching@postgres:5432/teaching_mvp?sslmode=disable
       REDIS_URL: redis://redis:6379/0

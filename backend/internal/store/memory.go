@@ -107,6 +107,7 @@ func (s *MemoryStore) CreateUser(username, email, passwordHash string) (*domain.
 		Username:     username,
 		Email:        email,
 		PasswordHash: passwordHash,
+		TokenVersion: 0,
 		Role:         domain.RoleStudent,
 		Profile:      defaultProfile(),
 		CreatedAt:    time.Now(),
@@ -168,6 +169,22 @@ func (s *MemoryStore) UpdateUserRole(userID string, role string) (*domain.User, 
 }
 
 func (s *MemoryStore) UpdateUserPassword(userID string, passwordHash string) (*domain.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if strings.TrimSpace(passwordHash) == "" {
+		return nil, errors.New("password hash is required")
+	}
+	user, ok := s.Users[userID]
+	if !ok {
+		return nil, errors.New("user not found")
+	}
+	user.PasswordHash = passwordHash
+	user.TokenVersion++
+	return cloneUser(user), nil
+}
+
+func (s *MemoryStore) UpgradeUserPasswordHash(userID string, passwordHash string) (*domain.User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

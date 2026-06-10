@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net/http"
@@ -18,7 +20,6 @@ import (
 
 func main() {
 	port := getenv("PORT", "8080")
-	secret := getenv("JWT_SECRET", "dev-secret-change-me")
 	databaseURL := os.Getenv("DATABASE_URL")
 	redisURL := os.Getenv("REDIS_URL")
 	storeMode := getenv("STORE_MODE", "")
@@ -26,6 +27,11 @@ func main() {
 	storeConfig, err := resolveStoreConfig(storeMode, databaseURL)
 	if err != nil {
 		log.Fatalf("invalid store configuration: %v", err)
+	}
+
+	secret, err := resolveJWTSecret(os.Getenv("JWT_SECRET"), storeConfig.Persistent)
+	if err != nil {
+		log.Fatalf("invalid JWT configuration: %v", err)
 	}
 
 	authManager := auth.NewManager(secret, 24*time.Hour)
@@ -65,8 +71,10 @@ func main() {
 
 	server := httpapi.NewServer(dataStore, authManager, limiter, llmRouter)
 
+	httpServer := buildHTTPServer(":"+port, server.Handler())
+
 	log.Printf("MVP API listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, server.Handler()))
+	log.Fatal(httpServer.ListenAndServe())
 }
 
 func getenv(key, fallback string) string {
@@ -75,6 +83,61 @@ func getenv(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+var weakJWTSecrets = map[string]bool{
+	"dev-secret-change-me":           true,
+	"local-dev-secret":               true,
+	"local-dev-secret-please-change": true,
+}
+
+// resolveJWTSecret enforces a strong signing secret in persistent (production)
+// mode and falls back to an ephemeral random secret in memory/dev mode so the
+// insecure default can never sign real tokens.
+func resolveJWTSecret(secret string, persistent bool) (string, error) {
+	secret = strings.TrimSpace(secret)
+	if persistent {
+		switch {
+		case secret == "":
+			return "", fmt.Errorf("JWT_SECRET is required when STORE_MODE=postgres; set it to a long random string")
+		case weakJWTSecrets[secret]:
+			return "", fmt.Errorf("JWT_SECRET must not use an insecure default value; set a long random string")
+		case len(secret) < 16:
+			return "", fmt.Errorf("JWT_SECRET must be at least 16 characters, got %d", len(secret))
+		}
+		return secret, nil
+	}
+	if secret == "" || weakJWTSecrets[secret] {
+		generated, err := randomSecret(32)
+		if err != nil {
+			return "", err
+		}
+		log.Printf("JWT_SECRET not set or insecure; generated an ephemeral dev secret (sessions reset on restart). Set JWT_SECRET for stable tokens.")
+		return generated, nil
+	}
+	return secret, nil
+}
+
+func randomSecret(n int) (string, error) {
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+func buildHTTPServer(addr string, handler http.Handler) *http.Server {
+	// No WriteTimeout: several endpoints stream Server-Sent Events and a
+	// write deadline would sever long-lived responses. ReadTimeout is still
+	// capped so slow request bodies cannot hold connections indefinitely;
+	// uploads are separately bounded to 20 MiB and JSON bodies to 4 MiB.
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadTimeout:       60 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 }
 
 type storeConfig struct {

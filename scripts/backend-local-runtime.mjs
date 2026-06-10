@@ -1,16 +1,52 @@
 import net from 'node:net'
+import { readFileSync } from 'node:fs'
 
 const defaultDatabaseURL = 'postgres://teaching:teaching@localhost:5432/teaching_mvp?sslmode=disable'
 
-export function buildBackendEnv(sourceEnv = process.env) {
-  return {
+export function buildBackendEnv(sourceEnv = process.env, fileEnv = loadDotEnv()) {
+  const mergedEnv = {
+    ...fileEnv,
     ...sourceEnv,
-    PORT: sourceEnv.PORT || '8080',
-    JWT_SECRET: sourceEnv.JWT_SECRET || 'local-dev-secret',
-    STORE_MODE: sourceEnv.STORE_MODE || 'postgres',
-    DATABASE_URL: sourceEnv.DATABASE_URL || defaultDatabaseURL,
-    REDIS_URL: sourceEnv.REDIS_URL || '',
   }
+  const env = {
+    ...mergedEnv,
+    PORT: mergedEnv.PORT || '8080',
+    STORE_MODE: mergedEnv.STORE_MODE || 'postgres',
+    DATABASE_URL: mergedEnv.DATABASE_URL || defaultDatabaseURL,
+    REDIS_URL: mergedEnv.REDIS_URL || '',
+  }
+  if (mergedEnv.JWT_SECRET) {
+    env.JWT_SECRET = mergedEnv.JWT_SECRET
+  }
+  return env
+}
+
+export function loadDotEnv(fileURL = new URL('../.env', import.meta.url)) {
+  try {
+    return parseDotEnv(readFileSync(fileURL, 'utf8'))
+  } catch (error) {
+    if (error?.code === 'ENOENT') return {}
+    throw error
+  }
+}
+
+export function parseDotEnv(content) {
+  const env = {}
+  for (const line of content.split(/\r?\n/)) {
+    const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/)
+    if (!match) continue
+    let value = match[2].trim()
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1)
+    } else {
+      value = value.replace(/\s+#.*$/, '').trim()
+    }
+    env[match[1]] = value
+  }
+  return env
 }
 
 export async function ensurePostgresReady(databaseURL, options = {}) {

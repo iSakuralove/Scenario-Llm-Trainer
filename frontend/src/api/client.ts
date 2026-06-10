@@ -36,6 +36,19 @@ export interface AuthResponse {
   refresh_token: string
 }
 
+type AuthSessionController = {
+  getRefreshToken: () => string
+  setSession: (user: User, token: string, refreshToken: string) => void
+  logout: () => void
+}
+
+let authSessionController: AuthSessionController | null = null
+let refreshInFlight: Promise<AuthResponse> | null = null
+
+export function configureAuthSessionController(controller: AuthSessionController | null) {
+  authSessionController = controller
+}
+
 export interface ScenarioMessageResponse {
   message: ScenarioMessage
   response_meta: ScenarioMessage['response_meta']
@@ -80,7 +93,7 @@ function buildApiURL(path: string) {
   return `${API_BASE}${path}`
 }
 
-async function request<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}, token?: string, allowAuthRetry = true): Promise<T> {
   const headers = new Headers(options.headers)
   if (!(options.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json')
@@ -98,6 +111,10 @@ async function request<T>(path: string, options: RequestInit = {}, token?: strin
   try {
     const response = await fetch(buildApiURL(path), { ...options, headers, signal: controller.signal })
     const body = await readApiEnvelope<T>(response)
+    if (allowAuthRetry && isUnauthorizedResponse(response, body) && shouldAttemptAuthRefresh(path, token)) {
+      const session = await refreshAuthSession()
+      return request<T>(path, options, session.access_token, false)
+    }
     if (!response.ok || body.code >= 400) {
       throw new Error(body.message || '请求失败')
     }
@@ -115,6 +132,7 @@ async function requestStream<T>(
   options: RequestInit,
   token: string,
   onEvent: (event: StreamEvent) => void,
+  allowAuthRetry = true,
 ): Promise<T> {
   const headers = new Headers(options.headers)
   headers.set('Accept', 'text/event-stream')
@@ -131,6 +149,10 @@ async function requestStream<T>(
 
   try {
     const response = await fetch(buildApiURL(path), { ...options, headers, signal: controller.signal })
+    if (allowAuthRetry && response.status === 401 && shouldAttemptAuthRefresh(path, token)) {
+      const session = await refreshAuthSession()
+      return requestStream<T>(path, options, session.access_token, onEvent, false)
+    }
     if (!response.ok) {
       throw new Error(await readErrorMessage(response, '流式请求失败'))
     }
@@ -188,6 +210,7 @@ async function requestScenarioMessageStream(
   content: string,
   onDelta: (chunk: string) => void,
   onStage?: (stage: StreamStage) => void,
+  allowAuthRetry = true,
 ): Promise<ScenarioMessageResponse> {
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
@@ -202,6 +225,10 @@ async function requestScenarioMessageStream(
       body: JSON.stringify({ content }),
       signal: controller.signal,
     })
+    if (allowAuthRetry && response.status === 401 && shouldAttemptAuthRefresh(`/scenarios/sessions/${sessionId}/messages`, token)) {
+      const session = await refreshAuthSession()
+      return requestScenarioMessageStream(session.access_token, sessionId, content, onDelta, onStage, false)
+    }
     if (!response.ok) {
       throw new Error(await readErrorMessage(response, '流式消息请求失败'))
     }
@@ -273,6 +300,56 @@ async function readErrorMessage(response: Response, fallback: string) {
 
 function isJSONResponse(response: Response) {
   return (response.headers.get('content-type') ?? '').toLowerCase().includes('application/json')
+}
+
+function isUnauthorizedResponse<T>(response: Response, body: ApiEnvelope<T>) {
+  return response.status === 401 || body.code === 401
+}
+
+function shouldAttemptAuthRefresh(path: string, token?: string) {
+  if (!token?.trim() || !authSessionController) return false
+  return !['/auth/login', '/auth/register', '/auth/refresh'].includes(path)
+}
+
+async function refreshAuthSession(): Promise<AuthResponse> {
+  if (!authSessionController) {
+    throw new Error('登录已失效，请重新登录')
+  }
+  const refreshToken = authSessionController.getRefreshToken().trim()
+  if (!refreshToken) {
+    authSessionController.logout()
+    throw new Error('登录已失效，请重新登录')
+  }
+  if (!refreshInFlight) {
+    refreshInFlight = requestAuthRefresh(refreshToken)
+      .then((session) => {
+        authSessionController?.setSession(session.user, session.access_token, session.refresh_token)
+        return session
+      })
+      .catch((err) => {
+        authSessionController?.logout()
+        throw err instanceof Error ? err : new Error('登录已失效，请重新登录')
+      })
+      .finally(() => {
+        refreshInFlight = null
+      })
+  }
+  return refreshInFlight
+}
+
+async function requestAuthRefresh(refreshToken: string): Promise<AuthResponse> {
+  const response = await fetch(buildApiURL('/auth/refresh'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  })
+  const body = await readApiEnvelope<AuthResponse>(response)
+  if (!response.ok || body.code >= 400) {
+    throw new Error(body.message || '登录已失效，请重新登录')
+  }
+  return body.data
 }
 
 function normalizeFetchError(err: unknown): Error {
