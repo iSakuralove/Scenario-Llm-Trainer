@@ -66,6 +66,25 @@
 4. 领域 handler 调用 `store`、`ai`、`auth`、`assets` 等依赖完成业务处理。
 5. 统一使用 `writeOK()`、`writeError()` 返回 JSON 响应，流式输出走 `sse.go`。
 
+## 面试题库版本治理数据层
+
+面试题库治理采用“主表保存当前生效内容，版本表保存历史快照”的数据边界：
+
+- `backend/internal/domain/interview_bank.go`
+  定义 `InterviewKnowledgeAtom`、`InterviewKnowledgeAtomVersion`、`InterviewKnowledgeBatch`、`InterviewRetrievalLog` 等题库治理领域对象。
+- `backend/internal/store`
+  通过 `SaveInterviewKnowledgeAtomVersioned` 统一写入导入、重复导入、在线编辑和恢复归档产生的版本事件；MemoryStore 与 PostgresStore 必须保持同一版本推进口径。
+- `interview_knowledge_atoms`
+  保存题目当前版本内容、发布状态、`current_version` 和运行时索引状态。
+- `interview_knowledge_atom_versions`
+  保存完整标准化内容快照、版本类型、操作者、变更备注、`diff_summary` 和 `no_content_change`。
+- `interview_sessions.question_snapshot`
+  保存创建会话时的开场题快照，避免后续改题污染历史面试。
+- `interview_sessions.selected_atom_snapshots`
+  保存追问命中的轻量知识原子快照，只保留元数据，不保存大段正文。
+
+版本快照只包含稳定内容字段：`id`、`title`、`subject`、`domain`、`difficulty`、`category`、`question_role`、`sourceRef`、`tags`、`principles`、`pitfalls`、`followUpPaths`、`status`。`vector_status` 和 `last_indexed_at` 属于运行时索引状态，不进入版本快照。
+
 ## 当前安全约束
 
 - 密码哈希使用 bcrypt，兼容旧 SHA-256 演示数据登录。

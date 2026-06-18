@@ -88,3 +88,63 @@ func TestDockerInitSchemaIncludesVectorDocuments(t *testing.T) {
 		}
 	}
 }
+
+func TestInterviewKnowledgeBankSchemaIncludesVersionGovernance(t *testing.T) {
+	for _, required := range []string{
+		"CREATE TABLE IF NOT EXISTS interview_knowledge_atoms",
+		"current_version INT DEFAULT 1",
+		"CREATE TABLE IF NOT EXISTS interview_knowledge_atom_versions",
+		"version_type VARCHAR(32) NOT NULL CHECK",
+		"snapshot JSONB NOT NULL",
+		"diff_summary JSONB DEFAULT '{}'",
+		"no_content_change BOOLEAN DEFAULT FALSE",
+		"interview_knowledge_atom_versions_atom_version_idx",
+		"interview_knowledge_atom_versions_type_created_idx",
+		"interview_knowledge_atom_versions_admin_created_idx",
+		"CREATE TABLE IF NOT EXISTS interview_knowledge_batches",
+		"CREATE TABLE IF NOT EXISTS interview_retrieval_logs",
+		"question_snapshot JSONB DEFAULT '{}'",
+		"selected_atom_snapshots JSONB DEFAULT '[]'",
+	} {
+		if !strings.Contains(SchemaSQL, required) {
+			t.Fatalf("runtime schema must include interview knowledge bank fragment %q", required)
+		}
+	}
+}
+
+func TestDockerInitSchemaIncludesInterviewKnowledgeBank(t *testing.T) {
+	root := filepath.Join("..", "..", "migrations", "001_schema.sql")
+	content, err := os.ReadFile(root)
+	if err != nil {
+		t.Fatalf("read docker init schema: %v", err)
+	}
+	schema := string(content)
+	for _, required := range []string{
+		"CREATE TABLE IF NOT EXISTS interview_knowledge_atoms",
+		"current_version INT DEFAULT 1",
+		"CREATE TABLE IF NOT EXISTS interview_knowledge_atom_versions",
+		"interview_knowledge_atom_versions_atom_version_idx",
+		"CREATE TABLE IF NOT EXISTS interview_knowledge_batches",
+		"CREATE TABLE IF NOT EXISTS interview_retrieval_logs",
+		"question_snapshot JSONB DEFAULT '{}'",
+		"selected_atom_snapshots JSONB DEFAULT '[]'",
+	} {
+		if !strings.Contains(schema, required) {
+			t.Fatalf("docker init schema must include interview knowledge bank fragment %q", required)
+		}
+	}
+}
+
+func TestLegacyCompatibilitySQLBackfillsInterviewSessionSnapshots(t *testing.T) {
+	for _, required := range []string{
+		"ALTER TABLE IF EXISTS interview_sessions ADD COLUMN IF NOT EXISTS question_snapshot JSONB DEFAULT '{}';",
+		"ALTER TABLE IF EXISTS interview_sessions ADD COLUMN IF NOT EXISTS selected_atom_snapshots JSONB DEFAULT '[]';",
+		"CREATE TABLE IF NOT EXISTS interview_knowledge_atoms",
+		"CREATE TABLE IF NOT EXISTS interview_knowledge_atom_versions",
+		"CREATE TABLE IF NOT EXISTS interview_knowledge_batches",
+	} {
+		if !strings.Contains(LegacyCompatibilitySQL, required) {
+			t.Fatalf("legacy migration must include interview knowledge bank fragment %q", required)
+		}
+	}
+}

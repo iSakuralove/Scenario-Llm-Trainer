@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"situational-teaching/backend/internal/auth"
+	"situational-teaching/backend/internal/domain"
 )
 
 func TestPromptTemplateListSelectIncludesRenderEngine(t *testing.T) {
@@ -106,5 +107,55 @@ func TestPostgresStoreCRUD(t *testing.T) {
 	}
 	if _, ok := store.GetScenarioSession(session.ID); !ok {
 		t.Fatal("expected persisted scenario session")
+	}
+}
+
+func TestPostgresInterviewKnowledgeAtomVersionedCRUD(t *testing.T) {
+	databaseURL := os.Getenv("POSTGRES_TEST_URL")
+	if databaseURL == "" {
+		t.Skip("POSTGRES_TEST_URL is not set")
+	}
+
+	ctx := context.Background()
+	store, err := NewPostgresStore(ctx, databaseURL, auth.HashPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	atom := sampleInterviewKnowledgeAtom("pg-atom-" + NewID())
+	saved, firstVersion, err := store.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "user-admin", "首次导入")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.CurrentVersion != 1 || firstVersion.Version != 1 {
+		t.Fatalf("expected first version to be 1, got atom=%d version=%d", saved.CurrentVersion, firstVersion.Version)
+	}
+
+	saved, secondVersion, err := store.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionDuplicateImport, "user-admin", "重复导入留痕")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.CurrentVersion != 2 || secondVersion.Version != 2 || !secondVersion.NoContentChange {
+		t.Fatalf("expected duplicate import to advance and mark no content change, got atom=%d version=%d noChange=%t", saved.CurrentVersion, secondVersion.Version, secondVersion.NoContentChange)
+	}
+
+	found, ok := store.GetInterviewKnowledgeAtom(atom.ID)
+	if !ok {
+		t.Fatal("expected persisted interview knowledge atom")
+	}
+	if found.CurrentVersion != 2 || found.VectorStatus != "pending" {
+		t.Fatalf("unexpected persisted atom state: %+v", found)
+	}
+
+	versions := store.ListInterviewKnowledgeAtomVersions(atom.ID)
+	if len(versions) != 2 {
+		t.Fatalf("expected 2 versions, got %d", len(versions))
+	}
+	if versions[0].Version != 2 || versions[1].Version != 1 {
+		t.Fatalf("expected newest version first, got %d then %d", versions[0].Version, versions[1].Version)
+	}
+	if versions[0].Snapshot.SourceRef != "manual-curation" || len(versions[0].Snapshot.FollowUpPaths) != 2 {
+		t.Fatalf("unexpected version snapshot: %+v", versions[0].Snapshot)
 	}
 }

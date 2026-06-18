@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"situational-teaching/backend/internal/ai"
@@ -26,6 +27,13 @@ const promptTemplateListSelectSQL = `
 	       COALESCE(updated_by, ''), updated_at, COALESCE(validator, '')
 	FROM prompt_templates
 	ORDER BY name ASC
+`
+
+const interviewKnowledgeAtomSelectSQL = `
+	SELECT id, title, subject, domain, difficulty, category, question_role, source_ref, tags,
+	       principles, pitfalls, follow_up_paths, status, current_version, vector_status,
+	       last_indexed_at, created_at, updated_at
+	FROM interview_knowledge_atoms
 `
 
 func NewPostgresStore(ctx context.Context, databaseURL string, hashPassword func(string) string) (*PostgresStore, error) {
@@ -571,7 +579,9 @@ func (s *PostgresStore) CreateInterviewSession(userID string, question *domain.I
 func (s *PostgresStore) GetInterviewSession(id string) (*domain.InterviewSession, bool) {
 	row := s.pool.QueryRow(context.Background(), `
 		SELECT id, user_id, question_id, status, current_round, max_rounds, submissions,
-		       evaluations, follow_up_question, final_score, final_report, started_at, ended_at
+		       evaluations, follow_up_question, final_score, final_report,
+		       COALESCE(question_snapshot, '{}'::jsonb), COALESCE(selected_atom_snapshots, '[]'::jsonb),
+		       started_at, ended_at
 		FROM interview_sessions
 		WHERE id = $1
 	`, id)
@@ -585,7 +595,9 @@ func (s *PostgresStore) SaveInterviewSession(session *domain.InterviewSession) {
 func (s *PostgresStore) ListInterviewSessionsForUser(userID string) []domain.InterviewSession {
 	rows, err := s.pool.Query(context.Background(), `
 		SELECT id, user_id, question_id, status, current_round, max_rounds, submissions,
-		       evaluations, follow_up_question, final_score, final_report, started_at, ended_at
+		       evaluations, follow_up_question, final_score, final_report,
+		       COALESCE(question_snapshot, '{}'::jsonb), COALESCE(selected_atom_snapshots, '[]'::jsonb),
+		       started_at, ended_at
 		FROM interview_sessions
 		WHERE user_id = $1
 		ORDER BY started_at DESC
@@ -614,6 +626,72 @@ func (s *PostgresStore) DeleteInterviewSession(id string) bool {
 		return false
 	}
 	return commandTag.RowsAffected() > 0
+}
+
+func (s *PostgresStore) SaveInterviewKnowledgeAtomVersioned(atom domain.InterviewKnowledgeAtom, versionType, adminID, changeNote string) (domain.InterviewKnowledgeAtom, domain.InterviewKnowledgeAtomVersion, error) {
+	if err := validateInterviewKnowledgeAtomSave(atom, versionType); err != nil {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, err
+	}
+
+	ctx := context.Background()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var existing *domain.InterviewKnowledgeAtom
+	row := tx.QueryRow(ctx, interviewKnowledgeAtomSelectSQL+` WHERE id = $1 FOR UPDATE`, strings.TrimSpace(atom.ID))
+	if item, ok := scanInterviewKnowledgeAtom(row); ok {
+		existing = item
+	}
+
+	now := time.Now()
+	nextVersion := 1
+	if existing != nil && existing.CurrentVersion > 0 {
+		nextVersion = existing.CurrentVersion + 1
+	}
+	prepared := prepareInterviewKnowledgeAtomForVersion(atom, existing, nextVersion, now)
+	version := buildInterviewKnowledgeAtomVersion(prepared, existing, versionType, adminID, changeNote, now)
+
+	if err := upsertInterviewKnowledgeAtom(ctx, tx, prepared); err != nil {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, err
+	}
+	if err := insertInterviewKnowledgeAtomVersion(ctx, tx, version); err != nil {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, err
+	}
+	return *cloneInterviewKnowledgeAtom(&prepared), cloneInterviewKnowledgeAtomVersion(version), nil
+}
+
+func (s *PostgresStore) GetInterviewKnowledgeAtom(id string) (*domain.InterviewKnowledgeAtom, bool) {
+	row := s.pool.QueryRow(context.Background(), interviewKnowledgeAtomSelectSQL+` WHERE id = $1`, strings.TrimSpace(id))
+	return scanInterviewKnowledgeAtom(row)
+}
+
+func (s *PostgresStore) ListInterviewKnowledgeAtomVersions(atomID string) []domain.InterviewKnowledgeAtomVersion {
+	rows, err := s.pool.Query(context.Background(), `
+		SELECT id, atom_id, version, version_type, COALESCE(admin_id, ''), COALESCE(change_note, ''),
+		       snapshot, COALESCE(diff_summary, '{}'::jsonb), no_content_change, created_at
+		FROM interview_knowledge_atom_versions
+		WHERE atom_id = $1
+		ORDER BY created_at DESC, version DESC
+	`, strings.TrimSpace(atomID))
+	if err != nil {
+		return []domain.InterviewKnowledgeAtomVersion{}
+	}
+	defer rows.Close()
+
+	items := []domain.InterviewKnowledgeAtomVersion{}
+	for rows.Next() {
+		item, err := scanInterviewKnowledgeAtomVersionRows(rows)
+		if err == nil {
+			items = append(items, item)
+		}
+	}
+	return items
 }
 
 func (s *PostgresStore) AddCommunityPost(post domain.CommunityPost) domain.CommunityPost {
@@ -1154,6 +1232,71 @@ func (s *PostgresStore) upsertInterviewQuestion(ctx context.Context, question do
 	return err
 }
 
+type sqlExecutor interface {
+	Exec(context.Context, string, ...interface{}) (pgconn.CommandTag, error)
+}
+
+func upsertInterviewKnowledgeAtom(ctx context.Context, exec sqlExecutor, atom domain.InterviewKnowledgeAtom) error {
+	principlesJSON, err := marshal(atom.Principles)
+	if err != nil {
+		return err
+	}
+	pitfallsJSON, err := marshal(atom.Pitfalls)
+	if err != nil {
+		return err
+	}
+	followUpPathsJSON, err := marshal(atom.FollowUpPaths)
+	if err != nil {
+		return err
+	}
+	_, err = exec.Exec(ctx, `
+		INSERT INTO interview_knowledge_atoms
+		    (id, title, subject, domain, difficulty, category, question_role, source_ref, tags,
+		     principles, pitfalls, follow_up_paths, status, current_version, vector_status,
+		     last_indexed_at, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+		ON CONFLICT (id) DO UPDATE SET
+		    title = EXCLUDED.title,
+		    subject = EXCLUDED.subject,
+		    domain = EXCLUDED.domain,
+		    difficulty = EXCLUDED.difficulty,
+		    category = EXCLUDED.category,
+		    question_role = EXCLUDED.question_role,
+		    source_ref = EXCLUDED.source_ref,
+		    tags = EXCLUDED.tags,
+		    principles = EXCLUDED.principles,
+		    pitfalls = EXCLUDED.pitfalls,
+		    follow_up_paths = EXCLUDED.follow_up_paths,
+		    status = EXCLUDED.status,
+		    current_version = EXCLUDED.current_version,
+		    vector_status = EXCLUDED.vector_status,
+		    last_indexed_at = EXCLUDED.last_indexed_at,
+		    updated_at = EXCLUDED.updated_at
+	`, atom.ID, atom.Title, atom.Subject, atom.Domain, emptyToNil(atom.Difficulty), emptyToNil(atom.Category),
+		emptyToNil(atom.QuestionRole), emptyToNil(atom.SourceRef), atom.Tags, principlesJSON, pitfallsJSON,
+		followUpPathsJSON, atom.Status, atom.CurrentVersion, atom.VectorStatus, atom.LastIndexedAt,
+		atom.CreatedAt, atom.UpdatedAt)
+	return err
+}
+
+func insertInterviewKnowledgeAtomVersion(ctx context.Context, exec sqlExecutor, version domain.InterviewKnowledgeAtomVersion) error {
+	snapshotJSON, err := marshal(version.Snapshot)
+	if err != nil {
+		return err
+	}
+	diffJSON, err := marshal(version.DiffSummary)
+	if err != nil {
+		return err
+	}
+	_, err = exec.Exec(ctx, `
+		INSERT INTO interview_knowledge_atom_versions
+		    (id, atom_id, version, version_type, admin_id, change_note, snapshot, diff_summary, no_content_change, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+	`, version.ID, version.AtomID, version.Version, version.VersionType, emptyToNil(version.AdminID),
+		emptyToNil(version.ChangeNote), snapshotJSON, diffJSON, version.NoContentChange, version.CreatedAt)
+	return err
+}
+
 func (s *PostgresStore) upsertAIJob(ctx context.Context, job *domain.AIJob) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO ai_jobs
@@ -1228,11 +1371,20 @@ func (s *PostgresStore) upsertInterviewSession(ctx context.Context, session *dom
 	if err != nil {
 		return err
 	}
+	questionSnapshotJSON, err := marshal(session.QuestionSnapshot)
+	if err != nil {
+		return err
+	}
+	selectedAtomSnapshotsJSON, err := marshal(session.SelectedAtomSnapshots)
+	if err != nil {
+		return err
+	}
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO interview_sessions
 		    (id, user_id, question_id, status, current_round, max_rounds, submissions,
-		     evaluations, follow_up_question, final_score, final_report, started_at, ended_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		     evaluations, follow_up_question, final_score, final_report, question_snapshot,
+		     selected_atom_snapshots, started_at, ended_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		ON CONFLICT (id) DO UPDATE SET
 		    status = EXCLUDED.status,
 		    current_round = EXCLUDED.current_round,
@@ -1242,10 +1394,13 @@ func (s *PostgresStore) upsertInterviewSession(ctx context.Context, session *dom
 		    follow_up_question = EXCLUDED.follow_up_question,
 		    final_score = EXCLUDED.final_score,
 		    final_report = EXCLUDED.final_report,
+		    question_snapshot = EXCLUDED.question_snapshot,
+		    selected_atom_snapshots = EXCLUDED.selected_atom_snapshots,
 		    ended_at = EXCLUDED.ended_at
 	`, session.ID, session.UserID, session.QuestionID, session.Status, session.CurrentRound,
 		session.MaxRounds, submissionsJSON, evaluationsJSON, emptyToNil(session.FollowUpQuestion),
-		zeroToNil(session.FinalScore), emptyToNil(session.FinalReport), session.StartedAt, session.EndedAt)
+		zeroToNil(session.FinalScore), emptyToNil(session.FinalReport), questionSnapshotJSON,
+		selectedAtomSnapshotsJSON, session.StartedAt, session.EndedAt)
 	return err
 }
 
@@ -1410,6 +1565,69 @@ func scanInterviewQuestionScanner(row scanner) (domain.InterviewQuestion, error)
 	return item, nil
 }
 
+func scanInterviewKnowledgeAtom(row scanner) (*domain.InterviewKnowledgeAtom, bool) {
+	item, err := scanInterviewKnowledgeAtomScanner(row)
+	if err != nil {
+		return nil, false
+	}
+	return &item, true
+}
+
+func scanInterviewKnowledgeAtomScanner(row scanner) (domain.InterviewKnowledgeAtom, error) {
+	var item domain.InterviewKnowledgeAtom
+	var principlesJSON, pitfallsJSON, followUpPathsJSON []byte
+	var difficulty, category, questionRole, sourceRef *string
+	err := row.Scan(&item.ID, &item.Title, &item.Subject, &item.Domain, &difficulty, &category,
+		&questionRole, &sourceRef, &item.Tags, &principlesJSON, &pitfallsJSON, &followUpPathsJSON,
+		&item.Status, &item.CurrentVersion, &item.VectorStatus, &item.LastIndexedAt, &item.CreatedAt,
+		&item.UpdatedAt)
+	if err != nil {
+		return item, err
+	}
+	if difficulty != nil {
+		item.Difficulty = *difficulty
+	}
+	if category != nil {
+		item.Category = *category
+	}
+	if questionRole != nil {
+		item.QuestionRole = *questionRole
+	}
+	if sourceRef != nil {
+		item.SourceRef = *sourceRef
+	}
+	_ = unmarshal(principlesJSON, &item.Principles)
+	_ = unmarshal(pitfallsJSON, &item.Pitfalls)
+	_ = unmarshal(followUpPathsJSON, &item.FollowUpPaths)
+	if item.Tags == nil {
+		item.Tags = []string{}
+	}
+	if item.Principles == nil {
+		item.Principles = []string{}
+	}
+	if item.Pitfalls == nil {
+		item.Pitfalls = []string{}
+	}
+	if item.FollowUpPaths == nil {
+		item.FollowUpPaths = []string{}
+	}
+	return item, nil
+}
+
+func scanInterviewKnowledgeAtomVersionRows(rows pgx.Rows) (domain.InterviewKnowledgeAtomVersion, error) {
+	var item domain.InterviewKnowledgeAtomVersion
+	var snapshotJSON, diffJSON []byte
+	err := rows.Scan(&item.ID, &item.AtomID, &item.Version, &item.VersionType, &item.AdminID,
+		&item.ChangeNote, &snapshotJSON, &diffJSON, &item.NoContentChange, &item.CreatedAt)
+	if err != nil {
+		return item, err
+	}
+	_ = unmarshal(snapshotJSON, &item.Snapshot)
+	_ = unmarshal(diffJSON, &item.DiffSummary)
+	item = cloneInterviewKnowledgeAtomVersion(item)
+	return item, nil
+}
+
 func scanInterviewSession(row scanner) (*domain.InterviewSession, bool) {
 	item, err := scanInterviewSessionScanner(row)
 	if err != nil {
@@ -1424,18 +1642,20 @@ func scanInterviewSessionRows(rows pgx.Rows) (domain.InterviewSession, error) {
 
 func scanInterviewSessionScanner(row scanner) (domain.InterviewSession, error) {
 	var item domain.InterviewSession
-	var submissionsJSON, evaluationsJSON []byte
+	var submissionsJSON, evaluationsJSON, questionSnapshotJSON, selectedAtomSnapshotsJSON []byte
 	var followUpQuestion, finalReport *string
 	var finalScore *int
 	var endedAt *time.Time
 	err := row.Scan(&item.ID, &item.UserID, &item.QuestionID, &item.Status, &item.CurrentRound,
 		&item.MaxRounds, &submissionsJSON, &evaluationsJSON, &followUpQuestion, &finalScore,
-		&finalReport, &item.StartedAt, &endedAt)
+		&finalReport, &questionSnapshotJSON, &selectedAtomSnapshotsJSON, &item.StartedAt, &endedAt)
 	if err != nil {
 		return item, err
 	}
 	_ = unmarshal(submissionsJSON, &item.Submissions)
 	_ = unmarshal(evaluationsJSON, &item.Evaluations)
+	_ = unmarshal(questionSnapshotJSON, &item.QuestionSnapshot)
+	_ = unmarshal(selectedAtomSnapshotsJSON, &item.SelectedAtomSnapshots)
 	if followUpQuestion != nil {
 		item.FollowUpQuestion = *followUpQuestion
 	}
@@ -1451,6 +1671,9 @@ func scanInterviewSessionScanner(row scanner) (domain.InterviewSession, error) {
 	}
 	if item.Evaluations == nil {
 		item.Evaluations = []domain.InterviewEvaluation{}
+	}
+	if item.SelectedAtomSnapshots == nil {
+		item.SelectedAtomSnapshots = []domain.InterviewKnowledgeAtomLightSnapshot{}
 	}
 	return item, nil
 }

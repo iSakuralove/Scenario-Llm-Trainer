@@ -355,19 +355,21 @@ type FollowUpStrategy struct {
 }
 
 type InterviewSession struct {
-	ID               string                `json:"id"`
-	UserID           string                `json:"user_id"`
-	QuestionID       string                `json:"question_id"`
-	Status           string                `json:"status"`
-	CurrentRound     int                   `json:"current_round"`
-	MaxRounds        int                   `json:"max_rounds"`
-	Submissions      []InterviewSubmission `json:"submissions"`
-	Evaluations      []InterviewEvaluation `json:"evaluations"`
-	FollowUpQuestion string                `json:"follow_up_question,omitempty"`
-	FinalScore       int                   `json:"final_score,omitempty"`
-	FinalReport      string                `json:"final_report,omitempty"`
-	StartedAt        time.Time             `json:"started_at"`
-	EndedAt          *time.Time            `json:"ended_at,omitempty"`
+	ID                    string                                `json:"id"`
+	UserID                string                                `json:"user_id"`
+	QuestionID            string                                `json:"question_id"`
+	Status                string                                `json:"status"`
+	CurrentRound          int                                   `json:"current_round"`
+	MaxRounds             int                                   `json:"max_rounds"`
+	Submissions           []InterviewSubmission                 `json:"submissions"`
+	Evaluations           []InterviewEvaluation                 `json:"evaluations"`
+	FollowUpQuestion      string                                `json:"follow_up_question,omitempty"`
+	FinalScore            int                                   `json:"final_score,omitempty"`
+	FinalReport           string                                `json:"final_report,omitempty"`
+	QuestionSnapshot      InterviewQuestionSnapshot             `json:"question_snapshot,omitempty"`
+	SelectedAtomSnapshots []InterviewKnowledgeAtomLightSnapshot `json:"selected_atom_snapshots,omitempty"`
+	StartedAt             time.Time                             `json:"started_at"`
+	EndedAt               *time.Time                            `json:"ended_at,omitempty"`
 }
 
 type InterviewSubmission struct {

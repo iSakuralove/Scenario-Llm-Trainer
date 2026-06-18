@@ -30,6 +30,9 @@ type Store interface {
 	SaveInterviewSession(session *domain.InterviewSession)
 	ListInterviewSessionsForUser(userID string) []domain.InterviewSession
 	DeleteInterviewSession(id string) bool
+	SaveInterviewKnowledgeAtomVersioned(atom domain.InterviewKnowledgeAtom, versionType, adminID, changeNote string) (domain.InterviewKnowledgeAtom, domain.InterviewKnowledgeAtomVersion, error)
+	GetInterviewKnowledgeAtom(id string) (*domain.InterviewKnowledgeAtom, bool)
+	ListInterviewKnowledgeAtomVersions(atomID string) []domain.InterviewKnowledgeAtomVersion
 
 	AddCommunityPost(post domain.CommunityPost) domain.CommunityPost
 	GetCommunityPost(id string) (*domain.CommunityPost, bool)

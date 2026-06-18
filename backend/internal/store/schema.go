@@ -87,8 +87,76 @@ CREATE TABLE IF NOT EXISTS interview_sessions (
     follow_up_question TEXT,
     final_score INT,
     final_report TEXT,
+    question_snapshot JSONB DEFAULT '{}',
+    selected_atom_snapshots JSONB DEFAULT '[]',
     started_at TIMESTAMPTZ DEFAULT NOW(),
     ended_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS interview_knowledge_atoms (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    domain VARCHAR(50) NOT NULL,
+    difficulty VARCHAR(16),
+    category VARCHAR(64),
+    question_role VARCHAR(20),
+    source_ref TEXT,
+    tags TEXT[] DEFAULT '{}',
+    principles JSONB DEFAULT '[]',
+    pitfalls JSONB DEFAULT '[]',
+    follow_up_paths JSONB DEFAULT '[]',
+    status VARCHAR(20) DEFAULT 'draft',
+    current_version INT DEFAULT 1,
+    vector_status VARCHAR(20) DEFAULT 'pending',
+    last_indexed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS interview_knowledge_atom_versions (
+    id TEXT PRIMARY KEY,
+    atom_id TEXT NOT NULL REFERENCES interview_knowledge_atoms(id) ON DELETE CASCADE,
+    version INT NOT NULL,
+    version_type VARCHAR(32) NOT NULL CHECK (version_type IN ('content_update','duplicate_import','manual_edit','restore_archived')),
+    admin_id TEXT,
+    change_note TEXT,
+    snapshot JSONB NOT NULL,
+    diff_summary JSONB DEFAULT '{}',
+    no_content_change BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(atom_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS interview_knowledge_atom_versions_atom_version_idx
+    ON interview_knowledge_atom_versions(atom_id, version DESC);
+CREATE INDEX IF NOT EXISTS interview_knowledge_atom_versions_type_created_idx
+    ON interview_knowledge_atom_versions(version_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS interview_knowledge_atom_versions_admin_created_idx
+    ON interview_knowledge_atom_versions(admin_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS interview_knowledge_batches (
+    id TEXT PRIMARY KEY,
+    source_ref TEXT,
+    status VARCHAR(30) DEFAULT 'draft',
+    mode VARCHAR(30) DEFAULT 'draft',
+    atom_count INT DEFAULT 0,
+    validation_report JSONB DEFAULT '{}',
+    publish_note TEXT,
+    admin_id TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS interview_retrieval_logs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT REFERENCES interview_sessions(id) ON DELETE CASCADE,
+    round INT NOT NULL,
+    query_text TEXT,
+    matched_atoms JSONB DEFAULT '[]',
+    fallback_used BOOLEAN DEFAULT FALSE,
+    error_message TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS community_posts (
@@ -220,6 +288,8 @@ ALTER TABLE IF EXISTS scenario_sessions ADD COLUMN IF NOT EXISTS no_new_clue_str
 ALTER TABLE IF EXISTS scenario_sessions ADD COLUMN IF NOT EXISTS conversation_summary TEXT DEFAULT '';
 ALTER TABLE IF EXISTS interview_questions ADD COLUMN IF NOT EXISTS reference_keywords TEXT[];
 ALTER TABLE IF EXISTS interview_sessions ADD COLUMN IF NOT EXISTS follow_up_question TEXT;
+ALTER TABLE IF EXISTS interview_sessions ADD COLUMN IF NOT EXISTS question_snapshot JSONB DEFAULT '{}';
+ALTER TABLE IF EXISTS interview_sessions ADD COLUMN IF NOT EXISTS selected_atom_snapshots JSONB DEFAULT '[]';
 ALTER TABLE IF EXISTS community_posts ADD COLUMN IF NOT EXISTS reviewed_by TEXT;
 ALTER TABLE IF EXISTS community_posts ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
 ALTER TABLE IF EXISTS community_posts ADD COLUMN IF NOT EXISTS review_note TEXT;
@@ -317,4 +387,60 @@ CREATE TABLE IF NOT EXISTS audit_events (
     metadata JSONB DEFAULT '{}',
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS interview_knowledge_atoms (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    domain VARCHAR(50) NOT NULL,
+    difficulty VARCHAR(16),
+    category VARCHAR(64),
+    question_role VARCHAR(20),
+    source_ref TEXT,
+    tags TEXT[] DEFAULT '{}',
+    principles JSONB DEFAULT '[]',
+    pitfalls JSONB DEFAULT '[]',
+    follow_up_paths JSONB DEFAULT '[]',
+    status VARCHAR(20) DEFAULT 'draft',
+    current_version INT DEFAULT 1,
+    vector_status VARCHAR(20) DEFAULT 'pending',
+    last_indexed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS interview_knowledge_atom_versions (
+    id TEXT PRIMARY KEY,
+    atom_id TEXT NOT NULL REFERENCES interview_knowledge_atoms(id) ON DELETE CASCADE,
+    version INT NOT NULL,
+    version_type VARCHAR(32) NOT NULL CHECK (version_type IN ('content_update','duplicate_import','manual_edit','restore_archived')),
+    admin_id TEXT,
+    change_note TEXT,
+    snapshot JSONB NOT NULL,
+    diff_summary JSONB DEFAULT '{}',
+    no_content_change BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(atom_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS interview_knowledge_atom_versions_atom_version_idx
+    ON interview_knowledge_atom_versions(atom_id, version DESC);
+CREATE INDEX IF NOT EXISTS interview_knowledge_atom_versions_type_created_idx
+    ON interview_knowledge_atom_versions(version_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS interview_knowledge_atom_versions_admin_created_idx
+    ON interview_knowledge_atom_versions(admin_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS interview_knowledge_batches (
+    id TEXT PRIMARY KEY,
+    source_ref TEXT,
+    status VARCHAR(30) DEFAULT 'draft',
+    mode VARCHAR(30) DEFAULT 'draft',
+    atom_count INT DEFAULT 0,
+    validation_report JSONB DEFAULT '{}',
+    publish_note TEXT,
+    admin_id TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 `

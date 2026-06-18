@@ -19,39 +19,43 @@ import (
 type MemoryStore struct {
 	mu sync.RWMutex
 
-	Users              map[string]*domain.User
-	UsersByUsername    map[string]string
-	UsersByEmail       map[string]string
-	Scenarios          map[string]*domain.ScenarioQuestion
-	ScenarioSessions   map[string]*domain.ScenarioSession
-	ScenarioMessages   map[string][]domain.ScenarioMessage
-	InterviewQuestions map[string]*domain.InterviewQuestion
-	InterviewSessions  map[string]*domain.InterviewSession
-	CommunityPosts     map[string]*domain.CommunityPost
-	Assets             map[string]*domain.Asset
-	AIJobs             map[string]*domain.AIJob
-	PromptTemplates    map[string]*domain.PromptTemplate
-	AIConfig           domain.AIConfig
-	AuditEvents        []domain.AuditEvent
-	vectorStore        VectorStore
+	Users                          map[string]*domain.User
+	UsersByUsername                map[string]string
+	UsersByEmail                   map[string]string
+	Scenarios                      map[string]*domain.ScenarioQuestion
+	ScenarioSessions               map[string]*domain.ScenarioSession
+	ScenarioMessages               map[string][]domain.ScenarioMessage
+	InterviewQuestions             map[string]*domain.InterviewQuestion
+	InterviewSessions              map[string]*domain.InterviewSession
+	InterviewKnowledgeAtoms        map[string]*domain.InterviewKnowledgeAtom
+	InterviewKnowledgeAtomVersions map[string][]domain.InterviewKnowledgeAtomVersion
+	CommunityPosts                 map[string]*domain.CommunityPost
+	Assets                         map[string]*domain.Asset
+	AIJobs                         map[string]*domain.AIJob
+	PromptTemplates                map[string]*domain.PromptTemplate
+	AIConfig                       domain.AIConfig
+	AuditEvents                    []domain.AuditEvent
+	vectorStore                    VectorStore
 }
 
 func NewMemoryStore(hashPassword func(string) string) *MemoryStore {
 	s := &MemoryStore{
-		Users:              map[string]*domain.User{},
-		UsersByUsername:    map[string]string{},
-		UsersByEmail:       map[string]string{},
-		Scenarios:          map[string]*domain.ScenarioQuestion{},
-		ScenarioSessions:   map[string]*domain.ScenarioSession{},
-		ScenarioMessages:   map[string][]domain.ScenarioMessage{},
-		InterviewQuestions: map[string]*domain.InterviewQuestion{},
-		InterviewSessions:  map[string]*domain.InterviewSession{},
-		CommunityPosts:     map[string]*domain.CommunityPost{},
-		Assets:             map[string]*domain.Asset{},
-		AIJobs:             map[string]*domain.AIJob{},
-		PromptTemplates:    map[string]*domain.PromptTemplate{},
-		AuditEvents:        []domain.AuditEvent{},
-		vectorStore:        NewMemoryVectorStore(),
+		Users:                          map[string]*domain.User{},
+		UsersByUsername:                map[string]string{},
+		UsersByEmail:                   map[string]string{},
+		Scenarios:                      map[string]*domain.ScenarioQuestion{},
+		ScenarioSessions:               map[string]*domain.ScenarioSession{},
+		ScenarioMessages:               map[string][]domain.ScenarioMessage{},
+		InterviewQuestions:             map[string]*domain.InterviewQuestion{},
+		InterviewSessions:              map[string]*domain.InterviewSession{},
+		InterviewKnowledgeAtoms:        map[string]*domain.InterviewKnowledgeAtom{},
+		InterviewKnowledgeAtomVersions: map[string][]domain.InterviewKnowledgeAtomVersion{},
+		CommunityPosts:                 map[string]*domain.CommunityPost{},
+		Assets:                         map[string]*domain.Asset{},
+		AIJobs:                         map[string]*domain.AIJob{},
+		PromptTemplates:                map[string]*domain.PromptTemplate{},
+		AuditEvents:                    []domain.AuditEvent{},
+		vectorStore:                    NewMemoryVectorStore(),
 	}
 	s.seedAdminConfig()
 	s.seed(hashPassword)
@@ -470,6 +474,56 @@ func (s *MemoryStore) DeleteInterviewSession(id string) bool {
 	}
 	delete(s.InterviewSessions, id)
 	return true
+}
+
+func (s *MemoryStore) SaveInterviewKnowledgeAtomVersioned(atom domain.InterviewKnowledgeAtom, versionType, adminID, changeNote string) (domain.InterviewKnowledgeAtom, domain.InterviewKnowledgeAtomVersion, error) {
+	if err := validateInterviewKnowledgeAtomSave(atom, versionType); err != nil {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.InterviewKnowledgeAtoms == nil {
+		s.InterviewKnowledgeAtoms = map[string]*domain.InterviewKnowledgeAtom{}
+	}
+	if s.InterviewKnowledgeAtomVersions == nil {
+		s.InterviewKnowledgeAtomVersions = map[string][]domain.InterviewKnowledgeAtomVersion{}
+	}
+
+	now := time.Now()
+	existing := cloneInterviewKnowledgeAtom(s.InterviewKnowledgeAtoms[strings.TrimSpace(atom.ID)])
+	nextVersion := 1
+	if existing != nil && existing.CurrentVersion > 0 {
+		nextVersion = existing.CurrentVersion + 1
+	}
+	prepared := prepareInterviewKnowledgeAtomForVersion(atom, existing, nextVersion, now)
+	version := buildInterviewKnowledgeAtomVersion(prepared, existing, versionType, adminID, changeNote, now)
+
+	s.InterviewKnowledgeAtoms[prepared.ID] = cloneInterviewKnowledgeAtom(&prepared)
+	s.InterviewKnowledgeAtomVersions[prepared.ID] = append(s.InterviewKnowledgeAtomVersions[prepared.ID], cloneInterviewKnowledgeAtomVersion(version))
+	return *cloneInterviewKnowledgeAtom(&prepared), cloneInterviewKnowledgeAtomVersion(version), nil
+}
+
+func (s *MemoryStore) GetInterviewKnowledgeAtom(id string) (*domain.InterviewKnowledgeAtom, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	atom, ok := s.InterviewKnowledgeAtoms[strings.TrimSpace(id)]
+	if !ok {
+		return nil, false
+	}
+	return cloneInterviewKnowledgeAtom(atom), true
+}
+
+func (s *MemoryStore) ListInterviewKnowledgeAtomVersions(atomID string) []domain.InterviewKnowledgeAtomVersion {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	versions := s.InterviewKnowledgeAtomVersions[strings.TrimSpace(atomID)]
+	items := make([]domain.InterviewKnowledgeAtomVersion, 0, len(versions))
+	for _, version := range versions {
+		items = append(items, cloneInterviewKnowledgeAtomVersion(version))
+	}
+	sortInterviewKnowledgeVersions(items)
+	return items
 }
 
 func (s *MemoryStore) AddCommunityPost(post domain.CommunityPost) domain.CommunityPost {
@@ -1312,6 +1366,7 @@ func cloneInterviewSession(session *domain.InterviewSession) *domain.InterviewSe
 	copy := *session
 	copy.Submissions = append([]domain.InterviewSubmission{}, session.Submissions...)
 	copy.Evaluations = append([]domain.InterviewEvaluation{}, session.Evaluations...)
+	copy.SelectedAtomSnapshots = cloneInterviewKnowledgeAtomLightSnapshots(session.SelectedAtomSnapshots)
 	return &copy
 }
 
