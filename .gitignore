@@ -79,7 +79,6 @@ ppt-output/
 !.vscode/extensions.json
 .playwright-mcp/
 .codegraph/
-.trellis/
 backend/.reftool/
 .serena/logs/
 .serena/cache/
@@ -87,7 +86,7 @@ backend/.reftool/
 .codex/cache/
 AGENTS.md
 CLAUDE.md
-DESIGN.md
+/DESIGN.md
 
 # Local review and analysis output
 review/

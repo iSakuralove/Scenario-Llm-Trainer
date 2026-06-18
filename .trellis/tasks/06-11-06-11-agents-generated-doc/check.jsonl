@@ -1,0 +1,2 @@
+{"file":"README.md","reason":"校验补充文档中的命令、账号和项目描述没有脱离当前 README。"}
+{"file":"docs/architecture.md","reason":"校验前后端模块职责和 handler 分工描述没有超出稳定边界。"}

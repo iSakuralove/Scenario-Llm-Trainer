@@ -1,0 +1,3 @@
+{"file":"README.md","reason":"校验 PRD 与技术方案中的当前项目能力描述没有写偏。"}
+{"file":"docs/architecture.md","reason":"校验后端接入建议没有越过现有 httpapi / ai / store 边界。"}
+{"file":"tmp/AI-Interview-ref/README.md","reason":"校验外部仓库能力与技术栈描述准确。"}

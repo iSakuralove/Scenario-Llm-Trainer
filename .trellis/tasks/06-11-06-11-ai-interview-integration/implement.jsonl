@@ -1,0 +1,5 @@
+{"file":"README.md","reason":"对齐当前项目的产品边界、能力范围和已有面试/学习闭环。"}
+{"file":"docs/architecture.md","reason":"对齐当前后端模块边界，确保接入方案不脱离现有架构。"}
+{"file":"tmp/AI-Interview-ref/README.md","reason":"提取外部仓库的产品范围、技术栈和核心链路。"}
+{"file":"tmp/AI-Interview-ref/CONTEXT.md","reason":"对齐外部仓库的领域术语，避免讨论时概念混淆。"}
+{"file":"tmp/AI-Interview-ref/docs/adr/0002-question-bank-import-lifecycle.md","reason":"理解外部仓库题库导入与发布的核心约束。"}

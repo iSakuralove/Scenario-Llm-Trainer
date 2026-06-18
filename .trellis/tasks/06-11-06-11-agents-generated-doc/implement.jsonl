@@ -1,0 +1,3 @@
+{"file":"README.md","reason":"提取项目定位、角色、命令和演示入口，写入 AGENTS 补充文档。"}
+{"file":"docs/architecture.md","reason":"提取稳定的后端模块边界与 httpapi 分工，避免文档写偏。"}
+{"file":".trellis/spec/frontend/index.md","reason":"确认项目内 Trellis 前端规范目录现状，说明该补充文档与现有规范的关系。"}
