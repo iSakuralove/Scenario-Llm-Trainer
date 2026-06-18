@@ -1,0 +1,4 @@
+{"file":"docs/ai-interview-integration-prd.md","reason":"检查重构文档是否对齐已确认产品范围、权限、组合展示和题库治理约束。"}
+{"file":"docs/ai-interview-integration-tech-design.md","reason":"检查前端模块、API 边界、管理端入口和报告页增强是否与技术方案一致。"}
+{"file":"docs/architecture.md","reason":"检查版本治理、会话快照和稳定架构边界是否被正确反映。"}
+{"file":"features/interview-bank-version-storage.md","reason":"检查文档是否区分已完成数据层与后续待实现前端/API 能力。"}

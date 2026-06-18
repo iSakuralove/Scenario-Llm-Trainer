@@ -1,0 +1,4 @@
+{"file":"docs/ai-interview-integration-prd.md","reason":"已确认的 AI-Interview 接入产品决策，是面试舱重构文档的首要约束来源。"}
+{"file":"docs/ai-interview-integration-tech-design.md","reason":"记录前端接入边界、管理端位置、组合状态来源和报告页增强方案。"}
+{"file":"docs/architecture.md","reason":"记录面试题库版本治理数据层和会话快照的稳定架构边界。"}
+{"file":"features/interview-bank-version-storage.md","reason":"记录已落地的数据层切片、验证方式和当前限制，避免文档承诺超出已实现能力。"}
