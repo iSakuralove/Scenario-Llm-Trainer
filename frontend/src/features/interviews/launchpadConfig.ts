@@ -1,7 +1,7 @@
 export type InterviewQuestionType = 'scenario_analysis' | 'principle'
 
 export interface InterviewLevelOption {
-  value: 'L3' | 'L4' | 'L5'
+  value: 'L2' | 'L3' | 'L4' | 'L5'
   role: string
   audience: string
   focus: string
@@ -19,13 +19,19 @@ export interface InterviewLaunchTrack {
   title: string
   domain: string
   domainLabel: string
-  difficulty: 'L3' | 'L4' | 'L5'
+  difficulty: 'L2' | 'L3' | 'L4' | 'L5'
   questionType: InterviewQuestionType
   summary: string
   details: string[]
 }
 
 export const interviewLevels: InterviewLevelOption[] = [
+  {
+    value: 'L2',
+    role: '初级工程师',
+    audience: '0-1年经验',
+    focus: '基础概念、表达清晰度、任务拆解与简单排查',
+  },
   {
     value: 'L3',
     role: '初级工程师',
@@ -47,21 +53,43 @@ export const interviewLevels: InterviewLevelOption[] = [
 ]
 
 export const interviewDomains: InterviewDomainOption[] = [
-  { value: 'database', label: '数据库', group: '基础能力', note: 'deepseek-v4-flash 基线题库' },
-  { value: 'network', label: '网络', group: '基础能力', note: 'deepseek-v4-flash 基线题库' },
-  { value: 'os', label: '操作系统', group: '基础能力', note: 'deepseek-v4-flash 基线题库' },
-  { value: 'security', label: '安全', group: '工程实践', note: 'deepseek-v4-flash 基线题库' },
-  { value: 'devops', label: 'DevOps', group: '工程实践', note: 'deepseek-v4-flash 基线题库' },
-  { value: 'backend', label: '后端工程', group: '工程实践', note: 'deepseek-v4-flash 基线题库' },
-  { value: 'distributed', label: '分布式系统', group: '系统能力', note: 'deepseek-v4-flash 基线题库' },
-  { value: 'cloud-native', label: '云原生', group: '系统能力', note: 'deepseek-v4-flash 基线题库' },
-  { value: 'mq-cache', label: '缓存与消息队列', group: '系统能力', note: 'deepseek-v4-flash 基线题库' },
-  { value: 'observability', label: '可观测性', group: '稳定性', note: 'deepseek-v4-flash 基线题库' },
-  { value: 'performance', label: '性能优化', group: '稳定性', note: 'deepseek-v4-flash 基线题库' },
-  { value: 'architecture', label: '架构设计', group: '系统能力', note: 'deepseek-v4-flash 基线题库' },
+  { value: 'java', label: 'Java', group: '首期开放', note: 'L2 / L3 训练入口' },
+  { value: 'database', label: '数据库', group: '首期开放', note: 'L2 / L3 训练入口' },
+  { value: 'cache', label: '缓存', group: '首期开放', note: 'L2 / L3 训练入口' },
+  { value: 'ai_llm', label: 'AI / LLM', group: '首期开放', note: 'L2 / L3 训练入口' },
 ]
 
 export const interviewLaunchTracks: InterviewLaunchTrack[] = [
+  {
+    id: 'java-l2-principle',
+    title: 'Java L2',
+    domain: 'java',
+    domainLabel: 'Java',
+    difficulty: 'L2',
+    questionType: 'principle',
+    summary: '面向初级岗位的 Java 基础语法、集合和面向对象问答。',
+    details: ['原理问答', '基础表达', '适合校招和 0-1 年经验'],
+  },
+  {
+    id: 'java-l3-scenario',
+    title: 'Java L3',
+    domain: 'java',
+    domainLabel: 'Java',
+    difficulty: 'L3',
+    questionType: 'scenario_analysis',
+    summary: '面向进阶岗位的对象创建、异常处理和并发问题排查。',
+    details: ['情景分析', '并发基础', '适合校招后与 1 年左右经验'],
+  },
+  {
+    id: 'database-l2-principle',
+    title: '数据库 L2',
+    domain: 'database',
+    domainLabel: '数据库',
+    difficulty: 'L2',
+    questionType: 'principle',
+    summary: '面向初级岗位的索引、事务和表结构基础问答。',
+    details: ['原理问答', '事务基础', '适合 0-1 年经验'],
+  },
   {
     id: 'database-l3-scenario',
     title: '数据库 L3',
@@ -69,118 +97,48 @@ export const interviewLaunchTracks: InterviewLaunchTrack[] = [
     domainLabel: '数据库',
     difficulty: 'L3',
     questionType: 'scenario_analysis',
-    summary: '面向初级工程师的慢查询、索引和回滚方案排查。',
-    details: ['情景分析', '最多 3 轮追问', '适合校招和初级岗位'],
+    summary: '面向进阶岗位的慢查询、索引和回滚方案排查。',
+    details: ['情景分析', '慢查询定位', '回滚方案'],
   },
   {
-    id: 'network-l3-scenario',
-    title: '网络 L3',
-    domain: 'network',
-    domainLabel: '网络',
+    id: 'cache-l2-principle',
+    title: '缓存 L2',
+    domain: 'cache',
+    domainLabel: '缓存',
+    difficulty: 'L2',
+    questionType: 'principle',
+    summary: '面向初级岗位的缓存命中、过期和基础一致性问答。',
+    details: ['原理问答', '缓存基础', '适合 0-1 年经验'],
+  },
+  {
+    id: 'cache-l3-scenario',
+    title: '缓存 L3',
+    domain: 'cache',
+    domainLabel: '缓存',
     difficulty: 'L3',
     questionType: 'scenario_analysis',
-    summary: '面向初级工程师的跨服务调用超时定位。',
-    details: ['情景分析', '链路定位', 'DNS/VIP/健康检查'],
+    summary: '面向进阶岗位的缓存击穿、穿透、雪崩与一致性排查。',
+    details: ['情景分析', '缓存治理', '热点流量'],
   },
   {
-    id: 'os-l3-principle',
-    title: '操作系统 L3',
-    domain: 'os',
-    domainLabel: '操作系统',
+    id: 'ai-llm-l2-principle',
+    title: 'AI / LLM L2',
+    domain: 'ai_llm',
+    domainLabel: 'AI / LLM',
+    difficulty: 'L2',
+    questionType: 'principle',
+    summary: '面向初级岗位的提示词、RAG 和模型使用基础问答。',
+    details: ['原理问答', 'RAG 基础', '适合 0-1 年经验'],
+  },
+  {
+    id: 'ai-llm-l3-scenario',
+    title: 'AI / LLM L3',
+    domain: 'ai_llm',
+    domainLabel: 'AI / LLM',
     difficulty: 'L3',
-    questionType: 'principle',
-    summary: '面向初级工程师的 load、IO wait 与进程状态分析。',
-    details: ['原理问答', 'Linux 基础', '系统负载诊断'],
-  },
-  {
-    id: 'security-l4-scenario',
-    title: '安全 L4',
-    domain: 'security',
-    domainLabel: '安全',
-    difficulty: 'L4',
     questionType: 'scenario_analysis',
-    summary: '面向中级工程师的访问密钥泄露与遏制处置分析。',
-    details: ['情景分析', '密钥轮换', '风险面收敛'],
-  },
-  {
-    id: 'devops-l4-scenario',
-    title: 'DevOps L4',
-    domain: 'devops',
-    domainLabel: 'DevOps',
-    difficulty: 'L4',
-    questionType: 'scenario_analysis',
-    summary: '面向中级工程师的发布失败、回滚与流水线修复分析。',
-    details: ['情景分析', 'CI/CD', '回滚演练'],
-  },
-  {
-    id: 'backend-l4-scenario',
-    title: '后端工程 L4',
-    domain: 'backend',
-    domainLabel: '后端工程',
-    difficulty: 'L4',
-    questionType: 'scenario_analysis',
-    summary: '面向中级工程师的接口幂等、重试与库存一致性分析。',
-    details: ['情景分析', '并发控制', '一致性处理'],
-  },
-  {
-    id: 'distributed-l4-scenario',
-    title: '分布式系统 L4',
-    domain: 'distributed',
-    domainLabel: '分布式系统',
-    difficulty: 'L4',
-    questionType: 'scenario_analysis',
-    summary: '面向中级工程师的分布式事务补偿与消息乱序排查。',
-    details: ['情景分析', '补偿机制', '消息顺序'],
-  },
-  {
-    id: 'cloud-native-l4-scenario',
-    title: '云原生 L4',
-    domain: 'cloud-native',
-    domainLabel: '云原生',
-    difficulty: 'L4',
-    questionType: 'scenario_analysis',
-    summary: '面向中级工程师的 Kubernetes 滚动发布故障与集群自愈分析。',
-    details: ['情景分析', 'Kubernetes', '发布稳定性'],
-  },
-  {
-    id: 'mq-cache-l4-scenario',
-    title: '缓存与消息队列 L4',
-    domain: 'mq-cache',
-    domainLabel: '缓存与消息队列',
-    difficulty: 'L4',
-    questionType: 'scenario_analysis',
-    summary: '面向中级工程师的缓存击穿与消息积压联合排查。',
-    details: ['情景分析', '缓存策略', '积压治理'],
-  },
-  {
-    id: 'observability-l4-scenario',
-    title: '可观测性 L4',
-    domain: 'observability',
-    domainLabel: '可观测性',
-    difficulty: 'L4',
-    questionType: 'scenario_analysis',
-    summary: '面向中级工程师的告警风暴、指标漂移与链路定位分析。',
-    details: ['情景分析', '告警降噪', '指标与 Trace'],
-  },
-  {
-    id: 'performance-l4-scenario',
-    title: '性能优化 L4',
-    domain: 'performance',
-    domainLabel: '性能优化',
-    difficulty: 'L4',
-    questionType: 'scenario_analysis',
-    summary: '面向中级工程师的 P99 抖动、线程池和热点流量优化分析。',
-    details: ['情景分析', '性能瓶颈', '容量治理'],
-  },
-  {
-    id: 'architecture-l5-principle',
-    title: '架构设计 L5',
-    domain: 'architecture',
-    domainLabel: '架构设计',
-    difficulty: 'L5',
-    questionType: 'principle',
-    summary: '面向高级工程师的多活容灾、一致性与演进治理设计问答。',
-    details: ['设计问答', '多活架构', '演进治理'],
+    summary: '面向进阶岗位的 RAG 链路、提示词稳定性与模型应用治理分析。',
+    details: ['情景分析', 'RAG 链路', '应用治理'],
   },
 ]
 
@@ -202,6 +160,8 @@ export const interviewScoreDimensions = [
 export const interviewReportOutputs = [
   '最终分与岗位级别匹配度',
   '五维能力雷达',
+  '追问策略摘要',
   '每轮追问与回答记录',
+  '建议补强方向',
   '可打印/导出 PDF 的复盘报告',
 ]

@@ -162,10 +162,10 @@ export function InterviewsPage() {
         <div className="interview-hero-grid">
           <div className="interview-command-copy">
             <span className="interview-super-title">INTERVIEW</span>
-            <span className="interview-subtitle">L3-L5 STRUCTURED TRAINING</span>
+            <span className="interview-subtitle">L2-L3 OPEN TRACKS</span>
             <h2>面试启动台</h2>
             <div className="checked-action-list interview-chip-row">
-              <span>岗位级别 L3-L5</span>
+              <span>首期开放 L2-L3</span>
               <span>五维评分</span>
               <span>最多 3 轮追问</span>
             </div>
