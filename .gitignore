@@ -74,7 +74,9 @@ ppt-output/
 
 # Local tool state
 .idea/
+.agents/
 .claude/
+.codex/
 .vscode/*
 !.vscode/extensions.json
 .playwright-mcp/
@@ -85,12 +87,18 @@ backend/.reftool/
 .serena/project.local.yml
 .codex/cache/
 AGENTS.md
+AGENTS.generated.md
 CLAUDE.md
+CONTEXT.md
 /DESIGN.md
+MEMORY.md
 
 # Local review and analysis output
 review/
 代码审查报告.md
+docs/adr/
+docs/memos-agent-prompt.md
+features/2026-06-11-agents-generated-doc.md
 
 # Excluded from the GitHub source branch by policy
 交付/
