@@ -105,3 +105,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: 收口面试舱首期开放组合
+
+**Date**: 2026-06-21
+**Task**: 收口面试舱首期开放组合
+**Branch**: `main`
+
+### Summary
+
+跳过 Trellis 任务流程后，直接收口面试舱前端启动台：将用户侧可启动轨道限定到 java/database/cache/ai_llm 的 L2/L3，更新页面首屏文案、前端页面落地方案和 features 记录，并通过前端 build 与 lint 验证。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3cc1fc0` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
