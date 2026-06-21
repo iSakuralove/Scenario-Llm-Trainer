@@ -1,26 +1,33 @@
 import { type KeyboardEvent, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { BadgeCheck, BarChart3, ChevronDown, ChevronUp, ClipboardList, FileText, History, MessageSquareText, Play, Route, ShieldAlert, Trash2 } from 'lucide-react'
-import { api } from '../../api/client'
+import { api, type InterviewLaunchpadDomain, type InterviewLaunchpadTrack } from '../../api/client'
 import { useToken } from '../../lib/auth'
 import { domainLabel } from '../../lib/domain'
 import { formatDateTime } from '../../lib/format'
 import type { InterviewQuestion, InterviewSession } from '../../types'
 import {
-  interviewDomains,
+  interviewDomains as fallbackInterviewDomains,
   interviewFlowSteps,
-  interviewLaunchTracks,
+  interviewLaunchTracks as fallbackInterviewLaunchTracks,
   interviewLevels,
   interviewReportOutputs,
   interviewScoreDimensions,
+  type InterviewDomainOption,
   type InterviewLaunchTrack,
 } from './launchpadConfig'
 import './InterviewsPage.css'
 
+type LaunchpadSource = 'loading' | 'api' | 'fallback'
+
 export function InterviewsPage() {
   const token = useToken()
   const navigate = useNavigate()
-  const [selectedTrackId, setSelectedTrackId] = useState(interviewLaunchTracks[0]?.id ?? '')
+  const [launchTracks, setLaunchTracks] = useState<InterviewLaunchTrack[]>(fallbackInterviewLaunchTracks)
+  const [launchDomains, setLaunchDomains] = useState<InterviewDomainOption[]>(fallbackInterviewDomains)
+  const [launchpadSource, setLaunchpadSource] = useState<LaunchpadSource>('loading')
+  const [launchpadNotice, setLaunchpadNotice] = useState('正在读取后端开放组合，当前页面会在接口异常时自动使用兼容轨道。')
+  const [selectedTrackId, setSelectedTrackId] = useState(fallbackInterviewLaunchTracks[0]?.id ?? '')
   const [startError, setStartError] = useState('')
   const [isStarting, setIsStarting] = useState(false)
   const [historySessions, setHistorySessions] = useState<InterviewSession[]>([])
@@ -31,9 +38,43 @@ export function InterviewsPage() {
   const [deletingHistoryId, setDeletingHistoryId] = useState('')
 
   const selectedTrack = useMemo(
-    () => interviewLaunchTracks.find((track) => track.id === selectedTrackId) ?? interviewLaunchTracks[0],
-    [selectedTrackId],
+    () => launchTracks.find((track) => track.id === selectedTrackId) ?? launchTracks[0],
+    [launchTracks, selectedTrackId],
   )
+
+  useEffect(() => {
+    let ignore = false
+    const applyFallbackLaunchpad = (message: string) => {
+      setLaunchTracks(fallbackInterviewLaunchTracks)
+      setLaunchDomains(fallbackInterviewDomains)
+      setSelectedTrackId((current) => fallbackInterviewLaunchTracks.some((track) => track.id === current) ? current : fallbackInterviewLaunchTracks[0]?.id ?? '')
+      setLaunchpadSource('fallback')
+      setLaunchpadNotice(message)
+    }
+    void api.interviewLaunchpad(token)
+      .then((res) => {
+        if (ignore) return
+        const tracks = (res.open_tracks ?? []).map(launchpadTrackToView).filter((track): track is InterviewLaunchTrack => Boolean(track))
+        if (tracks.length === 0) {
+          applyFallbackLaunchpad('后端暂未返回可启动组合，已使用本地兼容轨道保持训练入口可用。')
+          return
+        }
+        setLaunchTracks(tracks)
+        setLaunchDomains(launchpadDomainsToView(res.domains ?? [], tracks))
+        setSelectedTrackId((current) => tracks.some((track) => track.id === current) ? current : tracks[0]?.id ?? '')
+        setLaunchpadSource(res.fallback_mode ? 'fallback' : 'api')
+        setLaunchpadNotice(res.summary?.message || '当前训练轨道由后端开放组合接口返回。')
+        setStartError('')
+      })
+      .catch((err) => {
+        if (ignore) return
+        const message = err instanceof Error ? err.message : '读取面试启动台失败'
+        applyFallbackLaunchpad(`Launchpad 接口暂不可用，已使用本地兼容轨道。原因：${message}`)
+      })
+    return () => {
+      ignore = true
+    }
+  }, [token])
 
   useEffect(() => {
     let ignore = false
@@ -65,14 +106,15 @@ export function InterviewsPage() {
     if (!['ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return
     event.preventDefault()
     const trackGrid = event.currentTarget.parentElement
-    const lastIndex = interviewLaunchTracks.length - 1
+    const lastIndex = launchTracks.length - 1
+    if (lastIndex < 0) return
     const nextIndex = (() => {
       if (event.key === 'Home') return 0
       if (event.key === 'End') return lastIndex
       if (event.key === 'ArrowDown' || event.key === 'ArrowRight') return index === lastIndex ? 0 : index + 1
       return index === 0 ? lastIndex : index - 1
     })()
-    const nextTrack = interviewLaunchTracks[nextIndex]
+    const nextTrack = launchTracks[nextIndex]
     if (!nextTrack) return
     selectTrack(nextTrack.id)
     window.requestAnimationFrame(() => {
@@ -207,6 +249,10 @@ export function InterviewsPage() {
             <div>
               <div className="panel-title"><Route size={18} />可启动训练轨道</div>
               <p className="launch-section-note">当前题库入口已完成入库校验，可直接选择轨道进入面试流程。</p>
+              <div className={`interview-launchpad-status ${launchpadSource}`} role={launchpadSource === 'fallback' ? 'status' : undefined}>
+                <span>{launchpadSource === 'loading' ? '同步中' : launchpadSource === 'api' ? '后端开放组合' : '兼容轨道'}</span>
+                <small>{launchpadNotice}</small>
+              </div>
             </div>
             <button className="primary-button compact interview-track-start-button" type="button" onClick={() => void start()} disabled={!selectedTrack || isStarting}>
               <Play size={16} />
@@ -214,7 +260,7 @@ export function InterviewsPage() {
             </button>
           </div>
           <div className="track-grid" role="radiogroup" aria-label="可启动训练轨道" data-testid="interview-track-grid">
-            {interviewLaunchTracks.map((track, index) => (
+            {launchTracks.map((track, index) => (
               <button
                 key={track.id}
                 type="button"
@@ -271,8 +317,8 @@ export function InterviewsPage() {
         <section className="panel launch-section interview-domain-panel">
           <div className="panel-title"><ClipboardList size={18} />专业领域</div>
           <div className="domain-cluster-grid">
-            {interviewDomains.map((domain) => {
-              const hasLaunchTrack = interviewLaunchTracks.some((item) => item.domain === domain.value)
+            {launchDomains.map((domain) => {
+              const hasLaunchTrack = launchTracks.some((item) => item.domain === domain.value)
               return hasLaunchTrack ? (
                 <button
                   key={domain.value}
@@ -280,7 +326,7 @@ export function InterviewsPage() {
                   className="domain-chip enabled launchable"
                   data-testid={`interview-domain-${domain.value}`}
                   onClick={() => {
-                    const track = interviewLaunchTracks.find((item) => item.domain === domain.value)
+                    const track = launchTracks.find((item) => item.domain === domain.value)
                     if (track) {
                       setSelectedTrackId(track.id)
                       setStartError('')
@@ -402,6 +448,55 @@ export function InterviewsPage() {
 
 function matchesSelectedTrack(question: { domain: string; difficulty: string; question_type: string }, track: InterviewLaunchTrack) {
   return question.domain === track.domain && question.difficulty === track.difficulty && question.question_type === track.questionType
+}
+
+function launchpadTrackToView(track: InterviewLaunchpadTrack): InterviewLaunchTrack | null {
+  if (!track.id || !track.domain || !track.difficulty) return null
+  const questionType = track.question_type === 'scenario_analysis' ? 'scenario_analysis' : 'principle'
+  return {
+    id: track.id,
+    title: track.title || `${track.domain_label || domainLabel(track.domain)} ${track.difficulty}`,
+    domain: track.domain,
+    domainLabel: track.domain_label || domainLabel(track.domain),
+    difficulty: normalizeLaunchpadDifficulty(track.difficulty),
+    questionType,
+    summary: track.summary || '后端开放组合已就绪，可进入一场完整面试训练。',
+    details: normalizeTrackDetails(track),
+  }
+}
+
+function normalizeLaunchpadDifficulty(difficulty: string): InterviewLaunchTrack['difficulty'] {
+  if (difficulty === 'L2' || difficulty === 'L3' || difficulty === 'L4' || difficulty === 'L5') return difficulty
+  return 'L2'
+}
+
+function normalizeTrackDetails(track: InterviewLaunchpadTrack) {
+  const details = Array.isArray(track.details) ? track.details.filter(Boolean) : []
+  if (details.length > 0) return details
+  const questionTypeLabel = track.question_type === 'scenario_analysis' ? '情景分析' : '原理问答'
+  return [questionTypeLabel, track.availability_state === 'indexing' ? '追问增强准备中' : '可启动训练', `题库状态：${track.vector_status_summary || '兼容模式'}`]
+}
+
+function launchpadDomainsToView(domains: InterviewLaunchpadDomain[], tracks: InterviewLaunchTrack[]): InterviewDomainOption[] {
+  if (domains.length > 0) {
+    return domains.map((item) => ({
+      value: item.value,
+      label: item.label || domainLabel(item.value),
+      group: item.group || '后端开放',
+      note: item.note || `${item.open_track_count ?? tracks.filter((track) => track.domain === item.value).length} 个训练入口`,
+    }))
+  }
+  const seen = new Set<string>()
+  return tracks.flatMap((track) => {
+    if (seen.has(track.domain)) return []
+    seen.add(track.domain)
+    return [{
+      value: track.domain,
+      label: track.domainLabel,
+      group: '后端开放',
+      note: `${tracks.filter((item) => item.domain === track.domain).length} 个训练入口`,
+    }]
+  })
 }
 
 function interviewStatusLabel(status: string) {

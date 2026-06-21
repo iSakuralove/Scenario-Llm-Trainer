@@ -14,6 +14,10 @@ import (
 
 func (s *Server) handleInterviews(w http.ResponseWriter, r *http.Request, user *domain.User, suffix string) {
 	parts := split(suffix)
+	if len(parts) == 1 && parts[0] == "launchpad" && r.Method == http.MethodGet {
+		writeOK(w, s.interviewLaunchpad())
+		return
+	}
 	if len(parts) == 1 && parts[0] == "sessions" && r.Method == http.MethodPost {
 		var req struct {
 			Domain       string `json:"domain"`
@@ -115,6 +119,135 @@ func (s *Server) handleInterviews(w http.ResponseWriter, r *http.Request, user *
 	}
 	writeError(w, http.StatusNotFound, "not found")
 }
+
+type interviewLaunchpadTrack struct {
+	ID                  string   `json:"id"`
+	Title               string   `json:"title"`
+	Domain              string   `json:"domain"`
+	DomainLabel         string   `json:"domain_label"`
+	Category            string   `json:"category"`
+	Difficulty          string   `json:"difficulty"`
+	QuestionType        string   `json:"question_type"`
+	QuestionRole        string   `json:"question_role"`
+	Summary             string   `json:"summary"`
+	Details             []string `json:"details"`
+	PublishedCount      int      `json:"published_count"`
+	IndexedCount        int      `json:"indexed_count"`
+	AvailabilityState   string   `json:"availability_state"`
+	UnavailableReason   string   `json:"unavailable_reason,omitempty"`
+	VectorStatusSummary string   `json:"vector_status_summary"`
+}
+
+type interviewLaunchpadDomain struct {
+	Value          string `json:"value"`
+	Label          string `json:"label"`
+	Group          string `json:"group"`
+	Note           string `json:"note"`
+	OpenTrackCount int    `json:"open_track_count"`
+}
+
+func (s *Server) interviewLaunchpad() map[string]interface{} {
+	tracks := []interviewLaunchpadTrack{}
+	domainCounts := map[string]int{}
+	difficulties := []string{}
+	questionTypes := []string{}
+	for _, seed := range interviewLaunchpadSeeds() {
+		question, ok := s.store.FindInterviewQuestion(seed.Domain, seed.Difficulty, seed.QuestionType)
+		if !ok {
+			continue
+		}
+		track := interviewLaunchpadTrack{
+			ID:                  seed.ID,
+			Title:               seed.Title,
+			Domain:              seed.Domain,
+			DomainLabel:         seed.DomainLabel,
+			Category:            seed.Domain,
+			Difficulty:          seed.Difficulty,
+			QuestionType:        seed.QuestionType,
+			QuestionRole:        seed.QuestionRole,
+			Summary:             firstNonEmpty(seed.Summary, question.Description),
+			Details:             append([]string{}, seed.Details...),
+			PublishedCount:      1,
+			IndexedCount:        0,
+			AvailabilityState:   "available",
+			VectorStatusSummary: "compatibility_seed",
+		}
+		tracks = append(tracks, track)
+		domainCounts[seed.Domain]++
+		difficulties = append(difficulties, seed.Difficulty)
+		questionTypes = append(questionTypes, seed.QuestionType)
+	}
+	domains := make([]interviewLaunchpadDomain, 0, len(domainCounts))
+	for _, seed := range interviewLaunchpadDomainSeeds() {
+		count := domainCounts[seed.Value]
+		if count == 0 {
+			continue
+		}
+		seed.OpenTrackCount = count
+		domains = append(domains, seed)
+	}
+	return map[string]interface{}{
+		"summary": map[string]interface{}{
+			"open_track_count":     len(tracks),
+			"published_atom_count": 0,
+			"indexed_atom_count":   0,
+			"fallback_mode":        true,
+			"message":              "当前使用兼容题库轨道；索引增强未就绪时仍可完成开场训练。",
+		},
+		"domains":     domains,
+		"open_tracks": tracks,
+		"coverage": map[string]interface{}{
+			"domains":        uniqueStrings(keysFromCounts(domainCounts)),
+			"difficulties":   uniqueStrings(difficulties),
+			"question_types": uniqueStrings(questionTypes),
+		},
+		"fallback_mode": true,
+	}
+}
+
+type interviewLaunchpadSeed struct {
+	ID           string
+	Title        string
+	Domain       string
+	DomainLabel  string
+	Difficulty   string
+	QuestionType string
+	QuestionRole string
+	Summary      string
+	Details      []string
+}
+
+func interviewLaunchpadSeeds() []interviewLaunchpadSeed {
+	return []interviewLaunchpadSeed{
+		{ID: "java-l2-principle", Title: "Java L2", Domain: "java", DomainLabel: "Java", Difficulty: "L2", QuestionType: "principle", QuestionRole: "opening", Summary: "面向初级岗位的 Java 基础语法、集合和面向对象问答。", Details: []string{"原理问答", "基础表达", "适合校招和 0-1 年经验"}},
+		{ID: "java-l3-scenario", Title: "Java L3", Domain: "java", DomainLabel: "Java", Difficulty: "L3", QuestionType: "scenario_analysis", QuestionRole: "opening", Summary: "面向进阶岗位的对象创建、异常处理和并发问题排查。", Details: []string{"情景分析", "并发基础", "适合校招后与 1 年左右经验"}},
+		{ID: "database-l2-principle", Title: "数据库 L2", Domain: "database", DomainLabel: "数据库", Difficulty: "L2", QuestionType: "principle", QuestionRole: "opening", Summary: "面向初级岗位的索引、事务和表结构基础问答。", Details: []string{"原理问答", "事务基础", "适合 0-1 年经验"}},
+		{ID: "database-l3-scenario", Title: "数据库 L3", Domain: "database", DomainLabel: "数据库", Difficulty: "L3", QuestionType: "scenario_analysis", QuestionRole: "opening", Summary: "面向进阶岗位的慢查询、索引和回滚方案排查。", Details: []string{"情景分析", "慢查询定位", "回滚方案"}},
+		{ID: "cache-l2-principle", Title: "缓存 L2", Domain: "cache", DomainLabel: "缓存", Difficulty: "L2", QuestionType: "principle", QuestionRole: "opening", Summary: "面向初级岗位的缓存命中、过期和基础一致性问答。", Details: []string{"原理问答", "缓存基础", "适合 0-1 年经验"}},
+		{ID: "cache-l3-scenario", Title: "缓存 L3", Domain: "cache", DomainLabel: "缓存", Difficulty: "L3", QuestionType: "scenario_analysis", QuestionRole: "opening", Summary: "面向进阶岗位的缓存击穿、穿透、雪崩与一致性排查。", Details: []string{"情景分析", "缓存治理", "热点流量"}},
+		{ID: "ai-llm-l2-principle", Title: "AI / LLM L2", Domain: "ai_llm", DomainLabel: "AI / LLM", Difficulty: "L2", QuestionType: "principle", QuestionRole: "opening", Summary: "面向初级岗位的提示词、RAG 和模型使用基础问答。", Details: []string{"原理问答", "RAG 基础", "适合 0-1 年经验"}},
+		{ID: "ai-llm-l3-scenario", Title: "AI / LLM L3", Domain: "ai_llm", DomainLabel: "AI / LLM", Difficulty: "L3", QuestionType: "scenario_analysis", QuestionRole: "opening", Summary: "面向进阶岗位的 RAG 链路、提示词稳定性与模型应用治理分析。", Details: []string{"情景分析", "RAG 链路", "应用治理"}},
+	}
+}
+
+func interviewLaunchpadDomainSeeds() []interviewLaunchpadDomain {
+	return []interviewLaunchpadDomain{
+		{Value: "java", Label: "Java", Group: "首期开放", Note: "L2 / L3 训练入口"},
+		{Value: "database", Label: "数据库", Group: "首期开放", Note: "L2 / L3 训练入口"},
+		{Value: "cache", Label: "缓存", Group: "首期开放", Note: "L2 / L3 训练入口"},
+		{Value: "ai_llm", Label: "AI / LLM", Group: "首期开放", Note: "L2 / L3 训练入口"},
+	}
+}
+
+func keysFromCounts(values map[string]int) []string {
+	out := make([]string, 0, len(values))
+	for key := range values {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (s *Server) handleInterviewSubmission(w http.ResponseWriter, r *http.Request, user *domain.User, sessionID string) {
 	if !s.allowAI(w, r, user, "interview-feedback", 30) {
 		return

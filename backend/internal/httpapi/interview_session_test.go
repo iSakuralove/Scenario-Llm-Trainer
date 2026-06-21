@@ -40,6 +40,54 @@ func TestCreateInterviewSessionValidatesRequiredTrackFields(t *testing.T) {
 	}
 }
 
+func TestInterviewLaunchpadReturnsOpenTracksFromAvailableQuestions(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+
+	status, env := requestJSON(t, handler, http.MethodGet, "/api/v1/interviews/launchpad", token, nil)
+	if status != http.StatusOK || env.Code != http.StatusOK {
+		t.Fatalf("launchpad status=%d env=%+v", status, env)
+	}
+	var payload struct {
+		Summary struct {
+			OpenTrackCount     int  `json:"open_track_count"`
+			PublishedAtomCount int  `json:"published_atom_count"`
+			IndexedAtomCount   int  `json:"indexed_atom_count"`
+			FallbackMode       bool `json:"fallback_mode"`
+		} `json:"summary"`
+		OpenTracks []struct {
+			ID                string `json:"id"`
+			Domain            string `json:"domain"`
+			Difficulty        string `json:"difficulty"`
+			QuestionType      string `json:"question_type"`
+			AvailabilityState string `json:"availability_state"`
+		} `json:"open_tracks"`
+		FallbackMode bool `json:"fallback_mode"`
+	}
+	mustDecodeData(t, env, &payload)
+	if !payload.FallbackMode || !payload.Summary.FallbackMode {
+		t.Fatalf("expected compatibility launchpad mode: %+v", payload)
+	}
+	if payload.Summary.PublishedAtomCount != 0 || payload.Summary.IndexedAtomCount != 0 {
+		t.Fatalf("compatibility launchpad must not claim atom statistics: %+v", payload.Summary)
+	}
+	if payload.Summary.OpenTrackCount != len(payload.OpenTracks) || len(payload.OpenTracks) == 0 {
+		t.Fatalf("unexpected open track count: %+v", payload)
+	}
+	for _, track := range payload.OpenTracks {
+		if track.Domain == "" || track.Difficulty == "" || track.QuestionType == "" {
+			t.Fatalf("track must include launch parameters: %+v", track)
+		}
+		if track.AvailabilityState != "available" {
+			t.Fatalf("unexpected track availability: %+v", track)
+		}
+		if _, ok := dataStore.FindInterviewQuestion(track.Domain, track.Difficulty, track.QuestionType); !ok {
+			t.Fatalf("launchpad returned non-startable track: %+v", track)
+		}
+	}
+}
+
 func TestCreateInterviewSessionReturnsNotFoundForUnsupportedTrack(t *testing.T) {
 	dataStore := store.NewMemoryStore(auth.HashPassword)
 	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()

@@ -89,6 +89,52 @@ export interface StreamStage {
 
 type InterviewSubmitResponse = { evaluation: InterviewSession['evaluations'][number]; session_status: string; session: InterviewSession }
 
+export interface InterviewLaunchpadSummary {
+  open_track_count: number
+  published_atom_count: number
+  indexed_atom_count: number
+  fallback_mode: boolean
+  message: string
+}
+
+export interface InterviewLaunchpadDomain {
+  value: string
+  label: string
+  group: string
+  note: string
+  open_track_count?: number
+}
+
+export interface InterviewLaunchpadTrack {
+  id: string
+  title: string
+  domain: string
+  domain_label: string
+  category: string
+  difficulty: string
+  question_type: string
+  question_role: string
+  summary: string
+  details: string[]
+  published_count: number
+  indexed_count: number
+  availability_state: string
+  unavailable_reason?: string
+  vector_status_summary: string
+}
+
+export interface InterviewLaunchpadResponse {
+  summary: InterviewLaunchpadSummary
+  domains: InterviewLaunchpadDomain[]
+  open_tracks: InterviewLaunchpadTrack[]
+  coverage: {
+    domains: string[]
+    difficulties: string[]
+    question_types: string[]
+  }
+  fallback_mode: boolean
+}
+
 function buildApiURL(path: string) {
   return `${API_BASE}${path}`
 }
@@ -689,6 +735,8 @@ export const api = {
       { method: 'POST', body: JSON.stringify(payload) },
       token,
     ),
+
+  interviewLaunchpad: (token: string) => request<InterviewLaunchpadResponse>('/interviews/launchpad', {}, token),
 
   interviewSessionDetail: (token: string, sessionId: string) =>
     request<InterviewSessionDetailResponse>(`/interviews/sessions/${sessionId}`, {}, token),
