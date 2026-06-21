@@ -171,3 +171,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: 忽略本地 AI 工具产物
+
+**Date**: 2026-06-21
+**Task**: 忽略本地 AI 工具产物
+**Branch**: `main`
+
+### Summary
+
+将本地 agent、Codex 状态、记忆上下文和历史生成文档产物加入 .gitignore，降低 git status 噪音；用 git check-ignore 验证目标路径均已被忽略。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e3d2cf1` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
