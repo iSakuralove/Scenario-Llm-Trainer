@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,7 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"situational-teaching/backend/internal/ai"
 	"situational-teaching/backend/internal/domain"
+	"situational-teaching/backend/internal/store"
 )
 
 var interviewKnowledgeAllowedCategories = map[string]bool{
@@ -96,6 +99,30 @@ type interviewKnowledgeImportReport struct {
 	Results   []interviewKnowledgeImportItemResult `json:"results"`
 }
 
+type interviewKnowledgeIndexRebuildRequest struct {
+	AtomIDs      []string `json:"atom_ids"`
+	VectorStatus string   `json:"vector_status"`
+	Limit        int      `json:"limit"`
+}
+
+type interviewKnowledgeIndexRebuildResult struct {
+	AtomID         string `json:"atom_id"`
+	Status         string `json:"status"`
+	DocCount       int    `json:"doc_count,omitempty"`
+	EmbeddingModel string `json:"embedding_model,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
+type interviewKnowledgeIndexRebuildResponse struct {
+	Total   int                                    `json:"total"`
+	Indexed int                                    `json:"indexed"`
+	Failed  int                                    `json:"failed"`
+	Skipped int                                    `json:"skipped"`
+	Results []interviewKnowledgeIndexRebuildResult `json:"results"`
+}
+
+const interviewKnowledgeExpectedEmbeddingDim = 1536
+
 func (s *Server) handleAdminInterviewBank(w http.ResponseWriter, r *http.Request, user *domain.User, parts []string) {
 	if len(parts) == 1 && parts[0] == "summary" && r.Method == http.MethodGet {
 		writeOK(w, s.store.InterviewKnowledgeSummary())
@@ -127,6 +154,25 @@ func (s *Server) handleAdminInterviewBank(w http.ResponseWriter, r *http.Request
 			limit = 100
 		}
 		writeOK(w, map[string]interface{}{"list": s.store.ListInterviewKnowledgeBatches(limit)})
+		return
+	}
+	if len(parts) == 2 && parts[0] == "index" && parts[1] == "rebuild" && r.Method == http.MethodPost {
+		var req interviewKnowledgeIndexRebuildRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		response, err := s.rebuildInterviewKnowledgeIndex(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.audit(r, user, "admin.interview_bank_index_rebuild", "interview_knowledge_atom", "bulk", map[string]string{
+			"total":   strconv.Itoa(response.Total),
+			"indexed": strconv.Itoa(response.Indexed),
+			"failed":  strconv.Itoa(response.Failed),
+			"skipped": strconv.Itoa(response.Skipped),
+		})
+		writeOK(w, response)
 		return
 	}
 	if len(parts) == 2 && parts[0] == "import" && parts[1] == "validate" && r.Method == http.MethodPost {
@@ -185,6 +231,170 @@ func (s *Server) handleAdminInterviewBank(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeError(w, http.StatusNotFound, "not found")
+}
+
+func (s *Server) rebuildInterviewKnowledgeIndex(ctx context.Context, req interviewKnowledgeIndexRebuildRequest) (interviewKnowledgeIndexRebuildResponse, error) {
+	req.VectorStatus = firstNonEmpty(strings.TrimSpace(req.VectorStatus), "pending_failed")
+	if !validInterviewKnowledgeRebuildStatus(req.VectorStatus) {
+		return interviewKnowledgeIndexRebuildResponse{}, fmt.Errorf("vector_status is invalid")
+	}
+	limit := req.Limit
+	if limit <= 0 || limit > 50 {
+		limit = 50
+	}
+
+	vectorStore := interviewKnowledgeVectorStore(s.store)
+	if vectorStore == nil {
+		return interviewKnowledgeIndexRebuildResponse{}, fmt.Errorf("vector store is unavailable")
+	}
+
+	atomIDs := normalizeInterviewKnowledgeRebuildIDs(req.AtomIDs, limit)
+	response := interviewKnowledgeIndexRebuildResponse{Results: []interviewKnowledgeIndexRebuildResult{}}
+	if len(atomIDs) > 0 {
+		for _, atomID := range atomIDs {
+			atom, ok := s.store.GetInterviewKnowledgeAtom(atomID)
+			if !ok {
+				response.addResult(interviewKnowledgeIndexRebuildResult{
+					AtomID: atomID,
+					Status: "failed",
+					Error:  "interview knowledge atom not found",
+				})
+				continue
+			}
+			response.addResult(s.rebuildInterviewKnowledgeAtomIndex(ctx, vectorStore, *atom))
+		}
+		return response, nil
+	}
+
+	candidates := s.interviewKnowledgeRebuildCandidates(req.VectorStatus, limit)
+	for _, atom := range candidates {
+		response.addResult(s.rebuildInterviewKnowledgeAtomIndex(ctx, vectorStore, atom))
+	}
+	return response, nil
+}
+
+func (s *Server) interviewKnowledgeRebuildCandidates(vectorStatus string, limit int) []domain.InterviewKnowledgeAtom {
+	items := s.store.ListInterviewKnowledgeAtoms(domain.InterviewKnowledgeAtomFilter{})
+	candidates := []domain.InterviewKnowledgeAtom{}
+	for _, atom := range items {
+		status := strings.TrimSpace(atom.VectorStatus)
+		if vectorStatus == "pending_failed" && status != "pending" && status != "failed" {
+			continue
+		}
+		if vectorStatus != "pending_failed" && status != vectorStatus {
+			continue
+		}
+		candidates = append(candidates, atom)
+		if len(candidates) >= limit {
+			break
+		}
+	}
+	return candidates
+}
+
+func (s *Server) rebuildInterviewKnowledgeAtomIndex(ctx context.Context, vectorStore store.VectorStore, atom domain.InterviewKnowledgeAtom) interviewKnowledgeIndexRebuildResult {
+	result := interviewKnowledgeIndexRebuildResult{AtomID: atom.ID}
+	if strings.TrimSpace(atom.Status) != "published" {
+		_ = vectorStore.DeleteInterviewKnowledgeByAtom(ctx, atom.ID)
+		result.Status = "skipped"
+		result.Error = "only published atoms are indexed"
+		return result
+	}
+	docs := ai.BuildInterviewKnowledgeVectorDocuments(atom)
+	if len(docs) == 0 {
+		return s.failInterviewKnowledgeAtomIndex(atom.ID, "no vector documents to index")
+	}
+	if s.embedding == nil {
+		return s.failInterviewKnowledgeAtomIndex(atom.ID, "embedding client is not configured")
+	}
+	texts := make([]string, 0, len(docs))
+	for _, doc := range docs {
+		texts = append(texts, doc.DocText)
+	}
+	embedding, err := s.embedding.Embed(ctx, texts)
+	if err != nil {
+		return s.failInterviewKnowledgeAtomIndex(atom.ID, err.Error())
+	}
+	if len(embedding.Vectors) != len(docs) {
+		return s.failInterviewKnowledgeAtomIndex(atom.ID, "embedding response count mismatch")
+	}
+	for i := range docs {
+		if len(embedding.Vectors[i]) != interviewKnowledgeExpectedEmbeddingDim {
+			return s.failInterviewKnowledgeAtomIndex(atom.ID, "embedding dimension mismatch")
+		}
+		docs[i].Vector = append([]float64{}, embedding.Vectors[i]...)
+		docs[i].EmbeddingModel = embedding.Model
+		docs[i].EmbeddingDim = len(embedding.Vectors[i])
+	}
+	if err := vectorStore.RebuildInterviewKnowledgeIndex(ctx, docs); err != nil {
+		return s.failInterviewKnowledgeAtomIndex(atom.ID, err.Error())
+	}
+	indexedAt := time.Now()
+	if _, err := s.store.UpdateInterviewKnowledgeAtomIndexStatus(atom.ID, "indexed", &indexedAt); err != nil {
+		return s.failInterviewKnowledgeAtomIndex(atom.ID, err.Error())
+	}
+	result.Status = "indexed"
+	result.DocCount = len(docs)
+	result.EmbeddingModel = embedding.Model
+	return result
+}
+
+func (s *Server) failInterviewKnowledgeAtomIndex(atomID, message string) interviewKnowledgeIndexRebuildResult {
+	if _, err := s.store.UpdateInterviewKnowledgeAtomIndexStatus(atomID, "failed", nil); err != nil {
+		message = strings.TrimSpace(message + "; status update failed: " + err.Error())
+	}
+	return interviewKnowledgeIndexRebuildResult{
+		AtomID: atomID,
+		Status: "failed",
+		Error:  truncateText(message, 180),
+	}
+}
+
+func (r *interviewKnowledgeIndexRebuildResponse) addResult(result interviewKnowledgeIndexRebuildResult) {
+	r.Total++
+	switch result.Status {
+	case "indexed":
+		r.Indexed++
+	case "skipped":
+		r.Skipped++
+	default:
+		r.Failed++
+	}
+	r.Results = append(r.Results, result)
+}
+
+func interviewKnowledgeVectorStore(dataStore store.Store) store.VectorStore {
+	provider, ok := dataStore.(store.VectorStoreProvider)
+	if !ok {
+		return nil
+	}
+	return provider.VectorStore()
+}
+
+func validInterviewKnowledgeRebuildStatus(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "pending", "failed", "pending_failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeInterviewKnowledgeRebuildIDs(ids []string, limit int) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
 }
 
 func decodeInterviewKnowledgeImportRequest(w http.ResponseWriter, r *http.Request) (interviewKnowledgeImportRequest, bool) {

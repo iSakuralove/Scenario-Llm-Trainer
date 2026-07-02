@@ -90,7 +90,7 @@
 面试题库管理端挂在现有管理员路由下，复用 `/api/v1/admin` 的 admin-only 权限边界：
 
 - `backend/internal/httpapi/handlers_interview_bank.go`
-  负责 `/admin/interview-bank/*` 的摘要、列表、批次、导入校验和发布。
+  负责 `/admin/interview-bank/*` 的摘要、列表、批次、导入校验、发布和索引重建。
 - `GET /api/v1/admin/interview-bank/summary`
   返回题库资源数、发布数、批次数、开放组合数和索引状态摘要。
 - `GET /api/v1/admin/interview-bank/atoms`
@@ -101,8 +101,10 @@
   只做结构化导入包校验和预览，不写入题库主表、版本表或批次表。
 - `POST /api/v1/admin/interview-bank/import/publish`
   复用同一套校验逻辑，通过后调用 `SaveInterviewKnowledgeAtomVersioned` 写入 atom 与版本，再保存导入批次。
+- `POST /api/v1/admin/interview-bank/index/rebuild`
+  触发 admin-only 的同步限量索引重建，支持按 `atom_ids` 精确重建，或按 `vector_status=pending|failed|pending_failed` 选择候选资源。
 
-本阶段只允许 `vector_status=failed` 作为筛选和状态展示条件，不提供真实索引重建接口、异步索引任务或失败重试动作。真实触发索引重建应作为后续独立任务接入，避免题库治理 MVP 与检索基础设施耦合。
+题库向量索引采用独立的 `interview_knowledge_vector_documents` 表，不复用场景题的 `scenario_vector_documents`，避免 `question_id` / `source_version` 语义混用。重建接口只对 `status=published` 的 atom 调用 embedding 并写入向量文档；`draft` / `archived` 被请求重建时会删除旧向量文档并返回 skipped，不进入可检索索引。成功重建会将 `vector_status` 更新为 `indexed` 并写入 `last_indexed_at`；失败只将 `vector_status` 更新为 `failed`，不覆盖上一次成功索引时间，也不新增内容版本。导入发布链路仍不自动触发 embedding，避免发布接口受外部 provider 可用性影响。
 
 ## 当前安全约束
 

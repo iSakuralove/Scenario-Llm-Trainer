@@ -137,6 +137,30 @@ CREATE TABLE IF NOT EXISTS interview_knowledge_atoms (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS interview_knowledge_vector_documents (
+    id TEXT PRIMARY KEY,
+    atom_id TEXT NOT NULL REFERENCES interview_knowledge_atoms(id) ON DELETE CASCADE,
+    atom_version INT NOT NULL,
+    doc_type TEXT NOT NULL,
+    doc_key TEXT NOT NULL,
+    doc_text TEXT NOT NULL,
+    text_hash TEXT NOT NULL,
+    metadata JSONB DEFAULT '{}',
+    embedding_model TEXT,
+    embedding_dim INT,
+    embedding vector(1536),
+    status TEXT DEFAULT 'active',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(atom_id, atom_version, doc_type, doc_key)
+);
+
+CREATE INDEX IF NOT EXISTS interview_knowledge_vector_documents_atom_idx
+    ON interview_knowledge_vector_documents(atom_id, doc_type, status);
+
+CREATE INDEX IF NOT EXISTS interview_knowledge_vector_documents_embedding_hnsw
+    ON interview_knowledge_vector_documents USING hnsw (embedding vector_cosine_ops);
+
 CREATE TABLE IF NOT EXISTS interview_knowledge_atom_versions (
     id TEXT PRIMARY KEY,
     atom_id TEXT NOT NULL REFERENCES interview_knowledge_atoms(id) ON DELETE CASCADE,

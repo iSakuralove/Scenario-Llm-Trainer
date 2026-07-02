@@ -70,6 +70,55 @@ func (s *PostgresVectorStore) UpsertDocuments(ctx context.Context, docs []ai.Sce
 	return nil
 }
 
+func (s *PostgresVectorStore) UpsertInterviewKnowledgeDocuments(ctx context.Context, docs []ai.InterviewKnowledgeVectorDocument) error {
+	if s == nil || s.pool == nil {
+		return nil
+	}
+	for _, doc := range docs {
+		id := interviewKnowledgeVectorDocID(doc)
+		vectorLiteral := vectorLiteral(doc.Vector)
+		metadata := metadataJSON(doc.Metadata)
+		var err error
+		if vectorLiteral == "" {
+			_, err = s.pool.Exec(ctx, `
+				INSERT INTO interview_knowledge_vector_documents
+				    (id, atom_id, atom_version, doc_type, doc_key, doc_text, text_hash, metadata, embedding_model, embedding_dim, embedding, status, updated_at)
+				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULL,$11,NOW())
+				ON CONFLICT (atom_id, atom_version, doc_type, doc_key) DO UPDATE SET
+				    doc_text = EXCLUDED.doc_text,
+				    text_hash = EXCLUDED.text_hash,
+				    metadata = EXCLUDED.metadata,
+				    embedding_model = EXCLUDED.embedding_model,
+				    embedding_dim = EXCLUDED.embedding_dim,
+				    embedding = EXCLUDED.embedding,
+				    status = EXCLUDED.status,
+				    updated_at = NOW()
+			`, id, doc.AtomID, doc.AtomVersion, doc.DocType, doc.DocKey, doc.DocText, doc.TextHash,
+				metadata, doc.EmbeddingModel, doc.EmbeddingDim, doc.Status)
+		} else {
+			_, err = s.pool.Exec(ctx, `
+				INSERT INTO interview_knowledge_vector_documents
+				    (id, atom_id, atom_version, doc_type, doc_key, doc_text, text_hash, metadata, embedding_model, embedding_dim, embedding, status, updated_at)
+				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::vector,$12,NOW())
+				ON CONFLICT (atom_id, atom_version, doc_type, doc_key) DO UPDATE SET
+				    doc_text = EXCLUDED.doc_text,
+				    text_hash = EXCLUDED.text_hash,
+				    metadata = EXCLUDED.metadata,
+				    embedding_model = EXCLUDED.embedding_model,
+				    embedding_dim = EXCLUDED.embedding_dim,
+				    embedding = EXCLUDED.embedding,
+				    status = EXCLUDED.status,
+				    updated_at = NOW()
+			`, id, doc.AtomID, doc.AtomVersion, doc.DocType, doc.DocKey, doc.DocText, doc.TextHash,
+				metadata, doc.EmbeddingModel, doc.EmbeddingDim, vectorLiteral, doc.Status)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *PostgresVectorStore) Search(ctx context.Context, query VectorSearchQuery) ([]VectorSearchResult, error) {
 	if s == nil || s.pool == nil {
 		return nil, nil
@@ -178,6 +227,14 @@ func (s *PostgresVectorStore) DeleteByQuestion(ctx context.Context, questionID s
 	return err
 }
 
+func (s *PostgresVectorStore) DeleteInterviewKnowledgeByAtom(ctx context.Context, atomID string) error {
+	if s == nil || s.pool == nil {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, `DELETE FROM interview_knowledge_vector_documents WHERE atom_id = $1`, atomID)
+	return err
+}
+
 func (s *PostgresVectorStore) RebuildScenarioIndex(ctx context.Context, docs []ai.ScenarioVectorDocument) error {
 	if len(docs) == 0 {
 		return nil
@@ -186,6 +243,16 @@ func (s *PostgresVectorStore) RebuildScenarioIndex(ctx context.Context, docs []a
 		return err
 	}
 	return s.UpsertDocuments(ctx, docs)
+}
+
+func (s *PostgresVectorStore) RebuildInterviewKnowledgeIndex(ctx context.Context, docs []ai.InterviewKnowledgeVectorDocument) error {
+	if len(docs) == 0 {
+		return nil
+	}
+	if err := s.DeleteInterviewKnowledgeByAtom(ctx, docs[0].AtomID); err != nil {
+		return err
+	}
+	return s.UpsertInterviewKnowledgeDocuments(ctx, docs)
 }
 
 func vectorLiteral(vector []float64) string {

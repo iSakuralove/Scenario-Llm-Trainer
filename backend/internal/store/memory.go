@@ -548,6 +548,21 @@ func (s *MemoryStore) ListInterviewKnowledgeAtomVersions(atomID string) []domain
 	return items
 }
 
+func (s *MemoryStore) UpdateInterviewKnowledgeAtomIndexStatus(atomID, vectorStatus string, lastIndexedAt *time.Time) (domain.InterviewKnowledgeAtom, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	atom, ok := s.InterviewKnowledgeAtoms[strings.TrimSpace(atomID)]
+	if !ok || atom == nil {
+		return domain.InterviewKnowledgeAtom{}, errInterviewKnowledgeAtomNotFound
+	}
+	prepared, err := prepareInterviewKnowledgeAtomIndexStatus(*cloneInterviewKnowledgeAtom(atom), vectorStatus, lastIndexedAt, time.Now())
+	if err != nil {
+		return domain.InterviewKnowledgeAtom{}, err
+	}
+	s.InterviewKnowledgeAtoms[prepared.ID] = cloneInterviewKnowledgeAtom(&prepared)
+	return *cloneInterviewKnowledgeAtom(&prepared), nil
+}
+
 func (s *MemoryStore) SaveInterviewKnowledgeBatch(batch domain.InterviewKnowledgeBatch) domain.InterviewKnowledgeBatch {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -61,6 +61,81 @@ func TestMemoryVectorStoreEmptyTextSearchReturnsNoResults(t *testing.T) {
 	}
 }
 
+func TestMemoryVectorStoreInterviewKnowledgeRebuildAndDelete(t *testing.T) {
+	vectorStore := NewMemoryVectorStore()
+	ctx := context.Background()
+	original := []ai.InterviewKnowledgeVectorDocument{
+		{
+			AtomID:      "atom-1",
+			AtomVersion: 1,
+			DocType:     ai.InterviewKnowledgeVectorDocOverview,
+			DocKey:      "overview",
+			DocText:     "旧文档",
+			TextHash:    "old",
+			Metadata:    map[string]string{"domain": "backend"},
+			Vector:      []float64{1, 0},
+			Status:      "active",
+		},
+		{
+			AtomID:      "atom-2",
+			AtomVersion: 1,
+			DocType:     ai.InterviewKnowledgeVectorDocPrinciple,
+			DocKey:      "principle:1",
+			DocText:     "其它 atom 文档",
+			TextHash:    "other",
+			Vector:      []float64{0, 1},
+			Status:      "active",
+		},
+	}
+	if err := vectorStore.UpsertInterviewKnowledgeDocuments(ctx, original); err != nil {
+		t.Fatalf("upsert interview knowledge docs: %v", err)
+	}
+	original[0].Metadata["domain"] = "mutated"
+	original[0].Vector[0] = 9
+	oldID := interviewKnowledgeVectorDocID(ai.InterviewKnowledgeVectorDocument{
+		AtomID:      "atom-1",
+		AtomVersion: 1,
+		DocType:     ai.InterviewKnowledgeVectorDocOverview,
+		DocKey:      "overview",
+	})
+	stored := vectorStore.knowledgeDocs[oldID]
+	if stored.Metadata["domain"] != "backend" || stored.Vector[0] != 1 {
+		t.Fatalf("stored interview knowledge doc must be cloned, got %+v", stored)
+	}
+
+	rebuilt := []ai.InterviewKnowledgeVectorDocument{
+		{
+			AtomID:      "atom-1",
+			AtomVersion: 2,
+			DocType:     ai.InterviewKnowledgeVectorDocOverview,
+			DocKey:      "overview",
+			DocText:     "新文档",
+			TextHash:    "new",
+			Vector:      []float64{0.5, 0.5},
+			Status:      "active",
+		},
+	}
+	if err := vectorStore.RebuildInterviewKnowledgeIndex(ctx, rebuilt); err != nil {
+		t.Fatalf("rebuild interview knowledge docs: %v", err)
+	}
+	if _, ok := vectorStore.knowledgeDocs[oldID]; ok {
+		t.Fatalf("rebuild must remove stale atom docs, got %+v", vectorStore.knowledgeDocs)
+	}
+	newID := interviewKnowledgeVectorDocID(rebuilt[0])
+	if _, ok := vectorStore.knowledgeDocs[newID]; !ok {
+		t.Fatalf("expected rebuilt doc %s in store: %+v", newID, vectorStore.knowledgeDocs)
+	}
+	if _, ok := vectorStore.knowledgeDocs[interviewKnowledgeVectorDocID(original[1])]; !ok {
+		t.Fatalf("rebuild must not delete docs for other atoms: %+v", vectorStore.knowledgeDocs)
+	}
+	if err := vectorStore.DeleteInterviewKnowledgeByAtom(ctx, "atom-1"); err != nil {
+		t.Fatalf("delete interview knowledge docs: %v", err)
+	}
+	if _, ok := vectorStore.knowledgeDocs[newID]; ok {
+		t.Fatalf("expected atom-1 docs deleted, got %+v", vectorStore.knowledgeDocs)
+	}
+}
+
 func TestMemoryStoreIndexesOnlyActiveScenarios(t *testing.T) {
 	dataStore := NewMemoryStore(auth.HashPassword)
 	vectorStore := NewMemoryVectorStore()
@@ -155,11 +230,13 @@ func TestMemoryStoreExposesDefaultVectorStoreForSeedScenarios(t *testing.T) {
 func TestVectorSchemaIncludesPgvectorTableAndDegradesWhenExtensionUnavailable(t *testing.T) {
 	for _, required := range []string{
 		"CREATE TABLE IF NOT EXISTS scenario_vector_documents",
+		"CREATE TABLE IF NOT EXISTS interview_knowledge_vector_documents",
 		"embedding vector(1536)",
 		"embedding_dim INT",
 		"metadata JSONB",
 		"ALTER COLUMN embedding TYPE vector(1536)",
 		"CREATE INDEX IF NOT EXISTS scenario_vector_documents_embedding_hnsw",
+		"CREATE INDEX IF NOT EXISTS interview_knowledge_vector_documents_embedding_hnsw",
 	} {
 		if !strings.Contains(VectorSchemaSQL, required) {
 			t.Fatalf("vector schema must include %q", required)

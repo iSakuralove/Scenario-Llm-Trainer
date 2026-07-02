@@ -80,8 +80,10 @@ func TestDockerInitSchemaIncludesVectorDocuments(t *testing.T) {
 	for _, required := range []string{
 		"CREATE EXTENSION IF NOT EXISTS vector;",
 		"CREATE TABLE IF NOT EXISTS scenario_vector_documents",
+		"CREATE TABLE IF NOT EXISTS interview_knowledge_vector_documents",
 		"embedding vector(1536)",
 		"scenario_vector_documents_embedding_hnsw",
+		"interview_knowledge_vector_documents_embedding_hnsw",
 	} {
 		if !strings.Contains(schema, required) {
 			t.Fatalf("docker init schema must include vector fragment %q", required)

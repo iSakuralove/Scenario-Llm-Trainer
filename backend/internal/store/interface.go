@@ -1,6 +1,10 @@
 package store
 
-import "situational-teaching/backend/internal/domain"
+import (
+	"time"
+
+	"situational-teaching/backend/internal/domain"
+)
 
 type Store interface {
 	CreateUser(username, email, passwordHash string) (*domain.User, error)
@@ -34,6 +38,7 @@ type Store interface {
 	GetInterviewKnowledgeAtom(id string) (*domain.InterviewKnowledgeAtom, bool)
 	ListInterviewKnowledgeAtoms(filter domain.InterviewKnowledgeAtomFilter) []domain.InterviewKnowledgeAtom
 	ListInterviewKnowledgeAtomVersions(atomID string) []domain.InterviewKnowledgeAtomVersion
+	UpdateInterviewKnowledgeAtomIndexStatus(atomID, vectorStatus string, lastIndexedAt *time.Time) (domain.InterviewKnowledgeAtom, error)
 	SaveInterviewKnowledgeBatch(batch domain.InterviewKnowledgeBatch) domain.InterviewKnowledgeBatch
 	ListInterviewKnowledgeBatches(limit int) []domain.InterviewKnowledgeBatch
 	InterviewKnowledgeSummary() domain.InterviewKnowledgeSummary

@@ -17,6 +17,8 @@ import type {
   InterviewKnowledgeAtom,
   InterviewKnowledgeAtomFilters,
   InterviewKnowledgeBatch,
+  InterviewKnowledgeIndexRebuildRequest,
+  InterviewKnowledgeIndexRebuildResponse,
   InterviewKnowledgeImportReport,
   InterviewKnowledgePublishResponse,
   InterviewKnowledgeSummary,
@@ -60,11 +62,14 @@ export function InterviewBankAdminPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [isValidating, setIsValidating] = useState(false)
   const [isPublishing, setIsPublishing] = useState(false)
+  const [isRebuilding, setIsRebuilding] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [importText, setImportText] = useState('')
   const [report, setReport] = useState<InterviewKnowledgeImportReport | null>(null)
   const [publishResult, setPublishResult] = useState<InterviewKnowledgePublishResponse | null>(null)
+  const [rebuildResult, setRebuildResult] = useState<InterviewKnowledgeIndexRebuildResponse | null>(null)
+  const [selectedAtomIds, setSelectedAtomIds] = useState<Set<string>>(() => new Set())
 
   const loadData = useCallback(async () => {
     setIsLoading(true)
@@ -79,6 +84,10 @@ export function InterviewBankAdminPage() {
       setAtoms(atomData.list ?? [])
       setTotalAtoms(atomData.total ?? 0)
       setBatches(batchData.list ?? [])
+      setSelectedAtomIds((current) => {
+        const visibleIDs = new Set((atomData.list ?? []).map((atom) => atom.id))
+        return new Set([...current].filter((id) => visibleIDs.has(id)))
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : '题库治理数据读取失败')
     } finally {
@@ -95,6 +104,9 @@ export function InterviewBankAdminPage() {
 
   const reportSummary = report?.summary
   const canPublish = Boolean(report && (reportSummary?.valid_count ?? 0) > 0 && (reportSummary?.error_count ?? 0) === 0 && !isPublishing)
+  const selectableAtoms = atoms.filter((atom) => canRebuildAtom(atom))
+  const selectedCount = selectedAtomIds.size
+  const allVisibleSelected = selectableAtoms.length > 0 && selectableAtoms.every((atom) => selectedAtomIds.has(atom.id))
   const heroMetrics = useMemo(() => [
     { label: '题库资源', value: summary?.total_atoms ?? 0 },
     { label: '已发布', value: summary?.published_atoms ?? 0 },
@@ -122,6 +134,7 @@ export function InterviewBankAdminPage() {
     setError('')
     setMessage('')
     setPublishResult(null)
+    setRebuildResult(null)
     try {
       const payload = parseImportPayload()
       setIsValidating(true)
@@ -162,10 +175,62 @@ export function InterviewBankAdminPage() {
     setMessage('')
     setReport(null)
     setPublishResult(null)
+    setRebuildResult(null)
     try {
       setImportText(await file.text())
     } catch {
       setError('文件读取失败')
+    }
+  }
+
+  function toggleAtomSelection(atom: InterviewKnowledgeAtom, checked: boolean) {
+    if (!canRebuildAtom(atom)) return
+    setSelectedAtomIds((current) => {
+      const next = new Set(current)
+      if (checked) {
+        next.add(atom.id)
+      } else {
+        next.delete(atom.id)
+      }
+      return next
+    })
+  }
+
+  function toggleAllVisibleSelections(checked: boolean) {
+    setSelectedAtomIds((current) => {
+      const next = new Set(current)
+      for (const atom of selectableAtoms) {
+        if (checked) {
+          next.add(atom.id)
+        } else {
+          next.delete(atom.id)
+        }
+      }
+      return next
+    })
+  }
+
+  async function handleRebuild(scope: 'pending_failed' | 'selected') {
+    setError('')
+    setMessage('')
+    setRebuildResult(null)
+    try {
+      const atomIDs = [...selectedAtomIds]
+      if (scope === 'selected' && atomIDs.length === 0) {
+        throw new Error('请选择要重建索引的题库资源')
+      }
+      const payload: InterviewKnowledgeIndexRebuildRequest = scope === 'selected'
+        ? { atom_ids: atomIDs, limit: 50 }
+        : { vector_status: 'pending_failed', limit: 50 }
+      setIsRebuilding(true)
+      const result = await api.rebuildInterviewBankIndex(token, payload)
+      setRebuildResult(result)
+      setMessage(`索引重建完成：成功 ${result.indexed} 条，失败 ${result.failed} 条，跳过 ${result.skipped} 条`)
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '索引重建失败')
+    } finally {
+      setIsRebuilding(false)
     }
   }
 
@@ -241,6 +306,9 @@ export function InterviewBankAdminPage() {
           <button className="ghost-button compact" type="button" onClick={() => setFilters(emptyFilters)}>
             <Search size={16} />重置
           </button>
+          <button className="primary-button compact" type="button" onClick={() => void handleRebuild('pending_failed')} disabled={isRebuilding}>
+            <RefreshCw size={16} />{isRebuilding ? '重建中' : '重建待处理'}
+          </button>
         </div>
       </section>
 
@@ -276,6 +344,7 @@ export function InterviewBankAdminPage() {
             </button>
           </div>
           {report && <ImportReportPanel report={report} />}
+          {rebuildResult && <IndexRebuildPanel result={rebuildResult} />}
           {publishResult && (
             <div className="interview-bank-publish-strip">
               <strong>{publishResult.batch.id}</strong>
@@ -306,13 +375,27 @@ export function InterviewBankAdminPage() {
       <section className="panel interview-bank-list-panel">
         <div className="interview-bank-list-title">
           <div className="panel-title"><Database size={18} /> 题库资源</div>
-          <span>{atoms.length} / {totalAtoms}</span>
+          <div className="interview-bank-list-actions">
+            <span>{atoms.length} / {totalAtoms}</span>
+            <button className="ghost-button compact" type="button" onClick={() => void handleRebuild('selected')} disabled={isRebuilding || selectedCount === 0}>
+              <RefreshCw size={16} />重建选中 {selectedCount}
+            </button>
+          </div>
         </div>
         {atoms.length > 0 ? (
           <div className="interview-bank-table-wrap">
             <table className="interview-bank-table">
               <thead>
                 <tr>
+                  <th className="interview-bank-select-cell">
+                    <input
+                      type="checkbox"
+                      aria-label="选择当前页可重建资源"
+                      checked={allVisibleSelected}
+                      disabled={selectableAtoms.length === 0}
+                      onChange={(event) => toggleAllVisibleSelections(event.target.checked)}
+                    />
+                  </th>
                   <th>题目</th>
                   <th>分类</th>
                   <th>难度</th>
@@ -324,7 +407,14 @@ export function InterviewBankAdminPage() {
                 </tr>
               </thead>
               <tbody>
-                {atoms.map((atom) => <AtomRow atom={atom} key={atom.id} />)}
+                {atoms.map((atom) => (
+                  <AtomRow
+                    atom={atom}
+                    checked={selectedAtomIds.has(atom.id)}
+                    onCheckedChange={(checked) => toggleAtomSelection(atom, checked)}
+                    key={atom.id}
+                  />
+                ))}
               </tbody>
             </table>
           </div>
@@ -339,9 +429,27 @@ export function InterviewBankAdminPage() {
   )
 }
 
-function AtomRow({ atom }: { atom: InterviewKnowledgeAtom }) {
+function AtomRow({
+  atom,
+  checked,
+  onCheckedChange,
+}: {
+  atom: InterviewKnowledgeAtom
+  checked: boolean
+  onCheckedChange: (checked: boolean) => void
+}) {
+  const canSelect = canRebuildAtom(atom)
   return (
     <tr>
+      <td className="interview-bank-select-cell">
+        <input
+          type="checkbox"
+          aria-label={`选择 ${atom.title}`}
+          checked={checked}
+          disabled={!canSelect}
+          onChange={(event) => onCheckedChange(event.target.checked)}
+        />
+      </td>
       <td>
         <strong>{atom.title}</strong>
         <span>{atom.id} · {atom.subject}</span>
@@ -355,6 +463,32 @@ function AtomRow({ atom }: { atom: InterviewKnowledgeAtom }) {
       <td>v{atom.current_version}</td>
       <td>{formatOptionalDate(atom.updated_at)}</td>
     </tr>
+  )
+}
+
+function IndexRebuildPanel({ result }: { result: InterviewKnowledgeIndexRebuildResponse }) {
+  const failures = result.results.filter((item) => item.status === 'failed' || item.status === 'skipped')
+  return (
+    <div className={`interview-bank-report ${result.failed > 0 ? 'has-errors' : ''}`}>
+      <div className="interview-bank-report-heading">
+        <strong>索引重建</strong>
+        <span>{result.total} 条 · 成功 {result.indexed} · 失败 {result.failed} · 跳过 {result.skipped}</span>
+      </div>
+      <div className="interview-bank-report-metrics">
+        <Metric label="成功" value={result.indexed} variant="compact" />
+        <Metric label="失败" value={result.failed} variant="compact" />
+        <Metric label="跳过" value={result.skipped} variant="compact" />
+        <Metric label="总数" value={result.total} variant="compact" />
+      </div>
+      {failures.length > 0 && (
+        <div className="interview-bank-report-issues">
+          <strong><AlertTriangle size={15} />结果</strong>
+          {failures.slice(0, 8).map((item) => (
+            <span key={item.atom_id}>{item.atom_id} · {item.status === 'skipped' ? '已跳过' : '失败'} · {item.error || '无详情'}</span>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -446,6 +580,10 @@ function actionLabel(value: string) {
     default:
       return value
   }
+}
+
+function canRebuildAtom(atom: InterviewKnowledgeAtom) {
+  return atom.vector_status === 'pending' || atom.vector_status === 'failed'
 }
 
 function formatOptionalDate(value?: string) {

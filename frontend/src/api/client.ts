@@ -9,6 +9,8 @@ import type {
   InterviewKnowledgeAtom,
   InterviewKnowledgeAtomFilters,
   InterviewKnowledgeBatch,
+  InterviewKnowledgeIndexRebuildRequest,
+  InterviewKnowledgeIndexRebuildResponse,
   InterviewKnowledgeImportReport,
   InterviewKnowledgePublishResponse,
   InterviewKnowledgeSummary,
@@ -894,6 +896,13 @@ export const api = {
   publishInterviewBankImport: (token: string, payload: unknown) =>
     request<InterviewKnowledgePublishResponse>(
       '/admin/interview-bank/import/publish',
+      { method: 'POST', body: JSON.stringify(payload) },
+      token,
+    ),
+
+  rebuildInterviewBankIndex: (token: string, payload: InterviewKnowledgeIndexRebuildRequest) =>
+    request<InterviewKnowledgeIndexRebuildResponse>(
+      '/admin/interview-bank/index/rebuild',
       { method: 'POST', body: JSON.stringify(payload) },
       token,
     ),

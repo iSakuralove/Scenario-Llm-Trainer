@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"situational-teaching/backend/internal/domain"
 )
@@ -115,6 +116,39 @@ func TestMemoryListInterviewKnowledgeAtomsFiltersVectorStatus(t *testing.T) {
 	items = store.ListInterviewKnowledgeAtoms(domain.InterviewKnowledgeAtomFilter{Category: "database", VectorStatus: "indexed"})
 	if len(items) != 1 || items[0].ID != indexed.ID {
 		t.Fatalf("expected indexed database atom, got %+v", items)
+	}
+}
+
+func TestMemoryUpdateInterviewKnowledgeAtomIndexStatusDoesNotCreateVersion(t *testing.T) {
+	store := NewMemoryStore(func(password string) string { return "hash:" + password })
+	atom := sampleInterviewKnowledgeAtom("atom-index-runtime-status")
+	if _, _, err := store.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "首次导入"); err != nil {
+		t.Fatal(err)
+	}
+	indexedAt := time.Now().Add(-time.Hour).Truncate(time.Microsecond)
+	indexed, err := store.UpdateInterviewKnowledgeAtomIndexStatus(atom.ID, "indexed", &indexedAt)
+	if err != nil {
+		t.Fatalf("update indexed status: %v", err)
+	}
+	if indexed.VectorStatus != "indexed" || indexed.LastIndexedAt == nil || !indexed.LastIndexedAt.Equal(indexedAt) {
+		t.Fatalf("unexpected indexed atom: %+v", indexed)
+	}
+	if versions := store.ListInterviewKnowledgeAtomVersions(atom.ID); len(versions) != 1 {
+		t.Fatalf("runtime index status update must not create version, got %+v", versions)
+	}
+
+	failed, err := store.UpdateInterviewKnowledgeAtomIndexStatus(atom.ID, "failed", nil)
+	if err != nil {
+		t.Fatalf("update failed status: %v", err)
+	}
+	if failed.VectorStatus != "failed" || failed.LastIndexedAt == nil || !failed.LastIndexedAt.Equal(indexedAt) {
+		t.Fatalf("failed status must preserve last_indexed_at, got %+v", failed)
+	}
+	if _, err := store.UpdateInterviewKnowledgeAtomIndexStatus(atom.ID, "broken", nil); err == nil {
+		t.Fatal("expected invalid vector status error")
+	}
+	if _, err := store.UpdateInterviewKnowledgeAtomIndexStatus("missing-atom", "failed", nil); err != errInterviewKnowledgeAtomNotFound {
+		t.Fatalf("expected not found error, got %v", err)
 	}
 }
 

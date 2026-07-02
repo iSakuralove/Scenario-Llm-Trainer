@@ -719,6 +719,29 @@ func (s *PostgresStore) ListInterviewKnowledgeAtomVersions(atomID string) []doma
 	return items
 }
 
+func (s *PostgresStore) UpdateInterviewKnowledgeAtomIndexStatus(atomID, vectorStatus string, lastIndexedAt *time.Time) (domain.InterviewKnowledgeAtom, error) {
+	if !validInterviewKnowledgeVectorStatus(vectorStatus) {
+		return domain.InterviewKnowledgeAtom{}, errors.New("invalid interview knowledge vector status")
+	}
+	row := s.pool.QueryRow(context.Background(), `
+		WITH updated AS (
+			UPDATE interview_knowledge_atoms
+			SET vector_status = $2,
+			    last_indexed_at = CASE WHEN $2 = 'indexed' THEN COALESCE($3::timestamptz, NOW()) ELSE last_indexed_at END,
+			    updated_at = NOW()
+			WHERE id = $1
+			RETURNING id
+		)
+	`+interviewKnowledgeAtomSelectSQL+`
+		WHERE id = (SELECT id FROM updated)
+	`, strings.TrimSpace(atomID), strings.TrimSpace(vectorStatus), lastIndexedAt)
+	item, ok := scanInterviewKnowledgeAtom(row)
+	if !ok {
+		return domain.InterviewKnowledgeAtom{}, errInterviewKnowledgeAtomNotFound
+	}
+	return *cloneInterviewKnowledgeAtom(item), nil
+}
+
 func (s *PostgresStore) SaveInterviewKnowledgeBatch(batch domain.InterviewKnowledgeBatch) domain.InterviewKnowledgeBatch {
 	batch.ID = strings.TrimSpace(batch.ID)
 	if batch.ID == "" {

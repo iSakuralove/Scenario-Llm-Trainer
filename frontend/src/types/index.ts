@@ -573,6 +573,28 @@ export interface InterviewKnowledgePublishResponse {
   batch: InterviewKnowledgeBatch
 }
 
+export interface InterviewKnowledgeIndexRebuildRequest {
+  atom_ids?: string[]
+  vector_status?: 'pending' | 'failed' | 'pending_failed'
+  limit?: number
+}
+
+export interface InterviewKnowledgeIndexRebuildResult {
+  atom_id: string
+  status: 'indexed' | 'failed' | 'skipped'
+  doc_count?: number
+  embedding_model?: string
+  error?: string
+}
+
+export interface InterviewKnowledgeIndexRebuildResponse {
+  total: number
+  indexed: number
+  failed: number
+  skipped: number
+  results: InterviewKnowledgeIndexRebuildResult[]
+}
+
 export interface StoreStatus {
   mode: string
   persistent: boolean

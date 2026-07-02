@@ -11,6 +11,7 @@ import (
 )
 
 var errInterviewKnowledgeAtomIDRequired = errors.New("interview knowledge atom id is required")
+var errInterviewKnowledgeAtomNotFound = errors.New("interview knowledge atom not found")
 
 func prepareInterviewKnowledgeAtomForVersion(atom domain.InterviewKnowledgeAtom, existing *domain.InterviewKnowledgeAtom, nextVersion int, now time.Time) domain.InterviewKnowledgeAtom {
 	atom.ID = strings.TrimSpace(atom.ID)
@@ -145,6 +146,32 @@ func validateInterviewKnowledgeAtomSave(atom domain.InterviewKnowledgeAtom, vers
 		return errors.New("invalid interview knowledge version type")
 	}
 	return nil
+}
+
+func prepareInterviewKnowledgeAtomIndexStatus(atom domain.InterviewKnowledgeAtom, vectorStatus string, lastIndexedAt *time.Time, now time.Time) (domain.InterviewKnowledgeAtom, error) {
+	vectorStatus = strings.TrimSpace(vectorStatus)
+	if !validInterviewKnowledgeVectorStatus(vectorStatus) {
+		return domain.InterviewKnowledgeAtom{}, errors.New("invalid interview knowledge vector status")
+	}
+	atom.VectorStatus = vectorStatus
+	if vectorStatus == "indexed" {
+		if lastIndexedAt == nil {
+			lastIndexedAt = &now
+		}
+		indexedAt := *lastIndexedAt
+		atom.LastIndexedAt = &indexedAt
+	}
+	atom.UpdatedAt = now
+	return atom, nil
+}
+
+func validInterviewKnowledgeVectorStatus(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "pending", "indexed", "failed":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeStringList(items []string) []string {

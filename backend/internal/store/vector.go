@@ -41,13 +41,44 @@ CREATE INDEX IF NOT EXISTS scenario_vector_documents_question_idx
 
 CREATE INDEX IF NOT EXISTS scenario_vector_documents_embedding_hnsw
     ON scenario_vector_documents USING hnsw (embedding vector_cosine_ops);
+
+CREATE TABLE IF NOT EXISTS interview_knowledge_vector_documents (
+    id TEXT PRIMARY KEY,
+    atom_id TEXT NOT NULL REFERENCES interview_knowledge_atoms(id) ON DELETE CASCADE,
+    atom_version INT NOT NULL,
+    doc_type TEXT NOT NULL,
+    doc_key TEXT NOT NULL,
+    doc_text TEXT NOT NULL,
+    text_hash TEXT NOT NULL,
+    metadata JSONB DEFAULT '{}',
+    embedding_model TEXT,
+    embedding_dim INT,
+    embedding vector(1536),
+    status TEXT DEFAULT 'active',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(atom_id, atom_version, doc_type, doc_key)
+);
+
+ALTER TABLE interview_knowledge_vector_documents
+    ALTER COLUMN embedding TYPE vector(1536)
+    USING embedding::vector(1536);
+
+CREATE INDEX IF NOT EXISTS interview_knowledge_vector_documents_atom_idx
+    ON interview_knowledge_vector_documents(atom_id, doc_type, status);
+
+CREATE INDEX IF NOT EXISTS interview_knowledge_vector_documents_embedding_hnsw
+    ON interview_knowledge_vector_documents USING hnsw (embedding vector_cosine_ops);
 `
 
 type VectorStore interface {
 	UpsertDocuments(context.Context, []ai.ScenarioVectorDocument) error
+	UpsertInterviewKnowledgeDocuments(context.Context, []ai.InterviewKnowledgeVectorDocument) error
 	Search(context.Context, VectorSearchQuery) ([]VectorSearchResult, error)
 	DeleteByQuestion(context.Context, string) error
+	DeleteInterviewKnowledgeByAtom(context.Context, string) error
 	RebuildScenarioIndex(context.Context, []ai.ScenarioVectorDocument) error
+	RebuildInterviewKnowledgeIndex(context.Context, []ai.InterviewKnowledgeVectorDocument) error
 }
 
 type VectorSearchQuery struct {
@@ -64,12 +95,16 @@ type VectorSearchResult struct {
 }
 
 type MemoryVectorStore struct {
-	mu   sync.RWMutex
-	docs map[string]ai.ScenarioVectorDocument
+	mu            sync.RWMutex
+	docs          map[string]ai.ScenarioVectorDocument
+	knowledgeDocs map[string]ai.InterviewKnowledgeVectorDocument
 }
 
 func NewMemoryVectorStore() *MemoryVectorStore {
-	return &MemoryVectorStore{docs: map[string]ai.ScenarioVectorDocument{}}
+	return &MemoryVectorStore{
+		docs:          map[string]ai.ScenarioVectorDocument{},
+		knowledgeDocs: map[string]ai.InterviewKnowledgeVectorDocument{},
+	}
 }
 
 func (s *MemoryVectorStore) UpsertDocuments(_ context.Context, docs []ai.ScenarioVectorDocument) error {
@@ -78,11 +113,32 @@ func (s *MemoryVectorStore) UpsertDocuments(_ context.Context, docs []ai.Scenari
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.docs == nil {
+		s.docs = map[string]ai.ScenarioVectorDocument{}
+	}
 	for _, doc := range docs {
 		if strings.TrimSpace(doc.QuestionID) == "" || strings.TrimSpace(doc.DocType) == "" || strings.TrimSpace(doc.DocKey) == "" {
 			continue
 		}
 		s.docs[vectorDocID(doc)] = cloneVectorDocument(doc)
+	}
+	return nil
+}
+
+func (s *MemoryVectorStore) UpsertInterviewKnowledgeDocuments(_ context.Context, docs []ai.InterviewKnowledgeVectorDocument) error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.knowledgeDocs == nil {
+		s.knowledgeDocs = map[string]ai.InterviewKnowledgeVectorDocument{}
+	}
+	for _, doc := range docs {
+		if strings.TrimSpace(doc.AtomID) == "" || strings.TrimSpace(doc.DocType) == "" || strings.TrimSpace(doc.DocKey) == "" {
+			continue
+		}
+		s.knowledgeDocs[interviewKnowledgeVectorDocID(doc)] = cloneInterviewKnowledgeVectorDocument(doc)
 	}
 	return nil
 }
@@ -147,6 +203,20 @@ func (s *MemoryVectorStore) DeleteByQuestion(_ context.Context, questionID strin
 	return nil
 }
 
+func (s *MemoryVectorStore) DeleteInterviewKnowledgeByAtom(_ context.Context, atomID string) error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, doc := range s.knowledgeDocs {
+		if doc.AtomID == atomID {
+			delete(s.knowledgeDocs, id)
+		}
+	}
+	return nil
+}
+
 func (s *MemoryVectorStore) RebuildScenarioIndex(ctx context.Context, docs []ai.ScenarioVectorDocument) error {
 	if len(docs) == 0 {
 		return nil
@@ -155,6 +225,16 @@ func (s *MemoryVectorStore) RebuildScenarioIndex(ctx context.Context, docs []ai.
 		return err
 	}
 	return s.UpsertDocuments(ctx, docs)
+}
+
+func (s *MemoryVectorStore) RebuildInterviewKnowledgeIndex(ctx context.Context, docs []ai.InterviewKnowledgeVectorDocument) error {
+	if len(docs) == 0 {
+		return nil
+	}
+	if err := s.DeleteInterviewKnowledgeByAtom(ctx, docs[0].AtomID); err != nil {
+		return err
+	}
+	return s.UpsertInterviewKnowledgeDocuments(ctx, docs)
 }
 
 func vectorDocumentScore(query VectorSearchQuery, doc ai.ScenarioVectorDocument) float64 {
@@ -175,7 +255,25 @@ func vectorDocID(doc ai.ScenarioVectorDocument) string {
 	return strings.Join([]string{doc.QuestionID, fmt.Sprintf("%d", doc.SourceVersion), doc.DocType, doc.DocKey}, "|")
 }
 
+func interviewKnowledgeVectorDocID(doc ai.InterviewKnowledgeVectorDocument) string {
+	return strings.Join([]string{doc.AtomID, fmt.Sprintf("%d", doc.AtomVersion), doc.DocType, doc.DocKey}, "|")
+}
+
 func cloneVectorDocument(doc ai.ScenarioVectorDocument) ai.ScenarioVectorDocument {
+	if doc.Metadata != nil {
+		copied := map[string]string{}
+		for k, v := range doc.Metadata {
+			copied[k] = v
+		}
+		doc.Metadata = copied
+	}
+	if doc.Vector != nil {
+		doc.Vector = append([]float64{}, doc.Vector...)
+	}
+	return doc
+}
+
+func cloneInterviewKnowledgeVectorDocument(doc ai.InterviewKnowledgeVectorDocument) ai.InterviewKnowledgeVectorDocument {
 	if doc.Metadata != nil {
 		copied := map[string]string{}
 		for k, v := range doc.Metadata {
