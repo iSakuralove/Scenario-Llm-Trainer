@@ -18,6 +18,10 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, user *domai
 		return
 	}
 	parts := split(suffix)
+	if len(parts) >= 1 && parts[0] == "interview-bank" {
+		s.handleAdminInterviewBank(w, r, user, parts[1:])
+		return
+	}
 	if len(parts) == 1 && parts[0] == "users" && r.Method == http.MethodGet {
 		writeOK(w, map[string]interface{}{"list": s.store.ListUsers()})
 		return
@@ -175,6 +179,7 @@ func (s *Server) systemStatus() map[string]interface{} {
 	}
 	auditEvents := s.store.ListAuditEvents(50)
 	sensitiveStatus := sensitiveDetectionStatus(aiInfo, auditEvents)
+	interviewBankSummary := s.store.InterviewKnowledgeSummary()
 	return map[string]interface{}{
 		"generated_at": time.Now(),
 		"services": []map[string]interface{}{
@@ -184,6 +189,7 @@ func (s *Server) systemStatus() map[string]interface{} {
 			{"name": "AI Provider", "status": aiStatus, "detail": aiProviderStatusDetail(aiInfo)},
 			{"name": "Sensitive Detection", "status": sensitiveStatus["status"], "detail": sensitiveStatus["detail"]},
 			{"name": "Seed Data", "status": seedDataStatus(seedScenarios), "detail": fmt.Sprintf("%d seed scenarios, %d active scenarios", seedScenarios, activeScenarios)},
+			{"name": "Interview Bank", "status": interviewBankStatus(interviewBankSummary), "detail": fmt.Sprintf("%d atoms, %d failed vectors", interviewBankSummary.TotalAtoms, interviewBankSummary.VectorFailedAtoms)},
 		},
 		"ai":        aiInfo,
 		"ai_config": s.store.GetAIConfig(),
@@ -202,14 +208,16 @@ func (s *Server) systemStatus() map[string]interface{} {
 		"audit_summary":       auditSummary(s.store.ListAuditEvents(20)),
 		"agent_summary":       agentSummary(auditEvents),
 		"recent_ai_errors":    recentAIErrors(auditEvents),
+		"interview_bank":      interviewBankSummary,
 		"counts": map[string]int{
-			"users":               len(users),
-			"scenarios":           len(scenarios),
-			"active_scenarios":    activeScenarios,
-			"generated_scenarios": generatedScenarios,
-			"ai_jobs":             aiJobsCount,
-			"community_posts":     communityPostCount(communityPosts),
-			"pending_ugc":         pendingUGC,
+			"users":                     len(users),
+			"scenarios":                 len(scenarios),
+			"active_scenarios":          activeScenarios,
+			"generated_scenarios":       generatedScenarios,
+			"ai_jobs":                   aiJobsCount,
+			"community_posts":           communityPostCount(communityPosts),
+			"pending_ugc":               pendingUGC,
+			"interview_knowledge_atoms": interviewBankSummary.TotalAtoms,
 		},
 		"demo_accounts": []map[string]string{
 			{"role": "student", "username": "demo", "purpose": "排查、面试、发布 UGC"},
@@ -439,4 +447,14 @@ func seedDataStatus(seedScenarios int) string {
 		return "degraded"
 	}
 	return "missing"
+}
+
+func interviewBankStatus(summary domain.InterviewKnowledgeSummary) string {
+	if summary.VectorFailedAtoms > 0 {
+		return "degraded"
+	}
+	if summary.TotalAtoms == 0 {
+		return "empty"
+	}
+	return "ok"
 }

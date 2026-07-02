@@ -85,6 +85,25 @@
 
 版本快照只包含稳定内容字段：`id`、`title`、`subject`、`domain`、`difficulty`、`category`、`question_role`、`sourceRef`、`tags`、`principles`、`pitfalls`、`followUpPaths`、`status`。`vector_status` 和 `last_indexed_at` 属于运行时索引状态，不进入版本快照。
 
+## 面试题库治理管理端
+
+面试题库管理端挂在现有管理员路由下，复用 `/api/v1/admin` 的 admin-only 权限边界：
+
+- `backend/internal/httpapi/handlers_interview_bank.go`
+  负责 `/admin/interview-bank/*` 的摘要、列表、批次、导入校验和发布。
+- `GET /api/v1/admin/interview-bank/summary`
+  返回题库资源数、发布数、批次数、开放组合数和索引状态摘要。
+- `GET /api/v1/admin/interview-bank/atoms`
+  支持按 `status`、`domain`、`difficulty`、`category`、`question_role`、`vector_status` 筛选当前题库资源。
+- `GET /api/v1/admin/interview-bank/batches`
+  返回最近导入批次，供前端展示导入历史。
+- `POST /api/v1/admin/interview-bank/import/validate`
+  只做结构化导入包校验和预览，不写入题库主表、版本表或批次表。
+- `POST /api/v1/admin/interview-bank/import/publish`
+  复用同一套校验逻辑，通过后调用 `SaveInterviewKnowledgeAtomVersioned` 写入 atom 与版本，再保存导入批次。
+
+本阶段只允许 `vector_status=failed` 作为筛选和状态展示条件，不提供真实索引重建接口、异步索引任务或失败重试动作。真实触发索引重建应作为后续独立任务接入，避免题库治理 MVP 与检索基础设施耦合。
+
 ## 当前安全约束
 
 - 密码哈希使用 bcrypt，兼容旧 SHA-256 演示数据登录。

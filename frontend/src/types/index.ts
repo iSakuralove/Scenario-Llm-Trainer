@@ -464,6 +464,7 @@ export interface SystemStatus {
   ai: AIStatus
   store?: StoreStatus
   ai_config?: AIConfig
+  interview_bank?: InterviewKnowledgeSummary
   sensitive_detection?: SensitiveDetectionStatus
   prompt_templates?: PromptTemplateStatus[]
   schema_validators?: SchemaValidatorStatus[]
@@ -483,9 +484,93 @@ export interface SystemStatus {
     pending_ugc: number
     generated_scenarios?: number
     ai_jobs?: number
+    interview_knowledge_atoms?: number
   }
   demo_accounts: Array<{ role: string; username: string; purpose: string }>
   runbook: Array<{ title: string; command: string }>
+}
+
+export interface InterviewKnowledgeAtom {
+  id: string
+  title: string
+  subject: string
+  domain: string
+  difficulty: string
+  category: string
+  question_role: string
+  source_ref: string
+  tags: string[]
+  principles: string[]
+  pitfalls: string[]
+  follow_up_paths: string[]
+  status: string
+  current_version: number
+  vector_status: string
+  last_indexed_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface InterviewKnowledgeBatch {
+  id: string
+  source_ref: string
+  status: string
+  mode: string
+  atom_count: number
+  validation_report: Record<string, unknown>
+  publish_note?: string
+  admin_id?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface InterviewKnowledgeSummary {
+  total_atoms: number
+  published_atoms: number
+  draft_atoms: number
+  archived_atoms: number
+  vector_pending_atoms: number
+  vector_indexed_atoms: number
+  vector_failed_atoms: number
+  batch_count: number
+  open_combination_count: number
+  last_imported_at?: string
+  last_edited_at?: string
+}
+
+export interface InterviewKnowledgeAtomFilters {
+  status?: string
+  domain?: string
+  difficulty?: string
+  category?: string
+  question_role?: string
+  vector_status?: string
+  page?: number
+  page_size?: number
+}
+
+export interface InterviewKnowledgeImportResult {
+  index: number
+  id?: string
+  title?: string
+  action: string
+  existing_version?: number
+  errors: string[]
+  warnings: string[]
+}
+
+export interface InterviewKnowledgeImportReport {
+  batch_id: string
+  source_ref: string
+  summary: Record<string, number>
+  errors: string[]
+  warnings: string[]
+  results: InterviewKnowledgeImportResult[]
+}
+
+export interface InterviewKnowledgePublishResponse {
+  report: InterviewKnowledgeImportReport
+  batch: InterviewKnowledgeBatch
 }
 
 export interface StoreStatus {

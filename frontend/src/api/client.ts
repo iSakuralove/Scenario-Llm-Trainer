@@ -6,6 +6,12 @@ import type {
   AuditEvent,
   Asset,
   CommunityPost,
+  InterviewKnowledgeAtom,
+  InterviewKnowledgeAtomFilters,
+  InterviewKnowledgeBatch,
+  InterviewKnowledgeImportReport,
+  InterviewKnowledgePublishResponse,
+  InterviewKnowledgeSummary,
   InterviewQuestion,
   InterviewSession,
   VoiceQualityResult,
@@ -487,6 +493,17 @@ function scenarioListQuery(params: ScenarioListParams = {}) {
   return text ? `?${text}` : ''
 }
 
+function queryString(params: Record<string, string | number | undefined>) {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== '') {
+      query.set(key, String(value))
+    }
+  }
+  const text = query.toString()
+  return text ? `?${text}` : ''
+}
+
 function normalizeScenarioEvaluation(evaluation?: ScenarioEvaluation): ScenarioEvaluation | undefined {
   if (!evaluation) return evaluation
   if (!evaluation.scoring_report) {
@@ -853,6 +870,33 @@ export const api = {
 
   updateAdminAIConfig: (token: string, payload: AIConfig) =>
     request<AIConfig>('/admin/ai-config', { method: 'PUT', body: JSON.stringify(payload) }, token),
+
+  adminInterviewBankSummary: (token: string) =>
+    request<InterviewKnowledgeSummary>('/admin/interview-bank/summary', {}, token),
+
+  adminInterviewBankAtoms: (token: string, filters: InterviewKnowledgeAtomFilters = {}) =>
+    request<{ list: InterviewKnowledgeAtom[]; total: number; filters: InterviewKnowledgeAtomFilters }>(
+      `/admin/interview-bank/atoms${queryString(filters as Record<string, string | number | undefined>)}`,
+      {},
+      token,
+    ),
+
+  adminInterviewBankBatches: (token: string, limit = 30) =>
+    request<{ list: InterviewKnowledgeBatch[] }>(`/admin/interview-bank/batches?limit=${limit}`, {}, token),
+
+  validateInterviewBankImport: (token: string, payload: unknown) =>
+    request<InterviewKnowledgeImportReport>(
+      '/admin/interview-bank/import/validate',
+      { method: 'POST', body: JSON.stringify(payload) },
+      token,
+    ),
+
+  publishInterviewBankImport: (token: string, payload: unknown) =>
+    request<InterviewKnowledgePublishResponse>(
+      '/admin/interview-bank/import/publish',
+      { method: 'POST', body: JSON.stringify(payload) },
+      token,
+    ),
 
   adminAuditEvents: (token: string, limit = 30) =>
     request<{ list: AuditEvent[] }>(`/admin/audit-events?limit=${limit}`, {}, token),

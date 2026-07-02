@@ -84,6 +84,29 @@ type InterviewKnowledgeBatch struct {
 	UpdatedAt        time.Time              `json:"updated_at"`
 }
 
+type InterviewKnowledgeAtomFilter struct {
+	Status       string
+	Domain       string
+	Difficulty   string
+	Category     string
+	QuestionRole string
+	VectorStatus string
+}
+
+type InterviewKnowledgeSummary struct {
+	TotalAtoms           int        `json:"total_atoms"`
+	PublishedAtoms       int        `json:"published_atoms"`
+	DraftAtoms           int        `json:"draft_atoms"`
+	ArchivedAtoms        int        `json:"archived_atoms"`
+	VectorPendingAtoms   int        `json:"vector_pending_atoms"`
+	VectorIndexedAtoms   int        `json:"vector_indexed_atoms"`
+	VectorFailedAtoms    int        `json:"vector_failed_atoms"`
+	BatchCount           int        `json:"batch_count"`
+	OpenCombinationCount int        `json:"open_combination_count"`
+	LastImportedAt       *time.Time `json:"last_imported_at,omitempty"`
+	LastEditedAt         *time.Time `json:"last_edited_at,omitempty"`
+}
+
 type InterviewKnowledgeAtomLightSnapshot struct {
 	AtomID   string `json:"atom_id"`
 	Version  int    `json:"version"`

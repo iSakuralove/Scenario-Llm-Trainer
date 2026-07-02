@@ -94,6 +94,72 @@ func TestMemoryInterviewKnowledgeAtomReturnsClones(t *testing.T) {
 	}
 }
 
+func TestMemoryListInterviewKnowledgeAtomsFiltersVectorStatus(t *testing.T) {
+	store := NewMemoryStore(func(password string) string { return "hash:" + password })
+	failed := sampleInterviewKnowledgeAtom("atom-vector-failed")
+	failed.VectorStatus = "failed"
+	indexed := sampleInterviewKnowledgeAtom("atom-vector-indexed")
+	indexed.Category = "database"
+	indexed.VectorStatus = "indexed"
+	if _, _, err := store.SaveInterviewKnowledgeAtomVersioned(failed, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "失败索引样例"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.SaveInterviewKnowledgeAtomVersioned(indexed, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "已索引样例"); err != nil {
+		t.Fatal(err)
+	}
+
+	items := store.ListInterviewKnowledgeAtoms(domain.InterviewKnowledgeAtomFilter{VectorStatus: "failed"})
+	if len(items) != 1 || items[0].ID != failed.ID {
+		t.Fatalf("expected only failed vector atom, got %+v", items)
+	}
+	items = store.ListInterviewKnowledgeAtoms(domain.InterviewKnowledgeAtomFilter{Category: "database", VectorStatus: "indexed"})
+	if len(items) != 1 || items[0].ID != indexed.ID {
+		t.Fatalf("expected indexed database atom, got %+v", items)
+	}
+}
+
+func TestMemoryInterviewKnowledgeBatchSummaryAndClone(t *testing.T) {
+	store := NewMemoryStore(func(password string) string { return "hash:" + password })
+	atom := sampleInterviewKnowledgeAtom("atom-summary")
+	atom.VectorStatus = "failed"
+	if _, _, err := store.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "摘要样例"); err != nil {
+		t.Fatal(err)
+	}
+	batch := store.SaveInterviewKnowledgeBatch(domain.InterviewKnowledgeBatch{
+		ID:        "batch-summary",
+		SourceRef: "fixture",
+		Status:    "published",
+		Mode:      "publish",
+		AtomCount: 1,
+		ValidationReport: map[string]interface{}{
+			"summary": map[string]interface{}{"total": float64(1)},
+		},
+		AdminID: "admin-1",
+	})
+	batch.ValidationReport["summary"].(map[string]interface{})["total"] = float64(99)
+
+	batches := store.ListInterviewKnowledgeBatches(10)
+	if len(batches) != 1 {
+		t.Fatalf("expected one batch, got %+v", batches)
+	}
+	if batches[0].ValidationReport["summary"].(map[string]interface{})["total"] != float64(1) {
+		t.Fatalf("batch report should be cloned on save/list, got %+v", batches[0].ValidationReport)
+	}
+	batches[0].ValidationReport["summary"].(map[string]interface{})["total"] = float64(88)
+	again := store.ListInterviewKnowledgeBatches(10)
+	if again[0].ValidationReport["summary"].(map[string]interface{})["total"] != float64(1) {
+		t.Fatalf("batch report should be cloned on list, got %+v", again[0].ValidationReport)
+	}
+
+	summary := store.InterviewKnowledgeSummary()
+	if summary.TotalAtoms != 1 || summary.BatchCount != 1 || summary.VectorFailedAtoms != 1 {
+		t.Fatalf("unexpected interview knowledge summary: %+v", summary)
+	}
+	if summary.LastImportedAt == nil || summary.LastEditedAt == nil || summary.OpenCombinationCount != 1 {
+		t.Fatalf("expected imported/edited timestamps and one open combination, got %+v", summary)
+	}
+}
+
 func sampleInterviewKnowledgeAtom(id string) domain.InterviewKnowledgeAtom {
 	return domain.InterviewKnowledgeAtom{
 		ID:            id,

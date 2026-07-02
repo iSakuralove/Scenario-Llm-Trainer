@@ -29,6 +29,7 @@ type MemoryStore struct {
 	InterviewSessions              map[string]*domain.InterviewSession
 	InterviewKnowledgeAtoms        map[string]*domain.InterviewKnowledgeAtom
 	InterviewKnowledgeAtomVersions map[string][]domain.InterviewKnowledgeAtomVersion
+	InterviewKnowledgeBatches      map[string]*domain.InterviewKnowledgeBatch
 	CommunityPosts                 map[string]*domain.CommunityPost
 	Assets                         map[string]*domain.Asset
 	AIJobs                         map[string]*domain.AIJob
@@ -50,6 +51,7 @@ func NewMemoryStore(hashPassword func(string) string) *MemoryStore {
 		InterviewSessions:              map[string]*domain.InterviewSession{},
 		InterviewKnowledgeAtoms:        map[string]*domain.InterviewKnowledgeAtom{},
 		InterviewKnowledgeAtomVersions: map[string][]domain.InterviewKnowledgeAtomVersion{},
+		InterviewKnowledgeBatches:      map[string]*domain.InterviewKnowledgeBatch{},
 		CommunityPosts:                 map[string]*domain.CommunityPost{},
 		Assets:                         map[string]*domain.Asset{},
 		AIJobs:                         map[string]*domain.AIJob{},
@@ -514,6 +516,26 @@ func (s *MemoryStore) GetInterviewKnowledgeAtom(id string) (*domain.InterviewKno
 	return cloneInterviewKnowledgeAtom(atom), true
 }
 
+func (s *MemoryStore) ListInterviewKnowledgeAtoms(filter domain.InterviewKnowledgeAtomFilter) []domain.InterviewKnowledgeAtom {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]domain.InterviewKnowledgeAtom, 0, len(s.InterviewKnowledgeAtoms))
+	for _, atom := range s.InterviewKnowledgeAtoms {
+		copy := cloneInterviewKnowledgeAtom(atom)
+		if copy == nil || !interviewKnowledgeAtomMatchesFilter(*copy, filter) {
+			continue
+		}
+		items = append(items, *copy)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].UpdatedAt.Equal(items[j].UpdatedAt) {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].UpdatedAt.After(items[j].UpdatedAt)
+	})
+	return items
+}
+
 func (s *MemoryStore) ListInterviewKnowledgeAtomVersions(atomID string) []domain.InterviewKnowledgeAtomVersion {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -524,6 +546,68 @@ func (s *MemoryStore) ListInterviewKnowledgeAtomVersions(atomID string) []domain
 	}
 	sortInterviewKnowledgeVersions(items)
 	return items
+}
+
+func (s *MemoryStore) SaveInterviewKnowledgeBatch(batch domain.InterviewKnowledgeBatch) domain.InterviewKnowledgeBatch {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.InterviewKnowledgeBatches == nil {
+		s.InterviewKnowledgeBatches = map[string]*domain.InterviewKnowledgeBatch{}
+	}
+	batch.ID = strings.TrimSpace(batch.ID)
+	if batch.ID == "" {
+		batch.ID = NewID()
+	}
+	batch.SourceRef = strings.TrimSpace(batch.SourceRef)
+	batch.Status = strings.TrimSpace(batch.Status)
+	batch.Mode = strings.TrimSpace(batch.Mode)
+	batch.PublishNote = strings.TrimSpace(batch.PublishNote)
+	batch.AdminID = strings.TrimSpace(batch.AdminID)
+	if batch.Status == "" {
+		batch.Status = "draft"
+	}
+	if batch.Mode == "" {
+		batch.Mode = "draft"
+	}
+	if batch.ValidationReport == nil {
+		batch.ValidationReport = map[string]interface{}{}
+	}
+	now := time.Now()
+	if existing, ok := s.InterviewKnowledgeBatches[batch.ID]; ok && !existing.CreatedAt.IsZero() {
+		batch.CreatedAt = existing.CreatedAt
+	} else if batch.CreatedAt.IsZero() {
+		batch.CreatedAt = now
+	}
+	batch.UpdatedAt = now
+	s.InterviewKnowledgeBatches[batch.ID] = cloneInterviewKnowledgeBatch(&batch)
+	return *cloneInterviewKnowledgeBatch(&batch)
+}
+
+func (s *MemoryStore) ListInterviewKnowledgeBatches(limit int) []domain.InterviewKnowledgeBatch {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]domain.InterviewKnowledgeBatch, 0, len(s.InterviewKnowledgeBatches))
+	for _, batch := range s.InterviewKnowledgeBatches {
+		if batch != nil {
+			items = append(items, *cloneInterviewKnowledgeBatch(batch))
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].CreatedAt.After(items[j].CreatedAt)
+	})
+	if limit > 0 && len(items) > limit {
+		return items[:limit]
+	}
+	return items
+}
+
+func (s *MemoryStore) InterviewKnowledgeSummary() domain.InterviewKnowledgeSummary {
+	atoms := s.ListInterviewKnowledgeAtoms(domain.InterviewKnowledgeAtomFilter{})
+	batches := s.ListInterviewKnowledgeBatches(0)
+	return interviewKnowledgeSummary(atoms, batches)
 }
 
 func (s *MemoryStore) AddCommunityPost(post domain.CommunityPost) domain.CommunityPost {

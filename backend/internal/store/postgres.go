@@ -36,6 +36,13 @@ const interviewKnowledgeAtomSelectSQL = `
 	FROM interview_knowledge_atoms
 `
 
+const interviewKnowledgeBatchSelectSQL = `
+	SELECT id, COALESCE(source_ref, ''), status, mode, atom_count,
+	       COALESCE(validation_report, '{}'::jsonb), COALESCE(publish_note, ''),
+	       COALESCE(admin_id, ''), created_at, updated_at
+	FROM interview_knowledge_batches
+`
+
 func NewPostgresStore(ctx context.Context, databaseURL string, hashPassword func(string) string) (*PostgresStore, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
@@ -671,6 +678,24 @@ func (s *PostgresStore) GetInterviewKnowledgeAtom(id string) (*domain.InterviewK
 	return scanInterviewKnowledgeAtom(row)
 }
 
+func (s *PostgresStore) ListInterviewKnowledgeAtoms(filter domain.InterviewKnowledgeAtomFilter) []domain.InterviewKnowledgeAtom {
+	rows, err := s.pool.Query(context.Background(), interviewKnowledgeAtomSelectSQL+` ORDER BY updated_at DESC, id ASC`)
+	if err != nil {
+		return []domain.InterviewKnowledgeAtom{}
+	}
+	defer rows.Close()
+
+	items := []domain.InterviewKnowledgeAtom{}
+	for rows.Next() {
+		item, err := scanInterviewKnowledgeAtomScanner(rows)
+		if err != nil || !interviewKnowledgeAtomMatchesFilter(item, filter) {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
 func (s *PostgresStore) ListInterviewKnowledgeAtomVersions(atomID string) []domain.InterviewKnowledgeAtomVersion {
 	rows, err := s.pool.Query(context.Background(), `
 		SELECT id, atom_id, version, version_type, COALESCE(admin_id, ''), COALESCE(change_note, ''),
@@ -692,6 +717,85 @@ func (s *PostgresStore) ListInterviewKnowledgeAtomVersions(atomID string) []doma
 		}
 	}
 	return items
+}
+
+func (s *PostgresStore) SaveInterviewKnowledgeBatch(batch domain.InterviewKnowledgeBatch) domain.InterviewKnowledgeBatch {
+	batch.ID = strings.TrimSpace(batch.ID)
+	if batch.ID == "" {
+		batch.ID = NewID()
+	}
+	batch.SourceRef = strings.TrimSpace(batch.SourceRef)
+	batch.Status = strings.TrimSpace(batch.Status)
+	batch.Mode = strings.TrimSpace(batch.Mode)
+	batch.PublishNote = strings.TrimSpace(batch.PublishNote)
+	batch.AdminID = strings.TrimSpace(batch.AdminID)
+	if batch.Status == "" {
+		batch.Status = "draft"
+	}
+	if batch.Mode == "" {
+		batch.Mode = "draft"
+	}
+	if batch.ValidationReport == nil {
+		batch.ValidationReport = map[string]interface{}{}
+	}
+	now := time.Now()
+	if batch.CreatedAt.IsZero() {
+		batch.CreatedAt = now
+	}
+	batch.UpdatedAt = now
+	reportJSON, err := marshal(batch.ValidationReport)
+	if err != nil {
+		return batch
+	}
+	_, err = s.pool.Exec(context.Background(), `
+		INSERT INTO interview_knowledge_batches
+		    (id, source_ref, status, mode, atom_count, validation_report, publish_note, admin_id, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		ON CONFLICT (id) DO UPDATE SET
+		    source_ref = EXCLUDED.source_ref,
+		    status = EXCLUDED.status,
+		    mode = EXCLUDED.mode,
+		    atom_count = EXCLUDED.atom_count,
+		    validation_report = EXCLUDED.validation_report,
+		    publish_note = EXCLUDED.publish_note,
+		    admin_id = EXCLUDED.admin_id,
+		    updated_at = EXCLUDED.updated_at
+	`, batch.ID, emptyToNil(batch.SourceRef), batch.Status, batch.Mode, batch.AtomCount, reportJSON,
+		emptyToNil(batch.PublishNote), emptyToNil(batch.AdminID), batch.CreatedAt, batch.UpdatedAt)
+	if err != nil {
+		return batch
+	}
+	return *cloneInterviewKnowledgeBatch(&batch)
+}
+
+func (s *PostgresStore) ListInterviewKnowledgeBatches(limit int) []domain.InterviewKnowledgeBatch {
+	query := interviewKnowledgeBatchSelectSQL + ` ORDER BY created_at DESC, id ASC`
+	args := []interface{}{}
+	if limit > 0 {
+		query += ` LIMIT $1`
+		args = append(args, limit)
+	}
+	rows, err := s.pool.Query(context.Background(), query, args...)
+	if err != nil {
+		return []domain.InterviewKnowledgeBatch{}
+	}
+	defer rows.Close()
+
+	items := []domain.InterviewKnowledgeBatch{}
+	for rows.Next() {
+		item, err := scanInterviewKnowledgeBatchRows(rows)
+		if err == nil {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
+func (s *PostgresStore) InterviewKnowledgeSummary() domain.InterviewKnowledgeSummary {
+	return interviewKnowledgeSummary(
+		s.ListInterviewKnowledgeAtoms(domain.InterviewKnowledgeAtomFilter{}),
+		s.ListInterviewKnowledgeBatches(0),
+	)
 }
 
 func (s *PostgresStore) AddCommunityPost(post domain.CommunityPost) domain.CommunityPost {
@@ -1626,6 +1730,21 @@ func scanInterviewKnowledgeAtomVersionRows(rows pgx.Rows) (domain.InterviewKnowl
 	_ = unmarshal(diffJSON, &item.DiffSummary)
 	item = cloneInterviewKnowledgeAtomVersion(item)
 	return item, nil
+}
+
+func scanInterviewKnowledgeBatchRows(rows pgx.Rows) (domain.InterviewKnowledgeBatch, error) {
+	var item domain.InterviewKnowledgeBatch
+	var reportJSON []byte
+	err := rows.Scan(&item.ID, &item.SourceRef, &item.Status, &item.Mode, &item.AtomCount,
+		&reportJSON, &item.PublishNote, &item.AdminID, &item.CreatedAt, &item.UpdatedAt)
+	if err != nil {
+		return item, err
+	}
+	_ = unmarshal(reportJSON, &item.ValidationReport)
+	if item.ValidationReport == nil {
+		item.ValidationReport = map[string]interface{}{}
+	}
+	return *cloneInterviewKnowledgeBatch(&item), nil
 }
 
 func scanInterviewSession(row scanner) (*domain.InterviewSession, bool) {

@@ -186,6 +186,15 @@ func cloneInterviewKnowledgeAtomVersion(version domain.InterviewKnowledgeAtomVer
 	return version
 }
 
+func cloneInterviewKnowledgeBatch(batch *domain.InterviewKnowledgeBatch) *domain.InterviewKnowledgeBatch {
+	if batch == nil {
+		return nil
+	}
+	copy := *batch
+	copy.ValidationReport = cloneJSONMap(batch.ValidationReport)
+	return &copy
+}
+
 func cloneInterviewKnowledgeAtomLightSnapshots(items []domain.InterviewKnowledgeAtomLightSnapshot) []domain.InterviewKnowledgeAtomLightSnapshot {
 	if items == nil {
 		return []domain.InterviewKnowledgeAtomLightSnapshot{}
@@ -228,4 +237,69 @@ func sortInterviewKnowledgeVersions(items []domain.InterviewKnowledgeAtomVersion
 		}
 		return items[i].CreatedAt.After(items[j].CreatedAt)
 	})
+}
+
+func interviewKnowledgeAtomMatchesFilter(atom domain.InterviewKnowledgeAtom, filter domain.InterviewKnowledgeAtomFilter) bool {
+	if !matchesTrimmedFilter(atom.Status, filter.Status) {
+		return false
+	}
+	if !matchesTrimmedFilter(atom.Domain, filter.Domain) {
+		return false
+	}
+	if !matchesTrimmedFilter(atom.Difficulty, filter.Difficulty) {
+		return false
+	}
+	if !matchesTrimmedFilter(atom.Category, filter.Category) {
+		return false
+	}
+	if !matchesTrimmedFilter(atom.QuestionRole, filter.QuestionRole) {
+		return false
+	}
+	return matchesTrimmedFilter(atom.VectorStatus, filter.VectorStatus)
+}
+
+func matchesTrimmedFilter(value, filter string) bool {
+	filter = strings.TrimSpace(filter)
+	if filter == "" {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(value), filter)
+}
+
+func interviewKnowledgeSummary(atoms []domain.InterviewKnowledgeAtom, batches []domain.InterviewKnowledgeBatch) domain.InterviewKnowledgeSummary {
+	summary := domain.InterviewKnowledgeSummary{TotalAtoms: len(atoms), BatchCount: len(batches)}
+	combinations := map[string]struct{}{}
+	for _, atom := range atoms {
+		switch strings.TrimSpace(atom.Status) {
+		case "published":
+			summary.PublishedAtoms++
+			if atom.Category != "" && atom.Difficulty != "" {
+				combinations[atom.Category+"|"+atom.Difficulty] = struct{}{}
+			}
+		case "archived":
+			summary.ArchivedAtoms++
+		default:
+			summary.DraftAtoms++
+		}
+		switch strings.TrimSpace(atom.VectorStatus) {
+		case "indexed":
+			summary.VectorIndexedAtoms++
+		case "failed":
+			summary.VectorFailedAtoms++
+		default:
+			summary.VectorPendingAtoms++
+		}
+		if summary.LastEditedAt == nil || atom.UpdatedAt.After(*summary.LastEditedAt) {
+			updatedAt := atom.UpdatedAt
+			summary.LastEditedAt = &updatedAt
+		}
+	}
+	for _, batch := range batches {
+		if summary.LastImportedAt == nil || batch.CreatedAt.After(*summary.LastImportedAt) {
+			createdAt := batch.CreatedAt
+			summary.LastImportedAt = &createdAt
+		}
+	}
+	summary.OpenCombinationCount = len(combinations)
+	return summary
 }

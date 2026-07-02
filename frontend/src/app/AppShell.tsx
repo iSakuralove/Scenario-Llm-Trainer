@@ -3,6 +3,7 @@ import { Link, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 import {
   BookOpenCheck,
   BrainCircuit,
+  Database,
   Gauge,
   LogOut,
   MessageSquareText,
@@ -29,6 +30,7 @@ const InterviewReportPage = lazy(() => import('../features/interviews/InterviewR
 const CommunityPage = lazy(() => import('../features/community/CommunityPage').then((module) => ({ default: module.CommunityPage })))
 const ProfilePage = lazy(() => import('../features/profile/ProfilePage').then((module) => ({ default: module.ProfilePage })))
 const SystemPage = lazy(() => import('../features/system/SystemPage').then((module) => ({ default: module.SystemPage })))
+const InterviewBankAdminPage = lazy(() => import('../features/interviewBank/InterviewBankAdminPage').then((module) => ({ default: module.InterviewBankAdminPage })))
 
 export function AppShell() {
   const navigate = useNavigate()
@@ -86,6 +88,7 @@ export function AppShell() {
           <NavLink to="/interviews"><MessageSquareText size={18} />面试舱</NavLink>
           <NavLink to="/community"><BookOpenCheck size={18} />案例工坊</NavLink>
           <NavLink to="/profile"><UserRound size={18} />个人档案</NavLink>
+          {user?.role === 'admin' && <NavLink to="/interview-bank"><Database size={18} />面试题库</NavLink>}
           {user?.role === 'admin' && <NavLink to="/system"><Settings size={18} />系统状态</NavLink>}
         </nav>
         <div className="sidebar-status-card">
@@ -116,6 +119,7 @@ export function AppShell() {
             <Route path="/interviews/session/:id/report" element={<InterviewReportPage />} />
             <Route path="/community" element={<CommunityPage />} />
             <Route path="/profile" element={<ProfilePage />} />
+            <Route path="/interview-bank" element={<RoleGuard allow={['admin']}><InterviewBankAdminPage /></RoleGuard>} />
             <Route path="/system" element={<RoleGuard allow={['admin']}><SystemPage /></RoleGuard>} />
           </Routes>
         </Suspense>

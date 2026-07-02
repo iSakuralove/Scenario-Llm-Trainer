@@ -32,7 +32,11 @@ type Store interface {
 	DeleteInterviewSession(id string) bool
 	SaveInterviewKnowledgeAtomVersioned(atom domain.InterviewKnowledgeAtom, versionType, adminID, changeNote string) (domain.InterviewKnowledgeAtom, domain.InterviewKnowledgeAtomVersion, error)
 	GetInterviewKnowledgeAtom(id string) (*domain.InterviewKnowledgeAtom, bool)
+	ListInterviewKnowledgeAtoms(filter domain.InterviewKnowledgeAtomFilter) []domain.InterviewKnowledgeAtom
 	ListInterviewKnowledgeAtomVersions(atomID string) []domain.InterviewKnowledgeAtomVersion
+	SaveInterviewKnowledgeBatch(batch domain.InterviewKnowledgeBatch) domain.InterviewKnowledgeBatch
+	ListInterviewKnowledgeBatches(limit int) []domain.InterviewKnowledgeBatch
+	InterviewKnowledgeSummary() domain.InterviewKnowledgeSummary
 
 	AddCommunityPost(post domain.CommunityPost) domain.CommunityPost
 	GetCommunityPost(id string) (*domain.CommunityPost, bool)

@@ -12,6 +12,9 @@ export function getDefaultRouteForRole(role: UserRole | undefined) {
 
 export function isRouteAllowedForRole(pathname: string, role: UserRole | undefined) {
   if (!role) return false
+  if (pathname === '/interview-bank' || pathname.startsWith('/interview-bank/')) {
+    return role === 'admin'
+  }
   if (pathname === '/system' || pathname.startsWith('/system/')) {
     return role === 'admin'
   }

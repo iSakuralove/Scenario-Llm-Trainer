@@ -57,6 +57,7 @@ export function SystemPage() {
   const recentDecisions = routerTelemetry.recent_decisions ?? []
   const supportedTasks = status.ai.capability?.supported_tasks ?? []
   const serviceSummary = summarizeServices(services)
+  const interviewBank = status.interview_bank
   const heroHighlights = [
     { label: '服务总数', value: serviceSummary.total, tone: 'default' },
     { label: '正常运行', value: serviceSummary.ok, tone: 'accent' },
@@ -110,11 +111,27 @@ export function SystemPage() {
       <div className="metric-row">
         <Metric label="用户数" value={status.counts.users} />
         <Metric label="题目数" value={status.counts.scenarios} />
+        <Metric label="面试题库" value={status.counts.interview_knowledge_atoms ?? interviewBank?.total_atoms ?? 0} />
         <Metric label="AI生成题" value={status.counts.generated_scenarios ?? 0} />
         <Metric label="AI任务" value={status.counts.ai_jobs ?? 0} />
         <Metric label="活跃题目" value={status.counts.active_scenarios} />
         <Metric label="待审 UGC" value={status.counts.pending_ugc} />
       </div>
+      <section className="panel">
+        <div className="panel-title"><Database size={18} /> 面试题库治理</div>
+        <div className="metric-row compact-metrics">
+          <Metric label="题库资源" value={interviewBank?.total_atoms ?? 0} />
+          <Metric label="已发布" value={interviewBank?.published_atoms ?? 0} />
+          <Metric label="开放组合" value={interviewBank?.open_combination_count ?? 0} />
+          <Metric label="索引失败" value={interviewBank?.vector_failed_atoms ?? 0} />
+        </div>
+        <div className="system-kv" style={{ marginTop: 16 }}>
+          <span>批次数</span><strong>{interviewBank?.batch_count ?? 0}</strong>
+          <span>待索引</span><strong>{interviewBank?.vector_pending_atoms ?? 0}</strong>
+          <span>已索引</span><strong>{interviewBank?.vector_indexed_atoms ?? 0}</strong>
+          <span>最近导入</span><strong>{formatOptionalDateTime(interviewBank?.last_imported_at)}</strong>
+        </div>
+      </section>
       <div className="two-column">
         <section className="panel">
           <div className="panel-title"><Bot size={18} /> AI Router 概览</div>
