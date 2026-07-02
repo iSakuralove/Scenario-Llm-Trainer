@@ -237,3 +237,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: 面试题库向量索引重建
+
+**Date**: 2026-07-02
+**Task**: 面试题库向量索引重建
+**Branch**: `main`
+
+### Summary
+
+实现管理员触发的面试题库向量索引重建，补齐题库向量文档表、Store/VectorStore 写入能力、admin API、前端重建入口、测试和架构/spec/feature 文档。验证通过 go test ./...、npm --prefix frontend run lint、npm --prefix frontend run build。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `914b8b2` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
