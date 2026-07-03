@@ -167,6 +167,58 @@ func (s *PostgresVectorStore) Search(ctx context.Context, query VectorSearchQuer
 	return results, rows.Err()
 }
 
+func (s *PostgresVectorStore) SearchInterviewKnowledge(ctx context.Context, query InterviewKnowledgeVectorSearchQuery) ([]InterviewKnowledgeVectorSearchResult, error) {
+	if s == nil || s.pool == nil {
+		return nil, nil
+	}
+	limit := query.Limit
+	if limit <= 0 {
+		limit = 5
+	}
+	if len(query.Vector) == 0 {
+		return s.searchInterviewKnowledgeByText(ctx, query, limit)
+	}
+	args := []interface{}{vectorLiteral(query.Vector), limit}
+	where := []string{"embedding IS NOT NULL", "COALESCE(status, 'active') = 'active'"}
+	if query.Category != "" {
+		args = append(args, query.Category)
+		where = append(where, fmt.Sprintf("COALESCE(metadata->>'category', '') = $%d", len(args)))
+	}
+	if query.Difficulty != "" {
+		args = append(args, query.Difficulty)
+		where = append(where, fmt.Sprintf("COALESCE(metadata->>'difficulty', '') = $%d", len(args)))
+	}
+	if len(query.QuestionRoles) > 0 {
+		args = append(args, query.QuestionRoles)
+		where = append(where, fmt.Sprintf("COALESCE(metadata->>'question_role', '') = ANY($%d)", len(args)))
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT atom_id, atom_version, doc_type, doc_key, doc_text, text_hash,
+		       COALESCE(metadata, '{}'::jsonb), COALESCE(embedding_model, ''), COALESCE(embedding_dim, 0),
+		       COALESCE(status, 'active'), 1 - (embedding <=> $1::vector) AS score
+		FROM interview_knowledge_vector_documents
+		WHERE `+strings.Join(where, " AND ")+`
+		ORDER BY embedding <=> $1::vector
+		LIMIT $2
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	results := []InterviewKnowledgeVectorSearchResult{}
+	for rows.Next() {
+		var doc ai.InterviewKnowledgeVectorDocument
+		var metadataBytes []byte
+		var score float64
+		if err := rows.Scan(&doc.AtomID, &doc.AtomVersion, &doc.DocType, &doc.DocKey, &doc.DocText, &doc.TextHash, &metadataBytes, &doc.EmbeddingModel, &doc.EmbeddingDim, &doc.Status, &score); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(metadataBytes, &doc.Metadata)
+		results = append(results, InterviewKnowledgeVectorSearchResult{Document: doc, Score: score})
+	}
+	return results, rows.Err()
+}
+
 func (s *PostgresVectorStore) searchByText(ctx context.Context, query VectorSearchQuery, limit int) ([]VectorSearchResult, error) {
 	if strings.TrimSpace(query.Text) == "" {
 		return nil, nil
@@ -213,6 +265,62 @@ func (s *PostgresVectorStore) searchByText(ctx context.Context, query VectorSear
 		return nil, err
 	}
 	sortVectorResults(results)
+	if len(results) > limit {
+		results = results[:limit]
+	}
+	return results, nil
+}
+
+func (s *PostgresVectorStore) searchInterviewKnowledgeByText(ctx context.Context, query InterviewKnowledgeVectorSearchQuery, limit int) ([]InterviewKnowledgeVectorSearchResult, error) {
+	if strings.TrimSpace(query.Text) == "" {
+		return nil, nil
+	}
+	candidateLimit := int(math.Max(float64(limit*8), 64))
+	args := []interface{}{candidateLimit}
+	where := []string{"COALESCE(status, 'active') = 'active'"}
+	if query.Category != "" {
+		args = append(args, query.Category)
+		where = append(where, fmt.Sprintf("COALESCE(metadata->>'category', '') = $%d", len(args)))
+	}
+	if query.Difficulty != "" {
+		args = append(args, query.Difficulty)
+		where = append(where, fmt.Sprintf("COALESCE(metadata->>'difficulty', '') = $%d", len(args)))
+	}
+	if len(query.QuestionRoles) > 0 {
+		args = append(args, query.QuestionRoles)
+		where = append(where, fmt.Sprintf("COALESCE(metadata->>'question_role', '') = ANY($%d)", len(args)))
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT atom_id, atom_version, doc_type, doc_key, doc_text, text_hash,
+		       COALESCE(metadata, '{}'::jsonb), COALESCE(embedding_model, ''), COALESCE(embedding_dim, 0),
+		       COALESCE(status, 'active')
+		FROM interview_knowledge_vector_documents
+		WHERE `+strings.Join(where, " AND ")+`
+		ORDER BY updated_at DESC
+		LIMIT $1
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	results := []InterviewKnowledgeVectorSearchResult{}
+	for rows.Next() {
+		var doc ai.InterviewKnowledgeVectorDocument
+		var metadataBytes []byte
+		if err := rows.Scan(&doc.AtomID, &doc.AtomVersion, &doc.DocType, &doc.DocKey, &doc.DocText, &doc.TextHash, &metadataBytes, &doc.EmbeddingModel, &doc.EmbeddingDim, &doc.Status); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(metadataBytes, &doc.Metadata)
+		score := interviewKnowledgeVectorDocumentScore(query, doc)
+		if score <= 0 {
+			continue
+		}
+		results = append(results, InterviewKnowledgeVectorSearchResult{Document: doc, Score: score})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sortInterviewKnowledgeVectorResults(results)
 	if len(results) > limit {
 		results = results[:limit]
 	}

@@ -41,6 +41,8 @@ type User struct {
 type UserProfile struct {
 	TargetLevel      string         `json:"target_level"`
 	PreferredDomains []string       `json:"preferred_domains"`
+	ResumeSummary    string         `json:"resume_summary,omitempty"`
+	ProjectSummary   string         `json:"project_summary,omitempty"`
 	CapabilityRadar  map[string]int `json:"capability_radar"`
 	WeakPoints       []WeakPoint    `json:"weak_points"`
 	TotalStats       TotalStats     `json:"total_stats"`
@@ -361,6 +363,9 @@ type InterviewSession struct {
 	Status                string                                `json:"status"`
 	CurrentRound          int                                   `json:"current_round"`
 	MaxRounds             int                                   `json:"max_rounds"`
+	DifficultyLevel       string                                `json:"difficulty_level,omitempty"`
+	FocusAreas            []string                              `json:"focus_areas,omitempty"`
+	SetupNotes            string                                `json:"setup_notes,omitempty"`
 	Submissions           []InterviewSubmission                 `json:"submissions"`
 	Evaluations           []InterviewEvaluation                 `json:"evaluations"`
 	FollowUpQuestion      string                                `json:"follow_up_question,omitempty"`
@@ -397,6 +402,9 @@ type InterviewEvaluation struct {
 	FollowUpTriggered bool           `json:"follow_up_triggered"`
 	FollowUpQuestion  string         `json:"follow_up_question,omitempty"`
 	FollowUpType      string         `json:"follow_up_type,omitempty"`
+	FollowUpSubject   string         `json:"follow_up_subject,omitempty"`
+	FallbackUsed      bool           `json:"fallback_used,omitempty"`
+	RetrievedSubjects []string       `json:"retrieved_subjects,omitempty"`
 	AgentTrace        *AgentTrace    `json:"agent_trace,omitempty"`
 	CreatedAt         time.Time      `json:"created_at"`
 }

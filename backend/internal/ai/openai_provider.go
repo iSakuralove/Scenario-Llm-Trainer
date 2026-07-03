@@ -277,6 +277,7 @@ func interviewFeedbackPrompt(req InterviewFeedbackRequest) (string, error) {
 	if req.Question != nil {
 		questionText = req.Question.Description
 	}
+	sessionContext := interviewSessionContext(req)
 	return renderPrompt("interview_feedback", map[string]interface{}{
 		"FollowInstruction": followInstruction,
 		"ReportInstruction": reportInstruction,
@@ -284,7 +285,57 @@ func interviewFeedbackPrompt(req InterviewFeedbackRequest) (string, error) {
 		"Answer":            req.Answer,
 		"TotalScore":        req.Evaluation.TotalScore,
 		"DimensionScores":   req.Evaluation.DimensionScores,
+		"SessionContext":    sessionContext,
 	})
+}
+
+func interviewSessionContext(req InterviewFeedbackRequest) string {
+	parts := []string{}
+	if value := strings.TrimSpace(req.DifficultyLevel); value != "" {
+		parts = append(parts, "本场难度倾向："+interviewDifficultyLevelLabel(value))
+	}
+	if labels := interviewFocusAreaPromptLabels(req.FocusAreas); len(labels) > 0 {
+		parts = append(parts, "本场考察重点："+strings.Join(labels, "、"))
+	}
+	if value := strings.TrimSpace(req.SetupNotes); value != "" {
+		parts = append(parts, "本场准备备注："+value)
+	}
+	if value := strings.TrimSpace(req.RetrievalSummary); value != "" {
+		parts = append(parts, "追问规划摘要："+value)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func interviewDifficultyLevelLabel(value string) string {
+	switch strings.TrimSpace(value) {
+	case "foundation":
+		return "偏基础，优先确认概念和表达结构"
+	case "standard":
+		return "标准难度，兼顾准确性、完整性和落地性"
+	case "challenge":
+		return "偏挑战，追问更关注边界、权衡和线上风险"
+	default:
+		return value
+	}
+}
+
+func interviewFocusAreaPromptLabels(values []string) []string {
+	labels := []string{}
+	for _, value := range values {
+		switch strings.TrimSpace(value) {
+		case "technical_accuracy":
+			labels = append(labels, "技术准确性")
+		case "logical_completeness":
+			labels = append(labels, "逻辑完整性")
+		case "solution_feasibility":
+			labels = append(labels, "方案可落地性")
+		case "depth_breadth":
+			labels = append(labels, "深度与广度")
+		case "expression_structure":
+			labels = append(labels, "表达结构")
+		}
+	}
+	return labels
 }
 
 func (p *OpenAICompatibleProvider) completeJSON(ctx context.Context, prompt string, schemaName string, target interface{}) error {

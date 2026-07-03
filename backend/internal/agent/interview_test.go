@@ -32,8 +32,8 @@ func TestInterviewAgentCreatesSafeTrace(t *testing.T) {
 	if result.Trace.Agent != "interview_agent" || result.Evaluation.AgentTrace == nil {
 		t.Fatalf("expected interview trace: %#v", result.Trace)
 	}
-	if result.Trace.ToolCount != 5 {
-		t.Fatalf("expected 5 tool steps, got %d", result.Trace.ToolCount)
+	if result.Trace.ToolCount != 6 {
+		t.Fatalf("expected 6 tool steps, got %d", result.Trace.ToolCount)
 	}
 	if result.Provider != "mock" || !result.Validated {
 		t.Fatalf("expected llm meta to be retained: %#v", result)

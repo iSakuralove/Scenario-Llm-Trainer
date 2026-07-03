@@ -20,9 +20,12 @@ func (s *Server) handleInterviews(w http.ResponseWriter, r *http.Request, user *
 	}
 	if len(parts) == 1 && parts[0] == "sessions" && r.Method == http.MethodPost {
 		var req struct {
-			Domain       string `json:"domain"`
-			Difficulty   string `json:"difficulty"`
-			QuestionType string `json:"question_type"`
+			Domain          string   `json:"domain"`
+			Difficulty      string   `json:"difficulty"`
+			QuestionType    string   `json:"question_type"`
+			DifficultyLevel string   `json:"difficulty_level"`
+			FocusAreas      []string `json:"focus_areas"`
+			SetupNotes      string   `json:"setup_notes"`
 		}
 		if !decode(w, r, &req) {
 			return
@@ -30,21 +33,33 @@ func (s *Server) handleInterviews(w http.ResponseWriter, r *http.Request, user *
 		req.Domain = strings.TrimSpace(req.Domain)
 		req.Difficulty = strings.TrimSpace(req.Difficulty)
 		req.QuestionType = strings.TrimSpace(req.QuestionType)
+		req.DifficultyLevel = strings.TrimSpace(req.DifficultyLevel)
+		req.SetupNotes = truncateText(req.SetupNotes, 2000)
 		if req.Domain == "" || req.Difficulty == "" || req.QuestionType == "" {
 			writeError(w, http.StatusBadRequest, "domain, difficulty and question_type are required")
 			return
 		}
-		question, ok := s.store.FindInterviewQuestion(req.Domain, req.Difficulty, req.QuestionType)
+		focusAreas, err := normalizeInterviewFocusAreas(req.FocusAreas)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		question, questionSnapshot, ok := s.selectInterviewOpeningQuestion(req.Domain, req.Difficulty, req.QuestionType)
 		if !ok {
 			writeError(w, http.StatusNotFound, "interview question not found")
 			return
 		}
 		session := s.store.CreateInterviewSession(user.ID, question)
+		session.DifficultyLevel = req.DifficultyLevel
+		session.FocusAreas = focusAreas
+		session.SetupNotes = req.SetupNotes
+		session.QuestionSnapshot = questionSnapshot
+		s.store.SaveInterviewSession(session)
 		writeOK(w, map[string]interface{}{
 			"session_id": session.ID,
 			"status":     session.Status,
 			"question":   interviewQuestionView(question, user),
-			"session":    session,
+			"session":    interviewSessionView(session),
 		})
 		return
 	}
@@ -55,14 +70,14 @@ func (s *Server) handleInterviews(w http.ResponseWriter, r *http.Request, user *
 			writeError(w, http.StatusNotFound, "interview session not found")
 			return
 		}
-		question, ok := s.store.GetInterviewQuestion(session.QuestionID)
+		question, ok := s.resolveInterviewSessionQuestion(session)
 		if !ok {
 			writeError(w, http.StatusNotFound, "interview question not found")
 			return
 		}
 		hydrateInterviewSubmissionAssets(s.store, session)
 		writeOK(w, map[string]interface{}{
-			"session":  session,
+			"session":  interviewSessionView(session),
 			"question": interviewQuestionView(question, user),
 		})
 		return
@@ -105,14 +120,15 @@ func (s *Server) handleInterviews(w http.ResponseWriter, r *http.Request, user *
 				writeError(w, http.StatusNotFound, "interview session not found")
 				return
 			}
-			question, _ := s.store.GetInterviewQuestion(session.QuestionID)
+			question, _ := s.resolveInterviewSessionQuestion(session)
 			hydrateInterviewSubmissionAssets(s.store, session)
 			writeOK(w, map[string]interface{}{
-				"session":      session,
-				"question":     interviewQuestionView(question, user),
-				"radar_data":   radarData(session),
-				"final_score":  session.FinalScore,
-				"final_report": session.FinalReport,
+				"session":           interviewSessionView(session),
+				"question":          interviewQuestionView(question, user),
+				"radar_data":        radarData(session),
+				"final_score":       session.FinalScore,
+				"final_report":      session.FinalReport,
+				"retrieval_summary": buildInterviewReportRetrievalSummary(session),
 			})
 			return
 		}
@@ -147,6 +163,51 @@ type interviewLaunchpadDomain struct {
 }
 
 func (s *Server) interviewLaunchpad() map[string]interface{} {
+	atomTracks := s.interviewLaunchpadAtomTracks()
+	if len(atomTracks) > 0 {
+		domainCounts := map[string]int{}
+		difficulties := []string{}
+		questionTypes := []string{}
+		publishedCount := 0
+		indexedCount := 0
+		for _, track := range atomTracks {
+			domainCounts[track.Domain]++
+			difficulties = append(difficulties, track.Difficulty)
+			questionTypes = append(questionTypes, track.QuestionType)
+			publishedCount += track.PublishedCount
+			indexedCount += track.IndexedCount
+		}
+		domains := make([]interviewLaunchpadDomain, 0, len(domainCounts))
+		for domainName, count := range domainCounts {
+			domains = append(domains, interviewLaunchpadDomain{
+				Value:          domainName,
+				Label:          interviewLaunchpadDomainLabel(domainName),
+				Group:          "题库开放",
+				Note:           fmt.Sprintf("%d 个训练入口", count),
+				OpenTrackCount: count,
+			})
+		}
+		sort.Slice(domains, func(i, j int) bool {
+			return domains[i].Value < domains[j].Value
+		})
+		return map[string]interface{}{
+			"summary": map[string]interface{}{
+				"open_track_count":     len(atomTracks),
+				"published_atom_count": publishedCount,
+				"indexed_atom_count":   indexedCount,
+				"fallback_mode":        false,
+				"message":              "当前训练轨道来自正式题库；索引未命中的追问会自动回退规则链路。",
+			},
+			"domains":     domains,
+			"open_tracks": atomTracks,
+			"coverage": map[string]interface{}{
+				"domains":        uniqueStrings(keysFromCounts(domainCounts)),
+				"difficulties":   uniqueStrings(difficulties),
+				"question_types": uniqueStrings(questionTypes),
+			},
+			"fallback_mode": false,
+		}
+	}
 	tracks := []interviewLaunchpadTrack{}
 	domainCounts := map[string]int{}
 	difficulties := []string{}
@@ -203,6 +264,87 @@ func (s *Server) interviewLaunchpad() map[string]interface{} {
 		},
 		"fallback_mode": true,
 	}
+}
+
+func (s *Server) interviewLaunchpadAtomTracks() []interviewLaunchpadTrack {
+	atoms := s.store.ListInterviewKnowledgeAtoms(domain.InterviewKnowledgeAtomFilter{Status: "published"})
+	type bucket struct {
+		category     string
+		difficulty   string
+		domainLabel  string
+		published    int
+		indexed      int
+		roles        []string
+		subjects     []string
+		latestUpdate time.Time
+	}
+	buckets := map[string]*bucket{}
+	for _, atom := range atoms {
+		if atom.QuestionRole != "opening" && atom.QuestionRole != "mixed" {
+			continue
+		}
+		category := firstNonEmpty(atom.Category, atom.Domain)
+		if category == "" || atom.Difficulty == "" {
+			continue
+		}
+		key := category + ":" + atom.Difficulty
+		item := buckets[key]
+		if item == nil {
+			item = &bucket{category: category, difficulty: atom.Difficulty, domainLabel: interviewLaunchpadDomainLabel(category)}
+			buckets[key] = item
+		}
+		item.published++
+		if atom.VectorStatus == "indexed" {
+			item.indexed++
+		}
+		item.roles = append(item.roles, atom.QuestionRole)
+		item.subjects = append(item.subjects, firstNonEmpty(atom.Subject, atom.Title))
+		if atom.UpdatedAt.After(item.latestUpdate) {
+			item.latestUpdate = atom.UpdatedAt
+		}
+	}
+	tracks := make([]interviewLaunchpadTrack, 0, len(buckets))
+	for _, item := range buckets {
+		vectorSummary := "pending_or_failed"
+		if item.indexed == item.published {
+			vectorSummary = "indexed"
+		} else if item.indexed > 0 {
+			vectorSummary = "partial_indexed"
+		}
+		subjects := uniqueStrings(item.subjects)
+		if len(subjects) > 3 {
+			subjects = subjects[:3]
+		}
+		details := []string{"题库开场题", fmt.Sprintf("published %d", item.published)}
+		if item.indexed > 0 {
+			details = append(details, fmt.Sprintf("indexed %d", item.indexed))
+		} else {
+			details = append(details, "追问检索可回退")
+		}
+		tracks = append(tracks, interviewLaunchpadTrack{
+			ID:                  fmt.Sprintf("interview-bank-%s-%s", item.category, strings.ToLower(item.difficulty)),
+			Title:               fmt.Sprintf("%s %s", item.domainLabel, item.difficulty),
+			Domain:              item.category,
+			DomainLabel:         item.domainLabel,
+			Category:            item.category,
+			Difficulty:          item.difficulty,
+			QuestionType:        "principle",
+			QuestionRole:        "opening",
+			Summary:             firstNonEmpty(strings.Join(subjects, " / "), "正式题库开放组合"),
+			Details:             details,
+			PublishedCount:      item.published,
+			IndexedCount:        item.indexed,
+			AvailabilityState:   "available",
+			VectorStatusSummary: vectorSummary,
+		})
+	}
+	sort.Slice(tracks, func(i, j int) bool {
+		if tracks[i].Domain == tracks[j].Domain {
+			return tracks[i].Difficulty < tracks[j].Difficulty
+		}
+		return tracks[i].Domain < tracks[j].Domain
+	})
+	return tracks
 }
 
 type interviewLaunchpadSeed struct {
@@ -299,7 +441,7 @@ func (s *Server) handleInterviewSubmission(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusConflict, "interview session is already completed")
 		return
 	}
-	question, ok := s.store.GetInterviewQuestion(session.QuestionID)
+	question, ok := s.resolveInterviewSessionQuestion(session)
 	if !ok {
 		if writer != nil {
 			writer.fail("interview question not found")
@@ -412,7 +554,7 @@ func (s *Server) handleInterviewSubmission(w http.ResponseWriter, r *http.Reques
 		payload := map[string]interface{}{
 			"evaluation":     evaluation,
 			"session_status": session.Status,
-			"session":        session,
+			"session":        interviewSessionView(session),
 		}
 		if writer != nil {
 			writer.stage("agent_intent", decision.Message)
@@ -431,6 +573,7 @@ func (s *Server) handleInterviewSubmission(w http.ResponseWriter, r *http.Reques
 		Feedback: func(ctx context.Context, feedbackReq ai.InterviewFeedbackRequest, _ func(string)) (ai.InterviewFeedback, ai.CallMeta, error) {
 			return s.llmRouter().GenerateInterviewFeedbackStream(ctx, feedbackReq, nil)
 		},
+		Retrieve: s.retrieveInterviewFollowUpContext,
 	})
 	agentResult, agentErr := interviewAgent.Run(r.Context(), agentruntime.InterviewRequest{
 		Session:  session,
@@ -485,7 +628,7 @@ func (s *Server) handleInterviewSubmission(w http.ResponseWriter, r *http.Reques
 	payload := map[string]interface{}{
 		"evaluation":     evaluation,
 		"session_status": session.Status,
-		"session":        session,
+		"session":        interviewSessionView(session),
 	}
 	if writer != nil {
 		writer.stage("completed", "本轮 Agent 面试完成")
@@ -527,7 +670,7 @@ func (s *Server) handleInterviewVoice(w http.ResponseWriter, r *http.Request, us
 		writeAssetValidationError(w, err)
 		return
 	}
-	question, ok := s.store.GetInterviewQuestion(session.QuestionID)
+	question, ok := s.resolveInterviewSessionQuestion(session)
 	if !ok {
 		writeError(w, http.StatusNotFound, "interview question not found")
 		return

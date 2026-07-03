@@ -427,6 +427,10 @@ func (s *MemoryStore) GetInterviewQuestion(id string) (*domain.InterviewQuestion
 func (s *MemoryStore) CreateInterviewSession(userID string, question *domain.InterviewQuestion) *domain.InterviewSession {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if question != nil {
+		copy := *question
+		s.InterviewQuestions[question.ID] = &copy
+	}
 	session := &domain.InterviewSession{
 		ID:           NewID(),
 		UserID:       userID,
@@ -452,8 +456,7 @@ func (s *MemoryStore) GetInterviewSession(id string) (*domain.InterviewSession, 
 func (s *MemoryStore) SaveInterviewSession(session *domain.InterviewSession) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	copy := *session
-	s.InterviewSessions[session.ID] = &copy
+	s.InterviewSessions[session.ID] = cloneInterviewSession(session)
 }
 
 func (s *MemoryStore) ListInterviewSessionsForUser(userID string) []domain.InterviewSession {
@@ -1463,10 +1466,40 @@ func cloneInterviewSession(session *domain.InterviewSession) *domain.InterviewSe
 		return nil
 	}
 	copy := *session
+	copy.FocusAreas = append([]string{}, session.FocusAreas...)
 	copy.Submissions = append([]domain.InterviewSubmission{}, session.Submissions...)
-	copy.Evaluations = append([]domain.InterviewEvaluation{}, session.Evaluations...)
+	copy.Evaluations = make([]domain.InterviewEvaluation, 0, len(session.Evaluations))
+	for _, evaluation := range session.Evaluations {
+		copy.Evaluations = append(copy.Evaluations, cloneInterviewEvaluation(evaluation))
+	}
+	copy.QuestionSnapshot = cloneInterviewQuestionSnapshot(session.QuestionSnapshot)
 	copy.SelectedAtomSnapshots = cloneInterviewKnowledgeAtomLightSnapshots(session.SelectedAtomSnapshots)
 	return &copy
+}
+
+func cloneInterviewEvaluation(evaluation domain.InterviewEvaluation) domain.InterviewEvaluation {
+	if evaluation.DimensionScores != nil {
+		dimensionScores := map[string]int{}
+		for key, value := range evaluation.DimensionScores {
+			dimensionScores[key] = value
+		}
+		evaluation.DimensionScores = dimensionScores
+	}
+	evaluation.Highlights = append([]string{}, evaluation.Highlights...)
+	evaluation.Deficiencies = append([]string{}, evaluation.Deficiencies...)
+	evaluation.RetrievedSubjects = append([]string{}, evaluation.RetrievedSubjects...)
+	return evaluation
+}
+
+func cloneInterviewQuestionSnapshot(snapshot domain.InterviewQuestionSnapshot) domain.InterviewQuestionSnapshot {
+	snapshot.Tags = append([]string{}, snapshot.Tags...)
+	snapshot.Principles = append([]string{}, snapshot.Principles...)
+	snapshot.Pitfalls = append([]string{}, snapshot.Pitfalls...)
+	snapshot.FollowUpPaths = append([]string{}, snapshot.FollowUpPaths...)
+	snapshot.ReferenceKeywords = append([]string{}, snapshot.ReferenceKeywords...)
+	snapshot.EvaluationDimensions = append([]domain.EvaluationDimension{}, snapshot.EvaluationDimensions...)
+	snapshot.FollowUpStrategies = append([]domain.FollowUpStrategy{}, snapshot.FollowUpStrategies...)
+	return snapshot
 }
 
 func containsFold(items []string, needle string) bool {

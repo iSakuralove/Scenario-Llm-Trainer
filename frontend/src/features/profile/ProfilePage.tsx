@@ -14,8 +14,12 @@ export function ProfilePage() {
   const setSession = useAuthStore((state) => state.setSession)
   const savedTargetLevel = user?.profile.target_level ?? 'intermediate'
   const savedPreferredDomains = user?.profile.preferred_domains ?? ['database', 'network', 'os']
+  const savedResumeSummary = user?.profile.resume_summary ?? ''
+  const savedProjectSummary = user?.profile.project_summary ?? ''
   const [targetLevelDraft, setTargetLevelDraft] = useState(savedTargetLevel)
   const [domainTextDraft, setDomainTextDraft] = useState(savedPreferredDomains.join(','))
+  const [resumeSummaryDraft, setResumeSummaryDraft] = useState(savedResumeSummary)
+  const [projectSummaryDraft, setProjectSummaryDraft] = useState(savedProjectSummary)
   const [communityPosts, setCommunityPosts] = useState<CommunityPost[]>([])
   const [message, setMessage] = useState('')
   const [historyError, setHistoryError] = useState('')
@@ -38,7 +42,12 @@ export function ProfilePage() {
   }, [token])
 
   async function save() {
-    const updated = await api.updateProfile(token, targetLevelDraft, domainTextDraft.split(',').map((item) => item.trim()).filter(Boolean))
+    const updated = await api.updateProfile(token, {
+      target_level: targetLevelDraft,
+      preferred_domains: domainTextDraft.split(',').map((item) => item.trim()).filter(Boolean),
+      resume_summary: resumeSummaryDraft,
+      project_summary: projectSummaryDraft,
+    })
     const latestAuth = useAuthStore.getState()
     setSession(updated, latestAuth.token, latestAuth.refreshToken)
     setMessage('已保存个人档案')
@@ -99,6 +108,22 @@ export function ProfilePage() {
               { value: 'architect', label: '架构师' },
             ]} /></label>
             <label>偏好专业域<input value={domainTextDraft} onChange={(event) => setDomainTextDraft(event.target.value)} placeholder="database,network,os" /></label>
+            <label>
+              简历摘要
+              <textarea
+                value={resumeSummaryDraft}
+                onChange={(event) => setResumeSummaryDraft(event.target.value)}
+                placeholder="例如：做过 MySQL 慢查询治理、缓存一致性治理和线上故障排查。"
+              />
+            </label>
+            <label>
+              项目经历摘要
+              <textarea
+                value={projectSummaryDraft}
+                onChange={(event) => setProjectSummaryDraft(event.target.value)}
+                placeholder="例如：负责核心订单链路、性能压测和发布回滚预案。"
+              />
+            </label>
             <div className="profile-settings-actions">
               <button className="primary-button compact" onClick={() => void save()}><CheckCircle2 size={16} />保存设置</button>
               {message && <span className="success-line">{message}</span>}

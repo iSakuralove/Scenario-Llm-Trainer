@@ -82,6 +82,9 @@ CREATE TABLE IF NOT EXISTS interview_sessions (
     status VARCHAR(50) DEFAULT 'question_presented',
     current_round INT DEFAULT 1,
     max_rounds INT DEFAULT 3,
+    difficulty_level VARCHAR(16),
+    focus_areas TEXT[] DEFAULT '{}',
+    setup_notes TEXT,
     submissions JSONB DEFAULT '[]',
     evaluations JSONB DEFAULT '[]',
     follow_up_question TEXT,
@@ -288,6 +291,9 @@ ALTER TABLE IF EXISTS scenario_sessions ADD COLUMN IF NOT EXISTS no_new_clue_str
 ALTER TABLE IF EXISTS scenario_sessions ADD COLUMN IF NOT EXISTS conversation_summary TEXT DEFAULT '';
 ALTER TABLE IF EXISTS interview_questions ADD COLUMN IF NOT EXISTS reference_keywords TEXT[];
 ALTER TABLE IF EXISTS interview_sessions ADD COLUMN IF NOT EXISTS follow_up_question TEXT;
+ALTER TABLE IF EXISTS interview_sessions ADD COLUMN IF NOT EXISTS difficulty_level VARCHAR(16);
+ALTER TABLE IF EXISTS interview_sessions ADD COLUMN IF NOT EXISTS focus_areas TEXT[] DEFAULT '{}';
+ALTER TABLE IF EXISTS interview_sessions ADD COLUMN IF NOT EXISTS setup_notes TEXT;
 ALTER TABLE IF EXISTS interview_sessions ADD COLUMN IF NOT EXISTS question_snapshot JSONB DEFAULT '{}';
 ALTER TABLE IF EXISTS interview_sessions ADD COLUMN IF NOT EXISTS selected_atom_snapshots JSONB DEFAULT '[]';
 ALTER TABLE IF EXISTS community_posts ADD COLUMN IF NOT EXISTS reviewed_by TEXT;

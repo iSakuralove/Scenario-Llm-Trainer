@@ -1,3 +1,5 @@
+import type { InterviewDifficultyLevel, InterviewFocusArea } from '../../types'
+
 export type InterviewQuestionType = 'scenario_analysis' | 'principle'
 
 export interface InterviewLevelOption {
@@ -24,6 +26,38 @@ export interface InterviewLaunchTrack {
   summary: string
   details: string[]
 }
+
+export interface InterviewDifficultyLevelOption {
+  value: InterviewDifficultyLevel
+  label: string
+  note: string
+}
+
+export interface InterviewFocusAreaOption {
+  value: InterviewFocusArea
+  label: string
+  note: string
+}
+
+export const interviewDifficultyLevelOptions: InterviewDifficultyLevelOption[] = [
+  { value: 'standard', label: '标准', note: '按岗位级别正常追问' },
+  { value: 'foundation', label: '偏基础', note: '先确认概念和表达结构' },
+  { value: 'challenge', label: '偏挑战', note: '强化边界、权衡与风险' },
+]
+
+export const interviewFocusAreaOptions: InterviewFocusAreaOption[] = [
+  { value: 'technical_accuracy', label: '技术准确性', note: '概念、命令、机制和判断' },
+  { value: 'logical_completeness', label: '逻辑完整性', note: '排查链路、因果关系和步骤' },
+  { value: 'solution_feasibility', label: '方案可落地性', note: '验证、回滚、风险控制' },
+  { value: 'depth_breadth', label: '深度与广度', note: '原理、边界情况和关联知识' },
+  { value: 'expression_structure', label: '表达结构', note: '层次、重点和术语组织' },
+]
+
+export const defaultInterviewFocusAreas: InterviewFocusArea[] = [
+  'technical_accuracy',
+  'logical_completeness',
+  'solution_feasibility',
+]
 
 export const interviewLevels: InterviewLevelOption[] = [
   {

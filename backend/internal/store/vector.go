@@ -75,6 +75,7 @@ type VectorStore interface {
 	UpsertDocuments(context.Context, []ai.ScenarioVectorDocument) error
 	UpsertInterviewKnowledgeDocuments(context.Context, []ai.InterviewKnowledgeVectorDocument) error
 	Search(context.Context, VectorSearchQuery) ([]VectorSearchResult, error)
+	SearchInterviewKnowledge(context.Context, InterviewKnowledgeVectorSearchQuery) ([]InterviewKnowledgeVectorSearchResult, error)
 	DeleteByQuestion(context.Context, string) error
 	DeleteInterviewKnowledgeByAtom(context.Context, string) error
 	RebuildScenarioIndex(context.Context, []ai.ScenarioVectorDocument) error
@@ -91,6 +92,20 @@ type VectorSearchQuery struct {
 
 type VectorSearchResult struct {
 	Document ai.ScenarioVectorDocument
+	Score    float64
+}
+
+type InterviewKnowledgeVectorSearchQuery struct {
+	Category      string
+	Difficulty    string
+	QuestionRoles []string
+	Text          string
+	Vector        []float64
+	Limit         int
+}
+
+type InterviewKnowledgeVectorSearchResult struct {
+	Document ai.InterviewKnowledgeVectorDocument
 	Score    float64
 }
 
@@ -180,7 +195,59 @@ func (s *MemoryVectorStore) Search(_ context.Context, query VectorSearchQuery) (
 	return results, nil
 }
 
+func (s *MemoryVectorStore) SearchInterviewKnowledge(_ context.Context, query InterviewKnowledgeVectorSearchQuery) ([]InterviewKnowledgeVectorSearchResult, error) {
+	if s == nil {
+		return nil, nil
+	}
+	limit := query.Limit
+	if limit <= 0 {
+		limit = 5
+	}
+	roleSet := map[string]bool{}
+	for _, role := range query.QuestionRoles {
+		if trimmed := strings.TrimSpace(role); trimmed != "" {
+			roleSet[trimmed] = true
+		}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	results := []InterviewKnowledgeVectorSearchResult{}
+	for _, doc := range s.knowledgeDocs {
+		if query.Category != "" && doc.Metadata["category"] != query.Category {
+			continue
+		}
+		if query.Difficulty != "" && doc.Metadata["difficulty"] != query.Difficulty {
+			continue
+		}
+		if len(roleSet) > 0 && !roleSet[doc.Metadata["question_role"]] {
+			continue
+		}
+		score := interviewKnowledgeVectorDocumentScore(query, doc)
+		if score <= 0 {
+			continue
+		}
+		results = append(results, InterviewKnowledgeVectorSearchResult{
+			Document: cloneInterviewKnowledgeVectorDocument(doc),
+			Score:    score,
+		})
+	}
+	sortInterviewKnowledgeVectorResults(results)
+	if len(results) > limit {
+		results = results[:limit]
+	}
+	return results, nil
+}
+
 func sortVectorResults(results []VectorSearchResult) {
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Score == results[j].Score {
+			return results[i].Document.DocKey < results[j].Document.DocKey
+		}
+		return results[i].Score > results[j].Score
+	})
+}
+
+func sortInterviewKnowledgeVectorResults(results []InterviewKnowledgeVectorSearchResult) {
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].Score == results[j].Score {
 			return results[i].Document.DocKey < results[j].Document.DocKey
@@ -244,6 +311,21 @@ func vectorDocumentScore(query VectorSearchQuery, doc ai.ScenarioVectorDocument)
 	if strings.TrimSpace(query.Text) != "" {
 		if strings.Contains(strings.ToLower(doc.DocText), strings.ToLower(strings.TrimSpace(query.Text))) ||
 			strings.Contains(strings.ToLower(strings.TrimSpace(query.Text)), strings.ToLower(doc.DocText)) {
+			return 1
+		}
+		return ai.Similarity(query.Text, doc.DocText)
+	}
+	return 0
+}
+
+func interviewKnowledgeVectorDocumentScore(query InterviewKnowledgeVectorSearchQuery, doc ai.InterviewKnowledgeVectorDocument) float64 {
+	if len(query.Vector) > 0 && len(doc.Vector) == len(query.Vector) {
+		return ai.CosineSimilarity(query.Vector, doc.Vector)
+	}
+	if strings.TrimSpace(query.Text) != "" {
+		lowerText := strings.ToLower(strings.TrimSpace(query.Text))
+		lowerDoc := strings.ToLower(doc.DocText)
+		if strings.Contains(lowerDoc, lowerText) || strings.Contains(lowerText, lowerDoc) {
 			return 1
 		}
 		return ai.Similarity(query.Text, doc.DocText)

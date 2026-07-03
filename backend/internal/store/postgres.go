@@ -568,6 +568,9 @@ func (s *PostgresStore) GetInterviewQuestion(id string) (*domain.InterviewQuesti
 }
 
 func (s *PostgresStore) CreateInterviewSession(userID string, question *domain.InterviewQuestion) *domain.InterviewSession {
+	if question != nil {
+		_ = s.upsertInterviewQuestion(context.Background(), *question)
+	}
 	session := &domain.InterviewSession{
 		ID:           NewID(),
 		UserID:       userID,
@@ -585,7 +588,8 @@ func (s *PostgresStore) CreateInterviewSession(userID string, question *domain.I
 
 func (s *PostgresStore) GetInterviewSession(id string) (*domain.InterviewSession, bool) {
 	row := s.pool.QueryRow(context.Background(), `
-		SELECT id, user_id, question_id, status, current_round, max_rounds, submissions,
+		SELECT id, user_id, question_id, status, current_round, max_rounds, difficulty_level, focus_areas, COALESCE(setup_notes, ''),
+		       submissions,
 		       evaluations, follow_up_question, final_score, final_report,
 		       COALESCE(question_snapshot, '{}'::jsonb), COALESCE(selected_atom_snapshots, '[]'::jsonb),
 		       started_at, ended_at
@@ -601,7 +605,8 @@ func (s *PostgresStore) SaveInterviewSession(session *domain.InterviewSession) {
 
 func (s *PostgresStore) ListInterviewSessionsForUser(userID string) []domain.InterviewSession {
 	rows, err := s.pool.Query(context.Background(), `
-		SELECT id, user_id, question_id, status, current_round, max_rounds, submissions,
+		SELECT id, user_id, question_id, status, current_round, max_rounds, difficulty_level, focus_areas, COALESCE(setup_notes, ''),
+		       submissions,
 		       evaluations, follow_up_question, final_score, final_report,
 		       COALESCE(question_snapshot, '{}'::jsonb), COALESCE(selected_atom_snapshots, '[]'::jsonb),
 		       started_at, ended_at
@@ -1508,14 +1513,17 @@ func (s *PostgresStore) upsertInterviewSession(ctx context.Context, session *dom
 	}
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO interview_sessions
-		    (id, user_id, question_id, status, current_round, max_rounds, submissions,
+		    (id, user_id, question_id, status, current_round, max_rounds, difficulty_level, focus_areas, setup_notes, submissions,
 		     evaluations, follow_up_question, final_score, final_report, question_snapshot,
 		     selected_atom_snapshots, started_at, ended_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 		ON CONFLICT (id) DO UPDATE SET
 		    status = EXCLUDED.status,
 		    current_round = EXCLUDED.current_round,
 		    max_rounds = EXCLUDED.max_rounds,
+		    difficulty_level = EXCLUDED.difficulty_level,
+		    focus_areas = EXCLUDED.focus_areas,
+		    setup_notes = EXCLUDED.setup_notes,
 		    submissions = EXCLUDED.submissions,
 		    evaluations = EXCLUDED.evaluations,
 		    follow_up_question = EXCLUDED.follow_up_question,
@@ -1525,9 +1533,9 @@ func (s *PostgresStore) upsertInterviewSession(ctx context.Context, session *dom
 		    selected_atom_snapshots = EXCLUDED.selected_atom_snapshots,
 		    ended_at = EXCLUDED.ended_at
 	`, session.ID, session.UserID, session.QuestionID, session.Status, session.CurrentRound,
-		session.MaxRounds, submissionsJSON, evaluationsJSON, emptyToNil(session.FollowUpQuestion),
-		zeroToNil(session.FinalScore), emptyToNil(session.FinalReport), questionSnapshotJSON,
-		selectedAtomSnapshotsJSON, session.StartedAt, session.EndedAt)
+		session.MaxRounds, emptyToNil(session.DifficultyLevel), session.FocusAreas, emptyToNil(session.SetupNotes),
+		submissionsJSON, evaluationsJSON, emptyToNil(session.FollowUpQuestion), zeroToNil(session.FinalScore),
+		emptyToNil(session.FinalReport), questionSnapshotJSON, selectedAtomSnapshotsJSON, session.StartedAt, session.EndedAt)
 	return err
 }
 
@@ -1789,8 +1797,9 @@ func scanInterviewSessionScanner(row scanner) (domain.InterviewSession, error) {
 	var finalScore *int
 	var endedAt *time.Time
 	err := row.Scan(&item.ID, &item.UserID, &item.QuestionID, &item.Status, &item.CurrentRound,
-		&item.MaxRounds, &submissionsJSON, &evaluationsJSON, &followUpQuestion, &finalScore,
-		&finalReport, &questionSnapshotJSON, &selectedAtomSnapshotsJSON, &item.StartedAt, &endedAt)
+		&item.MaxRounds, &item.DifficultyLevel, &item.FocusAreas, &item.SetupNotes, &submissionsJSON,
+		&evaluationsJSON, &followUpQuestion, &finalScore, &finalReport, &questionSnapshotJSON,
+		&selectedAtomSnapshotsJSON, &item.StartedAt, &endedAt)
 	if err != nil {
 		return item, err
 	}
@@ -1816,6 +1825,9 @@ func scanInterviewSessionScanner(row scanner) (domain.InterviewSession, error) {
 	}
 	if item.SelectedAtomSnapshots == nil {
 		item.SelectedAtomSnapshots = []domain.InterviewKnowledgeAtomLightSnapshot{}
+	}
+	if item.FocusAreas == nil {
+		item.FocusAreas = []string{}
 	}
 	return item, nil
 }

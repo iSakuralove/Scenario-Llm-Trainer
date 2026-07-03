@@ -160,10 +160,14 @@ type ScenarioContextMessage struct {
 }
 
 type InterviewFeedbackRequest struct {
-	Question   *domain.InterviewQuestion
-	Answer     string
-	Evaluation domain.InterviewEvaluation
-	NeedReport bool
+	Question         *domain.InterviewQuestion
+	Answer           string
+	Evaluation       domain.InterviewEvaluation
+	NeedReport       bool
+	DifficultyLevel  string
+	FocusAreas       []string
+	SetupNotes       string
+	RetrievalSummary string
 }
 
 type SensitiveCheckRequest struct {

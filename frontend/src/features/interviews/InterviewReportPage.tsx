@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { ClipboardList, FileText, MessageSquareText, Mic, Radar } from 'lucide-react'
+import { ClipboardList, FileText, MessageSquareText, Mic, Radar, Route } from 'lucide-react'
 import { PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar as RadarShape, RadarChart, ResponsiveContainer } from 'recharts'
 import { api } from '../../api/client'
 import { HeaderBlock, Loading, Metric, PrintButton } from '../../components/common'
@@ -84,6 +84,26 @@ export function InterviewReportPage() {
           <p>{report.question.description}</p>
         </div>
       </section>
+      <section className="panel report-retrieval-summary" data-testid="interview-retrieval-summary">
+        <div className="panel-title"><Route size={18} /> 追问检索摘要</div>
+        <p>{report.retrieval_summary?.summary_text || '本场暂无追问检索记录。'}</p>
+        <div className="report-retrieval-metrics">
+          <span>考察点 {report.retrieval_summary?.subject_count ?? 0}</span>
+          <span>命中 {report.retrieval_summary?.hit_rounds ?? 0} 轮</span>
+          <span>回退 {report.retrieval_summary?.fallback_rounds ?? 0} 轮</span>
+        </div>
+        {report.retrieval_summary?.rounds?.length ? (
+          <div className="report-retrieval-rounds">
+            {report.retrieval_summary.rounds.map((round) => (
+              <div className="report-retrieval-round" key={`${round.round}-${round.subject}-${round.follow_up_type}`}>
+                <strong>第 {round.round} 轮</strong>
+                <span>{round.subject || '未记录考察点'}</span>
+                <small>{round.fallback_used ? '规则回退' : '题库命中'} · {followUpTypeLabel(round.follow_up_type)}</small>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </section>
       {isInvalidatedReport && (
         <section className="panel report-invalidated-panel">
           <div className="panel-title"><Radar size={18} /> 继续沉淀</div>
@@ -166,6 +186,18 @@ function submissionSourceLabel(source: string | undefined, type: string) {
   if (source === 'voice_edited') return '语音编辑后文本'
   if (source === 'voice_transcript' || type === 'voice') return '语音'
   return '文本'
+}
+
+function followUpTypeLabel(type: string) {
+  const labels: Record<string, string> = {
+    none: '未追问',
+    supplement: '补充追问',
+    deepen: '深化追问',
+    pressure: '压力追问',
+    guidance: '引导追问',
+    fallback_rule_only: '规则追问',
+  }
+  return labels[type] ?? type
 }
 
 function normalizeEvaluationRounds(items: Awaited<ReturnType<typeof api.interviewReport>>['session']['evaluations']) {

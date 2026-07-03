@@ -5,6 +5,10 @@
 
 {{.FollowInstruction}}
 {{.ReportInstruction}}
+{{if .SessionContext}}
+本场会话输入：
+{{.SessionContext}}
+{{end}}
 
 题目：{{.QuestionText}}
 候选人回答：{{.Answer}}

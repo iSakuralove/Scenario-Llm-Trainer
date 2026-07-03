@@ -18,6 +18,8 @@ export type UserRole = 'student' | 'instructor' | 'admin'
 export interface UserProfile {
   target_level: string
   preferred_domains: string[]
+  resume_summary?: string
+  project_summary?: string
   capability_radar: Record<string, number>
   weak_points: WeakPoint[]
   total_stats: TotalStats
@@ -706,6 +708,15 @@ export interface InterviewQuestion {
   follow_up_strategies: FollowUpStrategy[]
 }
 
+export type InterviewDifficultyLevel = 'foundation' | 'standard' | 'challenge'
+
+export type InterviewFocusArea =
+  | 'technical_accuracy'
+  | 'logical_completeness'
+  | 'solution_feasibility'
+  | 'depth_breadth'
+  | 'expression_structure'
+
 export interface EvaluationDimension {
   name: string
   weight: number
@@ -725,18 +736,62 @@ export interface InterviewSession {
   status: string
   current_round: number
   max_rounds: number
+  difficulty_level?: InterviewDifficultyLevel | string
+  focus_areas?: InterviewFocusArea[]
+  setup_notes?: string
   submissions: InterviewSubmission[]
   evaluations: InterviewEvaluation[]
   follow_up_question?: string
   final_score?: number
   final_report?: string
+  question_snapshot?: InterviewQuestionSnapshot
+  selected_atom_snapshots?: InterviewKnowledgeAtomLightSnapshot[]
   started_at?: string
   ended_at?: string
+}
+
+export interface InterviewQuestionSnapshot {
+  id: string
+  version: number
+  title: string
+  subject: string
+  description?: string
+  domain: string
+  difficulty: string
+  category?: string
+  question_role: string
+  question_type?: string
+  question_source?: string
+}
+
+export interface InterviewKnowledgeAtomLightSnapshot {
+  atom_id: string
+  version: number
+  title: string
+  subject: string
+  domain: string
+  category?: string
 }
 
 export interface InterviewSessionDetailResponse {
   session: InterviewSession
   question: InterviewQuestion
+}
+
+export interface InterviewReportRetrievalRoundSummary {
+  round: number
+  subject: string
+  fallback_used: boolean
+  follow_up_type: string
+}
+
+export interface InterviewReportRetrievalSummary {
+  summary_text: string
+  hit_rounds: number
+  fallback_rounds: number
+  subject_count: number
+  subjects: string[]
+  rounds: InterviewReportRetrievalRoundSummary[]
 }
 
 export interface InterviewSubmission {
@@ -781,6 +836,9 @@ export interface InterviewEvaluation {
   follow_up_triggered: boolean
   follow_up_question?: string
   follow_up_type?: string
+  follow_up_subject?: string
+  fallback_used?: boolean
+  retrieved_subjects?: string[]
   agent_trace?: AgentTrace
   created_at: string
 }

@@ -5,10 +5,14 @@ import { api, type InterviewLaunchpadDomain, type InterviewLaunchpadTrack } from
 import { useToken } from '../../lib/auth'
 import { domainLabel } from '../../lib/domain'
 import { formatDateTime } from '../../lib/format'
-import type { InterviewQuestion, InterviewSession } from '../../types'
+import { useAuthStore } from '../../stores/authStore'
+import type { InterviewFocusArea, InterviewQuestion, InterviewSession, User } from '../../types'
 import {
+  defaultInterviewFocusAreas,
   interviewDomains as fallbackInterviewDomains,
+  interviewDifficultyLevelOptions,
   interviewFlowSteps,
+  interviewFocusAreaOptions,
   interviewLaunchTracks as fallbackInterviewLaunchTracks,
   interviewLevels,
   interviewReportOutputs,
@@ -23,11 +27,15 @@ type LaunchpadSource = 'loading' | 'api' | 'fallback'
 export function InterviewsPage() {
   const token = useToken()
   const navigate = useNavigate()
+  const user = useAuthStore((state) => state.user)
   const [launchTracks, setLaunchTracks] = useState<InterviewLaunchTrack[]>(fallbackInterviewLaunchTracks)
   const [launchDomains, setLaunchDomains] = useState<InterviewDomainOption[]>(fallbackInterviewDomains)
   const [launchpadSource, setLaunchpadSource] = useState<LaunchpadSource>('loading')
   const [launchpadNotice, setLaunchpadNotice] = useState('正在读取后端开放组合，当前页面会在接口异常时自动使用兼容轨道。')
   const [selectedTrackId, setSelectedTrackId] = useState(fallbackInterviewLaunchTracks[0]?.id ?? '')
+  const [difficultyLevel, setDifficultyLevel] = useState(interviewDifficultyLevelOptions[0]?.value ?? 'standard')
+  const [selectedFocusAreas, setSelectedFocusAreas] = useState<InterviewFocusArea[]>(defaultInterviewFocusAreas)
+  const [setupNotes, setSetupNotes] = useState(() => interviewSetupNotesFromProfile(user))
   const [startError, setStartError] = useState('')
   const [isStarting, setIsStarting] = useState(false)
   const [historySessions, setHistorySessions] = useState<InterviewSession[]>([])
@@ -41,6 +49,8 @@ export function InterviewsPage() {
     () => launchTracks.find((track) => track.id === selectedTrackId) ?? launchTracks[0],
     [launchTracks, selectedTrackId],
   )
+
+  const profileSetupNotes = useMemo(() => interviewSetupNotesFromProfile(user), [user])
 
   useEffect(() => {
     let ignore = false
@@ -125,6 +135,15 @@ export function InterviewsPage() {
     })
   }
 
+  function toggleFocusArea(value: InterviewFocusArea) {
+    setSelectedFocusAreas((current) => {
+      if (current.includes(value)) {
+        return current.filter((item) => item !== value)
+      }
+      return [...current, value]
+    })
+  }
+
   async function start() {
     if (!selectedTrack || isStarting) return
     setStartError('')
@@ -134,6 +153,9 @@ export function InterviewsPage() {
         domain: selectedTrack.domain,
         difficulty: selectedTrack.difficulty,
         question_type: selectedTrack.questionType,
+        difficulty_level: difficultyLevel,
+        focus_areas: selectedFocusAreas,
+        setup_notes: setupNotes.trim(),
       })
       if (!matchesSelectedTrack(res.question, selectedTrack)) {
         setStartError('题目与所选训练轨道不一致，请稍后重试或联系管理员补齐题库。')
@@ -228,6 +250,50 @@ export function InterviewsPage() {
                   ))}
                 </div>
               </div>
+            </div>
+            <div className="interview-session-setup" aria-label="本场会话输入">
+              <div className="interview-setup-group">
+                <span>难度倾向</span>
+                <div className="interview-segmented-control" role="radiogroup" aria-label="本场难度倾向">
+                  {interviewDifficultyLevelOptions.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={difficultyLevel === option.value}
+                      className={difficultyLevel === option.value ? 'active' : ''}
+                      onClick={() => setDifficultyLevel(option.value)}
+                      title={option.note}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <fieldset className="interview-setup-group interview-focus-fieldset">
+                <legend>考察重点</legend>
+                <div className="interview-focus-grid">
+                  {interviewFocusAreaOptions.map((option) => (
+                    <label key={option.value} title={option.note}>
+                      <input
+                        type="checkbox"
+                        checked={selectedFocusAreas.includes(option.value)}
+                        onChange={() => toggleFocusArea(option.value)}
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <label className="interview-setup-group interview-setup-notes">
+                <span>准备备注</span>
+                <textarea
+                  value={setupNotes}
+                  onChange={(event) => setSetupNotes(event.target.value)}
+                  maxLength={2000}
+                  placeholder={profileSetupNotes || '补充本场希望强调的简历或项目背景。'}
+                />
+              </label>
             </div>
             {startError && (
               <div className="launch-error" role="alert">
@@ -448,6 +514,14 @@ export function InterviewsPage() {
 
 function matchesSelectedTrack(question: { domain: string; difficulty: string; question_type: string }, track: InterviewLaunchTrack) {
   return question.domain === track.domain && question.difficulty === track.difficulty && question.question_type === track.questionType
+}
+
+function interviewSetupNotesFromProfile(user: User | null) {
+  const parts = [
+    user?.profile.resume_summary ? `简历摘要：${user.profile.resume_summary}` : '',
+    user?.profile.project_summary ? `项目摘要：${user.profile.project_summary}` : '',
+  ].filter(Boolean)
+  return parts.join('\n')
 }
 
 function launchpadTrackToView(track: InterviewLaunchpadTrack): InterviewLaunchTrack | null {

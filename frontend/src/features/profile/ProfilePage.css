@@ -175,6 +175,7 @@
 
 .profile-settings-form select,
 .profile-settings-form input,
+.profile-settings-form textarea,
 .profile-admin-panel select {
   width: 100%;
   min-height: 44px;
@@ -184,6 +185,13 @@
   background: rgba(255, 255, 255, 0.05);
   color: #f6fafe;
   color-scheme: dark;
+}
+
+.profile-settings-form textarea {
+  min-height: 120px;
+  padding: 12px 14px;
+  resize: vertical;
+  line-height: 1.6;
 }
 
 .profile-settings-form select option,

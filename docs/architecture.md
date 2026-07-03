@@ -106,6 +106,16 @@
 
 题库向量索引采用独立的 `interview_knowledge_vector_documents` 表，不复用场景题的 `scenario_vector_documents`，避免 `question_id` / `source_version` 语义混用。重建接口只对 `status=published` 的 atom 调用 embedding 并写入向量文档；`draft` / `archived` 被请求重建时会删除旧向量文档并返回 skipped，不进入可检索索引。成功重建会将 `vector_status` 更新为 `indexed` 并写入 `last_indexed_at`；失败只将 `vector_status` 更新为 `failed`，不覆盖上一次成功索引时间，也不新增内容版本。导入发布链路仍不自动触发 embedding，避免发布接口受外部 provider 可用性影响。
 
+## 面试运行时动态追问
+
+面试运行时在旧题库兼容链路上接入正式题库原子，但保持“开场题选择”和“追问增强”两个阶段分离：
+
+- 创建面试会话仍以启动轨道的 `domain`、`difficulty`、`question_type` 决定开场题；优先选择 `status=published` 且 `question_role=opening|mixed` 的题库原子，未命中时回退旧 `InterviewQuestion`。
+- 会话级输入首期只包含 `difficulty_level`、`focus_areas[]`、`setup_notes`，不参与开场题选择，只进入追问检索和反馈生成。
+- 长期个人档案只保存 `resume_summary` 与 `project_summary`，前端可把它们合成为本场 `setup_notes` 的默认输入，但不会把本场输入回写到个人档案。
+- Agent 评分链路在五维评分之后增加追问检索步骤：检索 `followup|mixed` 且 `vector_status=indexed` 的题库原子；检索不可用、未命中或索引未就绪时回退规则追问，面试流程不中断。
+- 面试报告只展示聚合摘要和每轮 `subject`、`fallback_used`、`follow_up_type`；不展示原子正文、内部检索 query、命中片段、管理端标题细节或 selected atom 快照。
+
 ## 当前安全约束
 
 - 密码哈希使用 bcrypt，兼容旧 SHA-256 演示数据登录。

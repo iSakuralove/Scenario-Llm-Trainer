@@ -93,6 +93,62 @@
   line-height: 1.8;
 }
 
+.interview-report-page .report-retrieval-summary {
+  display: grid;
+  gap: 14px;
+}
+
+.interview-report-page .report-retrieval-summary p {
+  max-width: 760px;
+  margin: 0;
+  color: rgba(220, 228, 238, 0.76);
+  line-height: 1.7;
+}
+
+.interview-report-page .report-retrieval-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.interview-report-page .report-retrieval-metrics span,
+.interview-report-page .report-retrieval-round small {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 5px 9px;
+  border: 1px solid rgba(142, 240, 219, 0.16);
+  border-radius: 999px;
+  background: rgba(142, 240, 219, 0.08);
+  color: #8ef0db;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.interview-report-page .report-retrieval-rounds {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.interview-report-page .report-retrieval-round {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.interview-report-page .report-retrieval-round span {
+  min-width: 0;
+  color: rgba(230, 237, 245, 0.86);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .interview-report-page .chart-box,
 .interview-report-page .review-turn,
 .interview-report-page .agent-stage-list.completed.report-agent-summary,

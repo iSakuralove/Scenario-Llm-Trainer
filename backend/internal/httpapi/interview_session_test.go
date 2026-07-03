@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +38,25 @@ func TestCreateInterviewSessionValidatesRequiredTrackFields(t *testing.T) {
 				t.Fatalf("unexpected validation message: %q", env.Message)
 			}
 		})
+	}
+}
+
+func TestCreateInterviewSessionRejectsUnsupportedFocusAreas(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/interviews/sessions", token, map[string]interface{}{
+		"domain":        "database",
+		"difficulty":    "L3",
+		"question_type": "scenario_analysis",
+		"focus_areas":   []string{"technical_accuracy", "unknown_focus"},
+	})
+	if status != http.StatusBadRequest || env.Code != http.StatusBadRequest {
+		t.Fatalf("expected unsupported focus area rejection, status=%d env=%+v", status, env)
+	}
+	if env.Message != "focus_areas contains unsupported value: unknown_focus" {
+		t.Fatalf("unexpected validation message: %q", env.Message)
 	}
 }
 
@@ -125,6 +145,76 @@ func TestCreateInterviewSessionReturnsSelectedTrackQuestion(t *testing.T) {
 	mustDecodeData(t, env, &payload)
 	if payload.Question.Domain != "database" || payload.Question.Difficulty != "L3" || payload.Question.QuestionType != "scenario_analysis" {
 		t.Fatalf("unexpected question track: %+v", payload.Question)
+	}
+}
+
+func TestCreateInterviewSessionPersistsSessionInputs(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/interviews/sessions", token, map[string]interface{}{
+		"domain":           "database",
+		"difficulty":       "L3",
+		"question_type":    "scenario_analysis",
+		"difficulty_level": "challenge",
+		"focus_areas":      []string{"technical_accuracy", "technical_accuracy", "solution_feasibility"},
+		"setup_notes":      "简历摘要：做过慢查询治理。",
+	})
+	if status != http.StatusOK || env.Code != http.StatusOK {
+		t.Fatalf("create interview status=%d env=%+v", status, env)
+	}
+	var payload struct {
+		Session domain.InterviewSession `json:"session"`
+	}
+	mustDecodeData(t, env, &payload)
+	if payload.Session.DifficultyLevel != "challenge" {
+		t.Fatalf("expected difficulty_level persisted, got %+v", payload.Session)
+	}
+	if got := payload.Session.FocusAreas; len(got) != 2 || got[0] != "technical_accuracy" || got[1] != "solution_feasibility" {
+		t.Fatalf("expected normalized focus areas, got %+v", got)
+	}
+	if payload.Session.SetupNotes != "简历摘要：做过慢查询治理。" {
+		t.Fatalf("expected setup notes persisted, got %q", payload.Session.SetupNotes)
+	}
+}
+
+func TestCreateInterviewSessionPrefersPublishedOpeningAtom(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	atom := validInterviewBankAtomForRebuild("atom-opening-cache", "published", "indexed")
+	atom.Title = "缓存击穿开场题"
+	atom.Subject = "缓存击穿"
+	atom.QuestionRole = "opening"
+	if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "开场题"); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/interviews/sessions", token, map[string]string{
+		"domain":        "cache",
+		"difficulty":    "L3",
+		"question_type": "principle",
+	})
+	if status != http.StatusOK || env.Code != http.StatusOK {
+		t.Fatalf("create interview status=%d env=%+v", status, env)
+	}
+	var payload struct {
+		Question domain.InterviewQuestion `json:"question"`
+		Session  domain.InterviewSession  `json:"session"`
+	}
+	mustDecodeData(t, env, &payload)
+	if payload.Question.ID != "interview-knowledge:atom-opening-cache:v1" {
+		t.Fatalf("expected synthetic interview knowledge question, got %+v", payload.Question)
+	}
+	if payload.Question.ReferenceAnswer != "" || len(payload.Question.ReferenceKeywords) != 0 {
+		t.Fatalf("student question must not expose atom references: %+v", payload.Question)
+	}
+	if payload.Session.QuestionSnapshot.QuestionSource != "interview_knowledge" || payload.Session.QuestionSnapshot.Subject != "缓存击穿" {
+		t.Fatalf("expected interview knowledge snapshot, got %+v", payload.Session.QuestionSnapshot)
+	}
+	if len(payload.Session.SelectedAtomSnapshots) != 0 {
+		t.Fatalf("session view must not expose selected atom snapshots: %+v", payload.Session.SelectedAtomSnapshots)
 	}
 }
 
@@ -286,5 +376,74 @@ func TestDeleteInterviewSessionRejectsOtherUser(t *testing.T) {
 	status, env = requestJSON(t, handler, http.MethodDelete, "/api/v1/interviews/sessions/"+created.SessionID, otherToken, nil)
 	if status != http.StatusNotFound || env.Code != http.StatusNotFound {
 		t.Fatalf("expected delete not found for other user, status=%d env=%+v", status, env)
+	}
+}
+
+func TestInterviewReportReturnsRetrievalSummaryWithoutAtomInternals(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/interviews/sessions", token, map[string]string{
+		"domain":        "database",
+		"difficulty":    "L3",
+		"question_type": "scenario_analysis",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("create interview status=%d message=%s", status, env.Message)
+	}
+	var created struct {
+		SessionID string `json:"session_id"`
+	}
+	mustDecodeData(t, env, &created)
+	session, ok := dataStore.GetInterviewSession(created.SessionID)
+	if !ok {
+		t.Fatal("expected created session")
+	}
+	session.Status = "final_evaluated"
+	session.FinalScore = 82
+	session.FinalReport = "整体达到要求。"
+	session.QuestionSnapshot.Subject = "慢查询定位"
+	session.SelectedAtomSnapshots = []domain.InterviewKnowledgeAtomLightSnapshot{{
+		AtomID:  "atom-internal",
+		Title:   "管理端内部标题",
+		Subject: "索引治理",
+	}}
+	session.Evaluations = []domain.InterviewEvaluation{
+		{Round: 1, TotalScore: 58, FollowUpType: "deepen", FollowUpSubject: "索引治理", RetrievedSubjects: []string{"索引治理"}, CreatedAt: time.Now()},
+		{Round: 2, TotalScore: 82, FollowUpType: "fallback_rule_only", FollowUpSubject: "回滚验证", FallbackUsed: true, CreatedAt: time.Now()},
+	}
+	dataStore.SaveInterviewSession(session)
+
+	status, env = requestJSON(t, handler, http.MethodGet, "/api/v1/interviews/sessions/"+created.SessionID+"/report", token, nil)
+	if status != http.StatusOK || env.Code != http.StatusOK {
+		t.Fatalf("report status=%d env=%+v", status, env)
+	}
+	var report struct {
+		RetrievalSummary struct {
+			SummaryText    string `json:"summary_text"`
+			HitRounds      int    `json:"hit_rounds"`
+			FallbackRounds int    `json:"fallback_rounds"`
+			SubjectCount   int    `json:"subject_count"`
+			Rounds         []struct {
+				Round        int    `json:"round"`
+				Subject      string `json:"subject"`
+				FallbackUsed bool   `json:"fallback_used"`
+				FollowUpType string `json:"follow_up_type"`
+			} `json:"rounds"`
+		} `json:"retrieval_summary"`
+	}
+	mustDecodeData(t, env, &report)
+	if report.RetrievalSummary.SubjectCount != 2 || report.RetrievalSummary.HitRounds != 1 || report.RetrievalSummary.FallbackRounds != 1 {
+		t.Fatalf("unexpected retrieval summary: %+v", report.RetrievalSummary)
+	}
+	if len(report.RetrievalSummary.Rounds) != 2 || report.RetrievalSummary.Rounds[0].Subject != "索引治理" || !report.RetrievalSummary.Rounds[1].FallbackUsed {
+		t.Fatalf("unexpected round summaries: %+v", report.RetrievalSummary.Rounds)
+	}
+	raw := string(env.Data)
+	for _, forbidden := range []string{"selected_atom_snapshots", "管理端内部标题", "principles", "follow_up_paths", "query_text"} {
+		if strings.Contains(raw, forbidden) {
+			t.Fatalf("report must not expose %s in %s", forbidden, raw)
+		}
 	}
 }

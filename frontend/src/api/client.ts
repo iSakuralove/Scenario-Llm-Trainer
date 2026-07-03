@@ -14,7 +14,10 @@ import type {
   InterviewKnowledgeImportReport,
   InterviewKnowledgePublishResponse,
   InterviewKnowledgeSummary,
+  InterviewDifficultyLevel,
+  InterviewFocusArea,
   InterviewQuestion,
+  InterviewReportRetrievalSummary,
   InterviewSession,
   VoiceQualityResult,
   CheckinResult,
@@ -83,6 +86,15 @@ export interface ScenarioListParams {
   tag?: string
   page?: number
   page_size?: number
+}
+
+export interface CreateInterviewPayload {
+  domain: string
+  difficulty: string
+  question_type: string
+  difficulty_level?: InterviewDifficultyLevel | string
+  focus_areas?: InterviewFocusArea[]
+  setup_notes?: string
 }
 
 export interface StreamEvent {
@@ -586,12 +598,20 @@ export const api = {
 
   me: (token: string) => request<User>('/users/me', {}, token),
 
-  updateProfile: (token: string, targetLevel: string, preferredDomains: string[]) =>
+  updateProfile: (
+    token: string,
+    payload: {
+      target_level: string
+      preferred_domains: string[]
+      resume_summary?: string
+      project_summary?: string
+    },
+  ) =>
     request<User>(
       '/users/me/profile',
       {
         method: 'PUT',
-        body: JSON.stringify({ target_level: targetLevel, preferred_domains: preferredDomains }),
+        body: JSON.stringify(payload),
       },
       token,
     ),
@@ -748,7 +768,7 @@ export const api = {
     }
   },
 
-  createInterview: (token: string, payload: { domain: string; difficulty: string; question_type: string }) =>
+  createInterview: (token: string, payload: CreateInterviewPayload) =>
     request<{ session_id: string; status: string; question: InterviewQuestion; session: InterviewSession }>(
       '/interviews/sessions',
       { method: 'POST', body: JSON.stringify(payload) },
@@ -806,6 +826,7 @@ export const api = {
       radar_data: Array<{ dimension: string; score: number }>
       final_score: number
       final_report: string
+      retrieval_summary: InterviewReportRetrievalSummary
     }>(`/interviews/sessions/${sessionId}/report`, {}, token),
 
   communityPosts: (token: string, query = '') => request<{ list: CommunityPost[] }>(`/community/posts${query}`, {}, token),

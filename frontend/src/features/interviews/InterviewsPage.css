@@ -234,6 +234,104 @@
   white-space: nowrap;
 }
 
+.interview-session-setup {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.04);
+}
+
+.interview-setup-group {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.interview-setup-group > span,
+.interview-focus-fieldset legend {
+  color: #0f766e;
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.interview-segmented-control {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.interview-segmented-control button {
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 6px;
+  background: #ecfeff;
+  color: #134e4a;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.interview-segmented-control button.active {
+  border-color: rgba(15, 118, 110, 0.58);
+  background: #0f766e;
+  color: #f8fafc;
+}
+
+.interview-focus-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.interview-focus-grid label {
+  min-width: 0;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 8px;
+  border: 1px solid rgba(15, 118, 110, 0.14);
+  border-radius: 6px;
+  background: rgba(236, 254, 255, 0.72);
+  color: #134e4a;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.interview-focus-grid input {
+  width: 14px;
+  height: 14px;
+  accent-color: #0f766e;
+  flex: 0 0 auto;
+}
+
+.interview-focus-grid span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.interview-setup-notes textarea {
+  width: 100%;
+  min-height: 74px;
+  max-height: 150px;
+  resize: vertical;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  color: #0f172a;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .interview-start-panel .launch-start-button {
   min-height: 48px;
   border-radius: 8px;
@@ -879,6 +977,10 @@
 
   .interview-dimension-meter small {
     white-space: normal;
+  }
+
+  .interview-focus-grid {
+    grid-template-columns: 1fr;
   }
 
   .interview-command-grid .panel {

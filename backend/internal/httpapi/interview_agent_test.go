@@ -96,7 +96,7 @@ func TestInterviewSubmitSSEExposesSafeAgentStages(t *testing.T) {
 		t.Fatalf("sse status=%d body=%s", rr.Code, rr.Body.String())
 	}
 	raw := rr.Body.String()
-	for _, step := range []string{`"step":"received"`, `"step":"agent_intent"`, `"step":"agent_eval"`, `"step":"agent_followup"`, `"step":"agent_reply"`, `"step":"agent_safety"`, `"step":"completed"`} {
+	for _, step := range []string{`"step":"received"`, `"step":"agent_intent"`, `"step":"agent_eval"`, `"step":"agent_retrieval"`, `"step":"agent_followup"`, `"step":"agent_reply"`, `"step":"agent_safety"`, `"step":"completed"`} {
 		if !strings.Contains(raw, step) {
 			t.Fatalf("expected SSE to include %s, got %s", step, raw)
 		}

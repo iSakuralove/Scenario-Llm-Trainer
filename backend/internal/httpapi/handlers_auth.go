@@ -170,11 +170,22 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, user *domain.U
 		var req struct {
 			TargetLevel      string   `json:"target_level"`
 			PreferredDomains []string `json:"preferred_domains"`
+			ResumeSummary    string   `json:"resume_summary"`
+			ProjectSummary   string   `json:"project_summary"`
 		}
 		if !decode(w, r, &req) {
 			return
 		}
-		updated, err := s.store.UpdateProfile(user.ID, req.TargetLevel, req.PreferredDomains)
+		profile := user.Profile
+		if strings.TrimSpace(req.TargetLevel) != "" {
+			profile.TargetLevel = strings.TrimSpace(req.TargetLevel)
+		}
+		if req.PreferredDomains != nil {
+			profile.PreferredDomains = req.PreferredDomains
+		}
+		profile.ResumeSummary = strings.TrimSpace(req.ResumeSummary)
+		profile.ProjectSummary = strings.TrimSpace(req.ProjectSummary)
+		updated, err := s.store.SaveUserProfile(user.ID, profile)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return

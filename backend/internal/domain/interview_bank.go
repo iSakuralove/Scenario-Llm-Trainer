@@ -117,13 +117,25 @@ type InterviewKnowledgeAtomLightSnapshot struct {
 }
 
 type InterviewQuestionSnapshot struct {
-	ID           string `json:"id"`
-	Version      int    `json:"version"`
-	Title        string `json:"title"`
-	Subject      string `json:"subject"`
-	Domain       string `json:"domain"`
-	Difficulty   string `json:"difficulty"`
-	QuestionRole string `json:"question_role"`
+	ID                   string                `json:"id"`
+	Version              int                   `json:"version"`
+	Title                string                `json:"title"`
+	Subject              string                `json:"subject"`
+	Description          string                `json:"description,omitempty"`
+	Domain               string                `json:"domain"`
+	Difficulty           string                `json:"difficulty"`
+	Category             string                `json:"category,omitempty"`
+	QuestionRole         string                `json:"question_role"`
+	QuestionType         string                `json:"question_type,omitempty"`
+	QuestionSource       string                `json:"question_source,omitempty"`
+	SourceRef            string                `json:"source_ref,omitempty"`
+	Tags                 []string              `json:"tags,omitempty"`
+	Principles           []string              `json:"principles,omitempty"`
+	Pitfalls             []string              `json:"pitfalls,omitempty"`
+	FollowUpPaths        []string              `json:"follow_up_paths,omitempty"`
+	ReferenceKeywords    []string              `json:"reference_keywords,omitempty"`
+	EvaluationDimensions []EvaluationDimension `json:"evaluation_dimensions,omitempty"`
+	FollowUpStrategies   []FollowUpStrategy    `json:"follow_up_strategies,omitempty"`
 }
 
 type InterviewRetrievalLog struct {

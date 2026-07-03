@@ -12,10 +12,12 @@ import (
 
 type InterviewFeedbackFunc func(context.Context, ai.InterviewFeedbackRequest, func(string)) (ai.InterviewFeedback, ai.CallMeta, error)
 type InterviewScoringFunc func(*domain.InterviewQuestion, string, int, int) domain.InterviewEvaluation
+type InterviewRetrievalFunc func(context.Context, InterviewRetrievalRequest) (InterviewRetrievalResult, error)
 
 type InterviewConfig struct {
 	Feedback InterviewFeedbackFunc
 	Score    InterviewScoringFunc
+	Retrieve InterviewRetrievalFunc
 	NewRunID func() string
 	Now      func() time.Time
 }
@@ -38,6 +40,23 @@ type InterviewResult struct {
 	Validated       bool
 	FallbackUsed    bool
 	SafetyRewritten bool
+}
+
+type InterviewRetrievalRequest struct {
+	Session    *domain.InterviewSession
+	Question   *domain.InterviewQuestion
+	Answer     string
+	Evaluation domain.InterviewEvaluation
+}
+
+type InterviewRetrievalResult struct {
+	FollowUpQuestion  string
+	FollowUpType      string
+	FollowUpSubject   string
+	FallbackUsed      bool
+	RetrievedSubjects []string
+	MatchedAtoms      []domain.InterviewKnowledgeAtomLightSnapshot
+	SummaryText       string
 }
 
 type InterviewAgent struct {
@@ -82,6 +101,7 @@ func (a *InterviewAgent) Run(ctx context.Context, req InterviewRequest) (Intervi
 	steps := []Step{
 		a.analyzeAnswerIntentStep(req, &state),
 		a.evaluateDimensionsStep(req, &state),
+		a.retrieveFollowUpStep(req, &state),
 		a.decideFollowUpStep(req, &state),
 		a.generateFeedbackStep(req, &state),
 		a.safetyRewriteStep(req, &state),
@@ -112,6 +132,7 @@ type interviewState struct {
 	finalReport string
 	needReport  bool
 	meta        ai.CallMeta
+	retrieval   InterviewRetrievalResult
 }
 
 func (a *InterviewAgent) analyzeAnswerIntentStep(req InterviewRequest, state *interviewState) Step {
@@ -156,6 +177,57 @@ func (a *InterviewAgent) evaluateDimensionsStep(req InterviewRequest, state *int
 	}
 }
 
+func (a *InterviewAgent) retrieveFollowUpStep(req InterviewRequest, state *interviewState) Step {
+	return Step{
+		Name: "retrieve_followup_context",
+		Kind: "tool",
+		Run: func(ctx context.Context, _ *StepRecorder) (ToolResult, error) {
+			emitStage(req.OnStage, "agent_retrieval", "正在检索题库上下文并规划追问方向")
+			if a.config.Retrieve == nil {
+				state.retrieval = InterviewRetrievalResult{
+					FallbackUsed: true,
+					SummaryText:  "未配置题库检索，继续使用规则追问。",
+				}
+				return ToolResult{
+					Summary: "未配置题库检索，已保持规则追问链路",
+					Metadata: map[string]string{
+						"fallback_used": "true",
+					},
+				}, nil
+			}
+			result, err := a.config.Retrieve(ctx, InterviewRetrievalRequest{
+				Session:    state.session,
+				Question:   state.question,
+				Answer:     state.answer,
+				Evaluation: state.evaluation,
+			})
+			if err != nil {
+				state.retrieval = InterviewRetrievalResult{
+					FallbackUsed: true,
+					SummaryText:  "题库检索失败，继续使用规则追问。",
+				}
+				return ToolResult{
+					Summary: "题库检索失败，已回退规则追问",
+					Metadata: map[string]string{
+						"fallback_used": "true",
+					},
+				}, nil
+			}
+			state.retrieval = result
+			if state.retrieval.SummaryText == "" {
+				state.retrieval.SummaryText = "已完成题库追问规划。"
+			}
+			return ToolResult{
+				Summary: state.retrieval.SummaryText,
+				Metadata: map[string]string{
+					"fallback_used": fmt.Sprintf("%t", state.retrieval.FallbackUsed),
+					"subject":       state.retrieval.FollowUpSubject,
+				},
+			}, nil
+		},
+	}
+}
+
 func (a *InterviewAgent) decideFollowUpStep(req InterviewRequest, state *interviewState) Step {
 	return Step{
 		Name: "decide_follow_up",
@@ -165,6 +237,20 @@ func (a *InterviewAgent) decideFollowUpStep(req InterviewRequest, state *intervi
 			if state.evaluation.FollowUpTriggered && strings.TrimSpace(state.evaluation.FollowUpQuestion) == "" {
 				state.evaluation.FollowUpQuestion = "请补充说明你的关键判断依据、验证路径和风险控制。"
 				state.evaluation.FollowUpType = firstNonEmpty(state.evaluation.FollowUpType, "supplement")
+			}
+			state.evaluation.FollowUpSubject = state.retrieval.FollowUpSubject
+			state.evaluation.FallbackUsed = state.retrieval.FallbackUsed
+			state.evaluation.RetrievedSubjects = append([]string{}, state.retrieval.RetrievedSubjects...)
+			if state.evaluation.FollowUpTriggered {
+				if strings.TrimSpace(state.retrieval.FollowUpQuestion) != "" {
+					state.evaluation.FollowUpQuestion = state.retrieval.FollowUpQuestion
+				}
+				if strings.TrimSpace(state.retrieval.FollowUpType) != "" {
+					state.evaluation.FollowUpType = state.retrieval.FollowUpType
+				}
+				if len(state.retrieval.MatchedAtoms) > 0 {
+					state.session.SelectedAtomSnapshots = append(state.session.SelectedAtomSnapshots, state.retrieval.MatchedAtoms...)
+				}
 			}
 			state.needReport = !(state.evaluation.FollowUpTriggered && state.round < state.maxRound)
 			return ToolResult{
@@ -193,10 +279,14 @@ func (a *InterviewAgent) generateFeedbackStep(req InterviewRequest, state *inter
 				return ToolResult{Summary: "未配置模型反馈，已使用确定性反馈", Metadata: map[string]string{"provider": meta.Provider}}, nil
 			}
 			llmFeedback, llmMeta, err := a.config.Feedback(ctx, ai.InterviewFeedbackRequest{
-				Question:   state.question,
-				Answer:     state.answer,
-				Evaluation: state.evaluation,
-				NeedReport: state.needReport,
+				Question:         state.question,
+				Answer:           state.answer,
+				Evaluation:       state.evaluation,
+				NeedReport:       state.needReport,
+				DifficultyLevel:  state.session.DifficultyLevel,
+				FocusAreas:       append([]string{}, state.session.FocusAreas...),
+				SetupNotes:       state.session.SetupNotes,
+				RetrievalSummary: state.retrieval.SummaryText,
 			}, nil)
 			if err != nil {
 				meta.FallbackUsed = true
