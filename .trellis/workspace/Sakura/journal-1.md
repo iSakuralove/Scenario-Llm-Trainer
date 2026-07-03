@@ -270,3 +270,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 9: 面试运行时动态追问MVP
+
+**Date**: 2026-07-03
+**Task**: 面试运行时动态追问MVP
+**Branch**: `main`
+
+### Summary
+
+完成面试运行时动态追问 MVP：focus_areas 固定五维枚举并支持多选，长期档案只持久化 resume_summary/project_summary，会话级 difficulty_level/focus_areas/setup_notes 只影响追问检索和反馈生成；正式题库开场题优先、追问检索可回退、报告只展示聚合摘要与每轮 subject/fallback/type。验证通过 backend go test ./...、frontend lint、frontend build。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `23f2a51` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
