@@ -370,3 +370,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: 面试题库健康诊断与检索预览
+
+**Date**: 2026-07-04
+**Task**: 面试题库健康诊断与检索预览
+**Branch**: `main`
+
+### Summary
+
+实现管理员题库健康诊断和检索预览闭环，新增健康矩阵、预览接口、domain 过滤、前端管理面板、文档和规格更新；Chrome localhost smoke 受企业策略阻止，已用后端/前端自动化验证覆盖。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5f1499c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
