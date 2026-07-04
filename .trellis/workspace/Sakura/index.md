@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
+- **Total Sessions**: 13
 - **Last Active**: 2026-07-04
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~405 | Active |
+| `journal-1.md` | ~438 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 13 | 2026-07-04 | 面试报告知识点分布与复训建议增强 | `980c6ee` | `main` |
 | 12 | 2026-07-04 | 面试题库健康诊断与检索预览 | `5f1499c` | `main` |
 | 11 | 2026-07-04 | 面试题库归档恢复收口 | `c647c1d`, `eefec94` | `main` |
 | 10 | 2026-07-04 | 面试题库在线编辑与版本审计 | `b51bebc` | `main` |
