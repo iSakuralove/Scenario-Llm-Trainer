@@ -81,6 +81,7 @@ ppt-output/
 !.vscode/extensions.json
 .playwright-mcp/
 .codegraph/
+.reasonix/
 backend/.reftool/
 .serena/logs/
 .serena/cache/
