@@ -919,6 +919,26 @@ export interface InterviewReportRetrievalRoundSummary {
   follow_up_type: string
 }
 
+export interface InterviewReportKnowledgeCoverage {
+  subject: string
+  round_count: number
+  hit_count: number
+  fallback_count: number
+  average_score: number
+  lowest_score: number
+  weak_dimensions: string[]
+}
+
+export interface InterviewReportRetrainingSuggestion {
+  id: string
+  subject: string
+  priority: number
+  reason: string
+  actions: string[]
+  target_score: number
+  source_rounds: number[]
+}
+
 export interface InterviewReportRetrievalSummary {
   summary_text: string
   hit_rounds: number
@@ -926,6 +946,8 @@ export interface InterviewReportRetrievalSummary {
   subject_count: number
   subjects: string[]
   rounds: InterviewReportRetrievalRoundSummary[]
+  coverage?: InterviewReportKnowledgeCoverage[]
+  retraining_suggestions?: InterviewReportRetrainingSuggestion[]
 }
 
 export interface InterviewSubmission {

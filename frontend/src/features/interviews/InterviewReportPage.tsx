@@ -62,6 +62,8 @@ export function InterviewReportPage() {
     dimension: dimensionLabel(item.dimension),
   }))
   const isInvalidatedReport = report.final_report === '继续沉淀' && radarData.length === 0
+  const knowledgeCoverage = report.retrieval_summary?.coverage ?? []
+  const retrainingSuggestions = report.retrieval_summary?.retraining_suggestions ?? []
 
   return (
     <section className="page-stack printable-page interview-report-page">
@@ -101,6 +103,51 @@ export function InterviewReportPage() {
                 <small>{round.fallback_used ? '规则回退' : '题库命中'} · {followUpTypeLabel(round.follow_up_type)}</small>
               </div>
             ))}
+          </div>
+        ) : null}
+        {knowledgeCoverage.length ? (
+          <div className="report-knowledge-section">
+            <div className="report-section-heading">知识点覆盖</div>
+            <div className="report-knowledge-grid">
+              {knowledgeCoverage.map((item) => (
+                <article className="report-knowledge-card" key={item.subject}>
+                  <div className="report-knowledge-card-head">
+                    <strong>{item.subject}</strong>
+                    <span>{item.average_score ?? '--'} 平均分</span>
+                  </div>
+                  <div className="report-score-meter" aria-hidden="true">
+                    <span style={{ width: `${clampScore(item.average_score)}%` }} />
+                  </div>
+                  <div className="report-knowledge-stats">
+                    <span>{item.round_count} 轮</span>
+                    <span>命中 {item.hit_count}</span>
+                    <span>回退 {item.fallback_count}</span>
+                    <span>最低 {item.lowest_score}</span>
+                  </div>
+                  <small>{item.weak_dimensions?.length ? `薄弱项：${item.weak_dimensions.join('、')}` : '薄弱项：暂无明显低分维度'}</small>
+                </article>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {retrainingSuggestions.length ? (
+          <div className="report-knowledge-section">
+            <div className="report-section-heading">复训建议</div>
+            <div className="report-retraining-list">
+              {retrainingSuggestions.map((suggestion) => (
+                <article className="report-retraining-card" key={suggestion.id}>
+                  <div className="report-retraining-card-head">
+                    <strong>{suggestion.subject}</strong>
+                    <span>P{suggestion.priority}</span>
+                  </div>
+                  <p>{suggestion.reason}</p>
+                  <div className="report-retraining-actions">
+                    {(suggestion.actions ?? []).map((action) => <span key={action}>{action}</span>)}
+                  </div>
+                  <small>目标 {suggestion.target_score} 分 · 来源轮次 {formatRounds(suggestion.source_rounds)}</small>
+                </article>
+              ))}
+            </div>
           </div>
         ) : null}
       </section>
@@ -219,6 +266,17 @@ function formatBytes(value: number | undefined) {
   if (value < 1024) return `${value} B`
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
   return `${(value / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function clampScore(value: number | undefined) {
+  if (!value || value < 0) return 0
+  if (value > 100) return 100
+  return value
+}
+
+function formatRounds(values: number[] | undefined) {
+  if (!values?.length) return '未记录'
+  return values.map((value) => `第 ${value} 轮`).join('、')
 }
 
 function getReportAgentTrace(items: Awaited<ReturnType<typeof api.interviewReport>>['session']['evaluations']) {

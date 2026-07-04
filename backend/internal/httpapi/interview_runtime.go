@@ -539,12 +539,14 @@ func interviewQuestionSnapshotView(snapshot domain.InterviewQuestionSnapshot) *i
 }
 
 type interviewReportRetrievalSummary struct {
-	SummaryText    string                                 `json:"summary_text"`
-	HitRounds      int                                    `json:"hit_rounds"`
-	FallbackRounds int                                    `json:"fallback_rounds"`
-	SubjectCount   int                                    `json:"subject_count"`
-	Subjects       []string                               `json:"subjects"`
-	Rounds         []interviewReportRoundRetrievalSummary `json:"rounds"`
+	SummaryText           string                                 `json:"summary_text"`
+	HitRounds             int                                    `json:"hit_rounds"`
+	FallbackRounds        int                                    `json:"fallback_rounds"`
+	SubjectCount          int                                    `json:"subject_count"`
+	Subjects              []string                               `json:"subjects"`
+	Rounds                []interviewReportRoundRetrievalSummary `json:"rounds"`
+	Coverage              []interviewReportKnowledgeCoverage     `json:"coverage"`
+	RetrainingSuggestions []interviewReportRetrainingSuggestion  `json:"retraining_suggestions"`
 }
 
 type interviewReportRoundRetrievalSummary struct {
@@ -554,15 +556,51 @@ type interviewReportRoundRetrievalSummary struct {
 	FollowUpType string `json:"follow_up_type"`
 }
 
+type interviewReportKnowledgeCoverage struct {
+	Subject        string   `json:"subject"`
+	RoundCount     int      `json:"round_count"`
+	HitCount       int      `json:"hit_count"`
+	FallbackCount  int      `json:"fallback_count"`
+	AverageScore   int      `json:"average_score"`
+	LowestScore    int      `json:"lowest_score"`
+	WeakDimensions []string `json:"weak_dimensions"`
+	SourceRounds   []int    `json:"-"`
+}
+
+type interviewReportRetrainingSuggestion struct {
+	ID           string   `json:"id"`
+	Subject      string   `json:"subject"`
+	Priority     int      `json:"priority"`
+	Reason       string   `json:"reason"`
+	Actions      []string `json:"actions"`
+	TargetScore  int      `json:"target_score"`
+	SourceRounds []int    `json:"source_rounds"`
+}
+
+type interviewReportCoverageAccumulator struct {
+	subject          string
+	roundCount       int
+	hitCount         int
+	fallbackCount    int
+	totalScore       int
+	scoreCount       int
+	lowestScore      int
+	sourceRounds     []int
+	weakDimensionKey map[string]bool
+}
+
 func buildInterviewReportRetrievalSummary(session *domain.InterviewSession) interviewReportRetrievalSummary {
 	summary := interviewReportRetrievalSummary{
-		Subjects: []string{},
-		Rounds:   []interviewReportRoundRetrievalSummary{},
+		Subjects:              []string{},
+		Rounds:                []interviewReportRoundRetrievalSummary{},
+		Coverage:              []interviewReportKnowledgeCoverage{},
+		RetrainingSuggestions: []interviewReportRetrainingSuggestion{},
 	}
 	if session == nil {
 		return summary
 	}
 	subjectSet := map[string]bool{}
+	coverageBySubject := map[string]*interviewReportCoverageAccumulator{}
 	for _, evaluation := range session.Evaluations {
 		subject := firstNonEmpty(evaluation.FollowUpSubject, firstString(evaluation.RetrievedSubjects), session.QuestionSnapshot.Subject, session.QuestionSnapshot.Title)
 		if subject != "" && !subjectSet[subject] {
@@ -581,9 +619,12 @@ func buildInterviewReportRetrievalSummary(session *domain.InterviewSession) inte
 			FallbackUsed: evaluation.FallbackUsed,
 			FollowUpType: firstNonEmpty(evaluation.FollowUpType, "none"),
 		})
+		collectInterviewReportCoverage(coverageBySubject, subject, evaluation)
 	}
 	sort.Strings(summary.Subjects)
 	summary.SubjectCount = len(summary.Subjects)
+	summary.Coverage = interviewReportKnowledgeCoverageList(coverageBySubject)
+	summary.RetrainingSuggestions = interviewReportRetrainingSuggestions(summary.Coverage)
 	summary.SummaryText = interviewReportRetrievalSummaryText(summary)
 	return summary
 }
@@ -593,6 +634,171 @@ func interviewReportRetrievalSummaryText(summary interviewReportRetrievalSummary
 		return "本场暂无追问检索记录。"
 	}
 	return fmt.Sprintf("本场覆盖 %d 个考察点，题库命中 %d 轮，规则回退 %d 轮。", summary.SubjectCount, summary.HitRounds, summary.FallbackRounds)
+}
+
+func collectInterviewReportCoverage(bySubject map[string]*interviewReportCoverageAccumulator, subject string, evaluation domain.InterviewEvaluation) {
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		return
+	}
+	acc := bySubject[subject]
+	if acc == nil {
+		acc = &interviewReportCoverageAccumulator{
+			subject:          subject,
+			weakDimensionKey: map[string]bool{},
+		}
+		bySubject[subject] = acc
+	}
+	acc.roundCount++
+	if len(evaluation.RetrievedSubjects) > 0 {
+		acc.hitCount++
+	}
+	if evaluation.FallbackUsed {
+		acc.fallbackCount++
+	}
+	if acc.scoreCount == 0 || evaluation.TotalScore < acc.lowestScore {
+		acc.lowestScore = evaluation.TotalScore
+	}
+	acc.totalScore += evaluation.TotalScore
+	acc.scoreCount++
+	if evaluation.Round > 0 {
+		acc.sourceRounds = append(acc.sourceRounds, evaluation.Round)
+	}
+	for key, score := range evaluation.DimensionScores {
+		if score < 70 {
+			acc.weakDimensionKey[strings.TrimSpace(key)] = true
+		}
+	}
+}
+
+func interviewReportKnowledgeCoverageList(bySubject map[string]*interviewReportCoverageAccumulator) []interviewReportKnowledgeCoverage {
+	items := make([]interviewReportKnowledgeCoverage, 0, len(bySubject))
+	for _, acc := range bySubject {
+		averageScore := 0
+		if acc.scoreCount > 0 {
+			averageScore = (acc.totalScore + acc.scoreCount/2) / acc.scoreCount
+		}
+		sort.Ints(acc.sourceRounds)
+		items = append(items, interviewReportKnowledgeCoverage{
+			Subject:        acc.subject,
+			RoundCount:     acc.roundCount,
+			HitCount:       acc.hitCount,
+			FallbackCount:  acc.fallbackCount,
+			AverageScore:   averageScore,
+			LowestScore:    acc.lowestScore,
+			WeakDimensions: interviewReportWeakDimensionLabels(acc.weakDimensionKey),
+			SourceRounds:   uniqueInts(acc.sourceRounds),
+		})
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].RoundCount != items[j].RoundCount {
+			return items[i].RoundCount > items[j].RoundCount
+		}
+		return items[i].Subject < items[j].Subject
+	})
+	return items
+}
+
+func interviewReportWeakDimensionLabels(keys map[string]bool) []string {
+	labels := []string{}
+	seen := map[string]bool{}
+	for _, key := range interviewFocusAreaOrder {
+		if keys[key] {
+			label := interviewFocusAreaLabel(key)
+			labels = append(labels, label)
+			seen[label] = true
+		}
+	}
+	extra := []string{}
+	for key := range keys {
+		label := interviewFocusAreaLabel(key)
+		if label != "" && !seen[label] {
+			extra = append(extra, label)
+		}
+	}
+	sort.Strings(extra)
+	return append(labels, extra...)
+}
+
+func interviewReportRetrainingSuggestions(coverage []interviewReportKnowledgeCoverage) []interviewReportRetrainingSuggestion {
+	suggestions := []interviewReportRetrainingSuggestion{}
+	for _, item := range coverage {
+		reasons := []string{}
+		actions := []string{}
+		priority := 4
+		if item.RoundCount > 0 && item.LowestScore < 75 {
+			priority = minPositive(priority, 1)
+			weakText := "基础概念、判断依据或表达结构"
+			if len(item.WeakDimensions) > 0 {
+				weakText = strings.Join(item.WeakDimensions, "、")
+			}
+			reasons = append(reasons, fmt.Sprintf("最低分 %d，薄弱项：%s。", item.LowestScore, weakText))
+			actions = append(actions, fmt.Sprintf("复盘“%s”相关低分轮次，补齐关键概念、判断依据和验证路径。", item.Subject))
+			actions = append(actions, fmt.Sprintf("围绕“%s”重新完成一轮中等难度面试，目标达到 75 分以上。", item.Subject))
+		}
+		if item.FallbackCount > 0 {
+			priority = minPositive(priority, 2)
+			reasons = append(reasons, fmt.Sprintf("%d 轮使用规则回退，需要先把回答线索收束到清晰知识点。", item.FallbackCount))
+			actions = append(actions, fmt.Sprintf("用 5 分钟整理“%s”的定义、适用场景、风险点和排查步骤。", item.Subject))
+		}
+		if len(coverage) == 1 {
+			priority = minPositive(priority, 3)
+			reasons = append(reasons, "本场覆盖知识点较集中，建议扩大相邻考察点。")
+			actions = append(actions, "下一场选择同一领域的相邻训练入口，补齐横向覆盖。")
+		}
+		if len(reasons) == 0 {
+			continue
+		}
+		suggestions = append(suggestions, interviewReportRetrainingSuggestion{
+			ID:           interviewReportSuggestionID(item.Subject),
+			Subject:      item.Subject,
+			Priority:     priority,
+			Reason:       strings.Join(uniqueStrings(reasons), " "),
+			Actions:      uniqueStrings(actions),
+			TargetScore:  75,
+			SourceRounds: append([]int{}, item.SourceRounds...),
+		})
+	}
+	sort.SliceStable(suggestions, func(i, j int) bool {
+		if suggestions[i].Priority != suggestions[j].Priority {
+			return suggestions[i].Priority < suggestions[j].Priority
+		}
+		return suggestions[i].Subject < suggestions[j].Subject
+	})
+	if len(suggestions) > 5 {
+		return suggestions[:5]
+	}
+	return suggestions
+}
+
+func interviewReportSuggestionID(subject string) string {
+	normalized := strings.ToLower(strings.TrimSpace(subject))
+	replacer := strings.NewReplacer(" ", "-", "/", "-", "\\", "-", ":", "-", "：", "-", "，", "-", ",", "-")
+	normalized = strings.Trim(replacer.Replace(normalized), "-")
+	if normalized == "" {
+		return "retrain-coverage"
+	}
+	return "retrain-" + normalized
+}
+
+func minPositive(left, right int) int {
+	if left <= 0 || right < left {
+		return right
+	}
+	return left
+}
+
+func uniqueInts(values []int) []int {
+	seen := map[int]bool{}
+	out := []int{}
+	for _, value := range values {
+		if value <= 0 || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 func nonEmptyTexts(values ...string) []string {

@@ -128,7 +128,7 @@
 - 会话级输入首期只包含 `difficulty_level`、`focus_areas[]`、`setup_notes`，不参与开场题选择，只进入追问检索和反馈生成。
 - 长期个人档案只保存 `resume_summary` 与 `project_summary`，前端可把它们合成为本场 `setup_notes` 的默认输入，但不会把本场输入回写到个人档案。
 - Agent 评分链路在五维评分之后增加追问检索步骤：检索 `followup|mixed` 且 `vector_status=indexed` 的题库原子；检索不可用、未命中或索引未就绪时回退规则追问，面试流程不中断。
-- 面试报告只展示聚合摘要和每轮 `subject`、`fallback_used`、`follow_up_type`；不展示原子正文、内部检索 query、命中片段、管理端标题细节或 selected atom 快照。
+- 面试报告展示聚合摘要、每轮 `subject`、`fallback_used`、`follow_up_type`，并基于会话评价数据生成知识点覆盖分布与规则复训建议；不展示原子正文、内部检索 query、命中片段、管理端标题细节或 selected atom 快照。复训建议首期只作为报告展示内容，不自动写入长期学习计划或个人画像。
 
 ## 当前安全约束
 

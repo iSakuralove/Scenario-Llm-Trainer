@@ -149,6 +149,141 @@
   overflow-wrap: anywhere;
 }
 
+.interview-report-page .report-knowledge-section {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.interview-report-page .report-section-heading {
+  color: #f6fafe;
+  font-size: 14px;
+  font-weight: 850;
+}
+
+.interview-report-page .report-knowledge-grid,
+.interview-report-page .report-retraining-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.interview-report-page .report-knowledge-card,
+.interview-report-page .report-retraining-card {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.interview-report-page .report-knowledge-card-head,
+.interview-report-page .report-retraining-card-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.interview-report-page .report-knowledge-card-head strong,
+.interview-report-page .report-retraining-card-head strong {
+  min-width: 0;
+  color: #f6fafe;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.interview-report-page .report-knowledge-card-head span,
+.interview-report-page .report-retraining-card-head span {
+  flex: 0 0 auto;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(142, 240, 219, 0.10);
+  color: #8ef0db;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.interview-report-page .report-score-meter {
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.interview-report-page .report-score-meter span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #ff9f6e, #8ef0db);
+}
+
+.interview-report-page .report-knowledge-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.interview-report-page .report-knowledge-stats span {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  color: rgba(230, 237, 245, 0.82);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.interview-report-page .report-knowledge-card small,
+.interview-report-page .report-retraining-card small {
+  color: rgba(220, 228, 238, 0.68);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.interview-report-page .report-retraining-card p {
+  margin: 0;
+  color: rgba(230, 237, 245, 0.82);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.interview-report-page .report-retraining-actions {
+  display: grid;
+  gap: 6px;
+}
+
+.interview-report-page .report-retraining-actions span {
+  min-width: 0;
+  display: block;
+  padding-left: 12px;
+  color: rgba(220, 228, 238, 0.74);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  position: relative;
+}
+
+.interview-report-page .report-retraining-actions span::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #8ef0db;
+  position: absolute;
+  left: 0;
+  top: 0.75em;
+}
+
 .interview-report-page .chart-box,
 .interview-report-page .review-turn,
 .interview-report-page .agent-stage-list.completed.report-agent-summary,

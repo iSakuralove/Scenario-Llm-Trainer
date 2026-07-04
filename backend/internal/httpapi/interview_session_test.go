@@ -425,7 +425,22 @@ func TestInterviewReportReturnsRetrievalSummaryWithoutAtomInternals(t *testing.T
 			HitRounds      int    `json:"hit_rounds"`
 			FallbackRounds int    `json:"fallback_rounds"`
 			SubjectCount   int    `json:"subject_count"`
-			Rounds         []struct {
+			Coverage       []struct {
+				Subject        string   `json:"subject"`
+				RoundCount     int      `json:"round_count"`
+				HitCount       int      `json:"hit_count"`
+				FallbackCount  int      `json:"fallback_count"`
+				AverageScore   int      `json:"average_score"`
+				LowestScore    int      `json:"lowest_score"`
+				WeakDimensions []string `json:"weak_dimensions"`
+			} `json:"coverage"`
+			RetrainingSuggestions []struct {
+				Subject      string   `json:"subject"`
+				Priority     int      `json:"priority"`
+				Actions      []string `json:"actions"`
+				SourceRounds []int    `json:"source_rounds"`
+			} `json:"retraining_suggestions"`
+			Rounds []struct {
 				Round        int    `json:"round"`
 				Subject      string `json:"subject"`
 				FallbackUsed bool   `json:"fallback_used"`
@@ -440,10 +455,89 @@ func TestInterviewReportReturnsRetrievalSummaryWithoutAtomInternals(t *testing.T
 	if len(report.RetrievalSummary.Rounds) != 2 || report.RetrievalSummary.Rounds[0].Subject != "索引治理" || !report.RetrievalSummary.Rounds[1].FallbackUsed {
 		t.Fatalf("unexpected round summaries: %+v", report.RetrievalSummary.Rounds)
 	}
+	if len(report.RetrievalSummary.Coverage) != 2 || report.RetrievalSummary.Coverage[0].Subject != "回滚验证" || report.RetrievalSummary.Coverage[1].Subject != "索引治理" {
+		t.Fatalf("unexpected knowledge coverage: %+v", report.RetrievalSummary.Coverage)
+	}
+	if len(report.RetrievalSummary.RetrainingSuggestions) == 0 {
+		t.Fatalf("expected retraining suggestions: %+v", report.RetrievalSummary)
+	}
 	raw := string(env.Data)
 	for _, forbidden := range []string{"selected_atom_snapshots", "管理端内部标题", "principles", "follow_up_paths", "query_text"} {
 		if strings.Contains(raw, forbidden) {
 			t.Fatalf("report must not expose %s in %s", forbidden, raw)
 		}
+	}
+}
+
+func TestBuildInterviewReportRetrievalSummaryKnowledgeCoverage(t *testing.T) {
+	session := &domain.InterviewSession{
+		QuestionSnapshot: domain.InterviewQuestionSnapshot{Subject: "缓存基础"},
+		Evaluations: []domain.InterviewEvaluation{
+			{
+				Round:             1,
+				TotalScore:        58,
+				DimensionScores:   map[string]int{"technical_accuracy": 55, "logical_completeness": 69, "expression_structure": 88},
+				FollowUpSubject:   "缓存穿透",
+				FollowUpType:      "deepen",
+				RetrievedSubjects: []string{"缓存穿透"},
+				CreatedAt:         time.Now(),
+			},
+			{
+				Round:             2,
+				TotalScore:        82,
+				DimensionScores:   map[string]int{"technical_accuracy": 85, "logical_completeness": 80},
+				FollowUpSubject:   "缓存穿透",
+				FollowUpType:      "supplement",
+				RetrievedSubjects: []string{"缓存穿透"},
+				CreatedAt:         time.Now(),
+			},
+			{
+				Round:           3,
+				TotalScore:      70,
+				DimensionScores: map[string]int{"solution_feasibility": 64},
+				FollowUpSubject: "回滚验证",
+				FollowUpType:    "fallback_rule_only",
+				FallbackUsed:    true,
+				CreatedAt:       time.Now(),
+			},
+		},
+	}
+
+	summary := buildInterviewReportRetrievalSummary(session)
+	if summary.SubjectCount != 2 || summary.HitRounds != 2 || summary.FallbackRounds != 1 {
+		t.Fatalf("unexpected summary counters: %+v", summary)
+	}
+	if len(summary.Coverage) != 2 {
+		t.Fatalf("expected 2 coverage items, got %+v", summary.Coverage)
+	}
+	cacheCoverage := summary.Coverage[0]
+	if cacheCoverage.Subject != "缓存穿透" || cacheCoverage.RoundCount != 2 || cacheCoverage.HitCount != 2 || cacheCoverage.AverageScore != 70 || cacheCoverage.LowestScore != 58 {
+		t.Fatalf("unexpected cache coverage: %+v", cacheCoverage)
+	}
+	if got := strings.Join(cacheCoverage.WeakDimensions, "、"); got != "技术准确性、逻辑完整性" {
+		t.Fatalf("unexpected weak dimensions: %q", got)
+	}
+	if len(summary.RetrainingSuggestions) < 2 {
+		t.Fatalf("expected low score and fallback suggestions: %+v", summary.RetrainingSuggestions)
+	}
+	var cacheSuggestion *interviewReportRetrainingSuggestion
+	for i := range summary.RetrainingSuggestions {
+		if summary.RetrainingSuggestions[i].Subject == "缓存穿透" {
+			cacheSuggestion = &summary.RetrainingSuggestions[i]
+			break
+		}
+	}
+	if cacheSuggestion == nil || cacheSuggestion.Priority != 1 || len(cacheSuggestion.SourceRounds) != 2 || cacheSuggestion.SourceRounds[0] != 1 || cacheSuggestion.SourceRounds[1] != 2 {
+		t.Fatalf("unexpected cache suggestion: %+v", summary.RetrainingSuggestions)
+	}
+}
+
+func TestBuildInterviewReportRetrievalSummaryEmptySession(t *testing.T) {
+	summary := buildInterviewReportRetrievalSummary(&domain.InterviewSession{})
+	if summary.SummaryText != "本场暂无追问检索记录。" {
+		t.Fatalf("unexpected empty summary text: %q", summary.SummaryText)
+	}
+	if len(summary.Coverage) != 0 || len(summary.RetrainingSuggestions) != 0 {
+		t.Fatalf("empty report must not create coverage or suggestions: %+v", summary)
 	}
 }
