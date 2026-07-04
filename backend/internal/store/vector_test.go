@@ -136,6 +136,52 @@ func TestMemoryVectorStoreInterviewKnowledgeRebuildAndDelete(t *testing.T) {
 	}
 }
 
+func TestMemoryVectorStoreInterviewKnowledgeSearchFiltersDomain(t *testing.T) {
+	vectorStore := NewMemoryVectorStore()
+	ctx := context.Background()
+	docs := []ai.InterviewKnowledgeVectorDocument{
+		{
+			AtomID:      "atom-backend",
+			AtomVersion: 1,
+			DocType:     ai.InterviewKnowledgeVectorDocFollowUp,
+			DocKey:      "follow_up:1",
+			DocText:     "热点 key 互斥锁",
+			TextHash:    "backend",
+			Metadata:    map[string]string{"domain": "backend", "category": "cache", "difficulty": "L3", "question_role": "followup"},
+			Vector:      []float64{1, 0},
+			Status:      "active",
+		},
+		{
+			AtomID:      "atom-frontend",
+			AtomVersion: 1,
+			DocType:     ai.InterviewKnowledgeVectorDocFollowUp,
+			DocKey:      "follow_up:1",
+			DocText:     "热点 key 互斥锁",
+			TextHash:    "frontend",
+			Metadata:    map[string]string{"domain": "frontend", "category": "cache", "difficulty": "L3", "question_role": "followup"},
+			Vector:      []float64{1, 0},
+			Status:      "active",
+		},
+	}
+	if err := vectorStore.UpsertInterviewKnowledgeDocuments(ctx, docs); err != nil {
+		t.Fatalf("upsert interview knowledge docs: %v", err)
+	}
+	results, err := vectorStore.SearchInterviewKnowledge(ctx, InterviewKnowledgeVectorSearchQuery{
+		Domain:        "backend",
+		Category:      "cache",
+		Difficulty:    "L3",
+		QuestionRoles: []string{"followup"},
+		Vector:        []float64{1, 0},
+		Limit:         5,
+	})
+	if err != nil {
+		t.Fatalf("search interview knowledge docs: %v", err)
+	}
+	if len(results) != 1 || results[0].Document.AtomID != "atom-backend" {
+		t.Fatalf("expected backend-only result, got %+v", results)
+	}
+}
+
 func TestMemoryStoreIndexesOnlyActiveScenarios(t *testing.T) {
 	dataStore := NewMemoryStore(auth.HashPassword)
 	vectorStore := NewMemoryVectorStore()

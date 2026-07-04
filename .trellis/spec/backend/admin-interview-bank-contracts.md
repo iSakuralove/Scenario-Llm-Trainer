@@ -152,3 +152,92 @@ const InterviewKnowledgeVersionArchive = "archive"
 ```
 
 The domain constant, Store validation, runtime schema, migration schema, and legacy constraint upgrade stay aligned.
+
+## Scenario: Interview Bank Health / Retrieval Preview
+
+### 1. Scope / Trigger
+
+- Trigger: 修改管理员题库健康诊断、检索预览、题库向量检索过滤或前端题库治理观测面板。
+- Applies to: `backend/internal/httpapi/handlers_interview_bank.go`, `backend/internal/store/vector.go`, `backend/internal/store/postgres_vector.go`, `frontend/src/api/client.ts`, `frontend/src/features/interviewBank/InterviewBankAdminPage.tsx`, `frontend/src/types/index.ts`。
+
+### 2. Signatures
+
+- API: `GET /api/v1/admin/interview-bank/health`
+- API: `POST /api/v1/admin/interview-bank/retrieval-preview`
+- Preview request: `{ domain: string, category: string, difficulty: "L1"|"L2"|"L3"|"L4"|"L5", query: string, limit?: number }`
+- Preview response: `{ matched_count, fallback_used, fallback_reason?, results[], diagnostics }`
+- Vector query: `store.InterviewKnowledgeVectorSearchQuery{Domain, Category, Difficulty, QuestionRoles, Vector, Limit}`。
+
+### 3. Contracts
+
+- 两个接口都必须 admin-only；非管理员返回 `403`。
+- Health 只按 `domain + category + difficulty` 聚合，不把自由填写的 `tags` 纳入健康矩阵。
+- Health 组合状态：
+  - `open`: 有 opening/mixed 开场资源、有 followup/mixed 追问资源，且至少一个追问资源 `vector_status=indexed`。
+  - `warning`: 组合可开放，但存在已发布题 `pending` 或 `failed` 索引。
+  - `blocked`: 缺开场题、缺追问题，或没有已索引追问资源。
+- Preview 必须只展示当前仍然 `status=published`、`vector_status=indexed`、`question_role=followup|mixed` 的题库原子。
+- Preview 不创建面试会话、不写正式检索日志、不修改 atom、版本或索引状态。
+- Preview 要求 embedding 可用；embedding 缺失或失败时返回 `fallback_used=true` 和明确 `fallback_reason`，不要用文本相似度伪造向量命中。
+- Vector search 的 `Domain` 过滤只根据向量文档 metadata 过滤，不改变运行时未传 Domain 的检索行为。
+
+### 4. Validation & Error Matrix
+
+- Missing/invalid auth -> existing admin unauthorized/forbidden response.
+- Preview empty `category` -> `400`, `category is required`.
+- Preview invalid `category` -> `400`, `category is invalid`.
+- Preview invalid `difficulty` -> `400`, `difficulty must be L1-L5`.
+- Preview empty `query` / `answer` / `text` -> `400`, `query is required`.
+- Preview vector store unavailable -> `200` with `fallback_used=true`.
+- Preview no indexed candidates -> `200` with `fallback_used=true`.
+- Preview embedding unavailable/fails/dimension mismatch -> `200` with `fallback_used=true`.
+- Preview vector search error -> `200` with `fallback_used=true`.
+
+### 5. Good/Base/Bad Cases
+
+- Good: Admin opens health and sees a `blocked` combo with reason `追问题不足`, then clicks it to apply the matching list filters.
+- Good: Admin runs retrieval preview for an indexed followup atom and receives one lightweight hit with score, doc type, snippet, and diagnostics.
+- Base: A combo with enough content but one failed/pending published atom is `warning`, not `blocked`, when at least one indexed followup resource remains.
+- Bad: Preview writes `InterviewRetrievalLog` or creates an interview session, polluting runtime analytics.
+- Bad: Preview falls back to text-only search when embedding is missing and presents it as a vector hit.
+
+### 6. Tests Required
+
+- Backend API: health and retrieval preview require admin auth.
+- Backend API: health returns `open/warning/blocked` combinations with counts and reasons.
+- Backend API: preview returns hits only for published/indexed followup or mixed atoms.
+- Backend API: preview with missing embedding returns fallback and does not create atom versions.
+- Vector store: Domain metadata filter works in both MemoryVectorStore and PostgresVectorStore search paths.
+- Frontend: `npm --prefix frontend run lint` and `npm --prefix frontend run build`.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```go
+results, _ := vectorStore.SearchInterviewKnowledge(ctx, store.InterviewKnowledgeVectorSearchQuery{
+    Category: req.Category,
+    Difficulty: req.Difficulty,
+    Text: req.Query,
+})
+```
+
+This can return text-similarity results when embedding is unavailable and can mix domains that share the same category and difficulty.
+
+#### Correct
+
+```go
+vector, issue := s.embeddingVectorForInterviewPreview(ctx, req.Query)
+if issue != "" {
+    return fallback(issue), nil
+}
+results, _ := vectorStore.SearchInterviewKnowledge(ctx, store.InterviewKnowledgeVectorSearchQuery{
+    Domain: req.Domain,
+    Category: req.Category,
+    Difficulty: req.Difficulty,
+    QuestionRoles: []string{"followup", "mixed"},
+    Vector: vector,
+})
+```
+
+Preview uses a real embedding vector and the same current-atom published/indexed role filtering as runtime retrieval.

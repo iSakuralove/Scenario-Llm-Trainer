@@ -180,6 +180,10 @@ func (s *PostgresVectorStore) SearchInterviewKnowledge(ctx context.Context, quer
 	}
 	args := []interface{}{vectorLiteral(query.Vector), limit}
 	where := []string{"embedding IS NOT NULL", "COALESCE(status, 'active') = 'active'"}
+	if query.Domain != "" {
+		args = append(args, query.Domain)
+		where = append(where, fmt.Sprintf("COALESCE(metadata->>'domain', '') = $%d", len(args)))
+	}
 	if query.Category != "" {
 		args = append(args, query.Category)
 		where = append(where, fmt.Sprintf("COALESCE(metadata->>'category', '') = $%d", len(args)))
@@ -278,6 +282,10 @@ func (s *PostgresVectorStore) searchInterviewKnowledgeByText(ctx context.Context
 	candidateLimit := int(math.Max(float64(limit*8), 64))
 	args := []interface{}{candidateLimit}
 	where := []string{"COALESCE(status, 'active') = 'active'"}
+	if query.Domain != "" {
+		args = append(args, query.Domain)
+		where = append(where, fmt.Sprintf("COALESCE(metadata->>'domain', '') = $%d", len(args)))
+	}
 	if query.Category != "" {
 		args = append(args, query.Category)
 		where = append(where, fmt.Sprintf("COALESCE(metadata->>'category', '') = $%d", len(args)))

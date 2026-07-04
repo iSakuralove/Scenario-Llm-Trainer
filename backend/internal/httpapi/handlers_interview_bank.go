@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -141,11 +142,102 @@ type interviewKnowledgeAtomArchiveRequest struct {
 	Reason string `json:"reason"`
 }
 
+type interviewKnowledgeHealthSummary struct {
+	TotalAtoms          int `json:"total_atoms"`
+	PublishedAtoms      int `json:"published_atoms"`
+	DraftAtoms          int `json:"draft_atoms"`
+	ArchivedAtoms       int `json:"archived_atoms"`
+	VectorPendingAtoms  int `json:"vector_pending_atoms"`
+	VectorIndexedAtoms  int `json:"vector_indexed_atoms"`
+	VectorFailedAtoms   int `json:"vector_failed_atoms"`
+	OpenCombinations    int `json:"open_combinations"`
+	WarningCombinations int `json:"warning_combinations"`
+	BlockedCombinations int `json:"blocked_combinations"`
+}
+
+type interviewKnowledgeHealthCombination struct {
+	Domain               string   `json:"domain"`
+	Category             string   `json:"category"`
+	Difficulty           string   `json:"difficulty"`
+	TotalCount           int      `json:"total_count"`
+	PublishedCount       int      `json:"published_count"`
+	DraftCount           int      `json:"draft_count"`
+	ArchivedCount        int      `json:"archived_count"`
+	OpeningCount         int      `json:"opening_count"`
+	FollowupCount        int      `json:"followup_count"`
+	MixedCount           int      `json:"mixed_count"`
+	IndexedFollowupCount int      `json:"indexed_followup_count"`
+	PendingCount         int      `json:"pending_count"`
+	FailedCount          int      `json:"failed_count"`
+	Status               string   `json:"status"`
+	Reasons              []string `json:"reasons"`
+	Actions              []string `json:"actions"`
+}
+
+type interviewKnowledgeHealthResponse struct {
+	Summary      interviewKnowledgeHealthSummary       `json:"summary"`
+	Combinations []interviewKnowledgeHealthCombination `json:"combinations"`
+}
+
+type interviewKnowledgeRetrievalPreviewRequest struct {
+	Domain     string `json:"domain"`
+	Category   string `json:"category"`
+	Difficulty string `json:"difficulty"`
+	Query      string `json:"query"`
+	Answer     string `json:"answer"`
+	Text       string `json:"text"`
+	Limit      int    `json:"limit"`
+}
+
+type interviewKnowledgeRetrievalPreviewDiagnostics struct {
+	Domain               string         `json:"domain"`
+	Category             string         `json:"category"`
+	Difficulty           string         `json:"difficulty"`
+	Query                string         `json:"query"`
+	CandidateCount       int            `json:"candidate_count"`
+	PublishedCandidates  int            `json:"published_candidates"`
+	IndexedCandidates    int            `json:"indexed_candidates"`
+	PendingCandidates    int            `json:"pending_candidates"`
+	FailedCandidates     int            `json:"failed_candidates"`
+	ArchivedCandidates   int            `json:"archived_candidates"`
+	VectorStoreAvailable bool           `json:"vector_store_available"`
+	EmbeddingAvailable   bool           `json:"embedding_available"`
+	SearchLimit          int            `json:"search_limit"`
+	FilterCounts         map[string]int `json:"filter_counts"`
+}
+
+type interviewKnowledgeRetrievalPreviewResult struct {
+	AtomID       string  `json:"atom_id"`
+	Version      int     `json:"version"`
+	Title        string  `json:"title"`
+	Subject      string  `json:"subject"`
+	Domain       string  `json:"domain"`
+	Category     string  `json:"category"`
+	Difficulty   string  `json:"difficulty"`
+	QuestionRole string  `json:"question_role"`
+	Score        float64 `json:"score"`
+	DocType      string  `json:"doc_type"`
+	DocKey       string  `json:"doc_key"`
+	Snippet      string  `json:"snippet"`
+}
+
+type interviewKnowledgeRetrievalPreviewResponse struct {
+	MatchedCount   int                                           `json:"matched_count"`
+	FallbackUsed   bool                                          `json:"fallback_used"`
+	FallbackReason string                                        `json:"fallback_reason,omitempty"`
+	Results        []interviewKnowledgeRetrievalPreviewResult    `json:"results"`
+	Diagnostics    interviewKnowledgeRetrievalPreviewDiagnostics `json:"diagnostics"`
+}
+
 const interviewKnowledgeExpectedEmbeddingDim = 1536
 
 func (s *Server) handleAdminInterviewBank(w http.ResponseWriter, r *http.Request, user *domain.User, parts []string) {
 	if len(parts) == 1 && parts[0] == "summary" && r.Method == http.MethodGet {
 		writeOK(w, s.store.InterviewKnowledgeSummary())
+		return
+	}
+	if len(parts) == 1 && parts[0] == "health" && r.Method == http.MethodGet {
+		writeOK(w, s.interviewKnowledgeHealth())
 		return
 	}
 	if len(parts) == 1 && parts[0] == "atoms" && r.Method == http.MethodGet {
@@ -269,6 +361,19 @@ func (s *Server) handleAdminInterviewBank(w http.ResponseWriter, r *http.Request
 			"failed":  strconv.Itoa(response.Failed),
 			"skipped": strconv.Itoa(response.Skipped),
 		})
+		writeOK(w, response)
+		return
+	}
+	if len(parts) == 1 && parts[0] == "retrieval-preview" && r.Method == http.MethodPost {
+		var req interviewKnowledgeRetrievalPreviewRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		response, err := s.previewInterviewKnowledgeRetrieval(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeOK(w, response)
 		return
 	}
@@ -409,6 +514,344 @@ func (s *Server) restoreInterviewKnowledgeAtom(atomID string, user *domain.User)
 		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf(strings.Join(errors, "; "))
 	}
 	return s.store.SaveInterviewKnowledgeAtomVersioned(restored, domain.InterviewKnowledgeVersionRestoreArchived, user.ID, "恢复归档")
+}
+
+func (s *Server) interviewKnowledgeHealth() interviewKnowledgeHealthResponse {
+	items := s.store.ListInterviewKnowledgeAtoms(domain.InterviewKnowledgeAtomFilter{})
+	groups := map[string]*interviewKnowledgeHealthCombination{}
+	response := interviewKnowledgeHealthResponse{
+		Summary: interviewKnowledgeHealthSummary{TotalAtoms: len(items)},
+	}
+	for _, atom := range items {
+		response.Summary.TotalAtoms = len(items)
+		switch strings.TrimSpace(atom.Status) {
+		case "published":
+			response.Summary.PublishedAtoms++
+		case "archived":
+			response.Summary.ArchivedAtoms++
+		default:
+			response.Summary.DraftAtoms++
+		}
+		switch strings.TrimSpace(atom.VectorStatus) {
+		case "indexed":
+			response.Summary.VectorIndexedAtoms++
+		case "failed":
+			response.Summary.VectorFailedAtoms++
+		default:
+			response.Summary.VectorPendingAtoms++
+		}
+
+		domainName := strings.TrimSpace(atom.Domain)
+		category := strings.TrimSpace(atom.Category)
+		difficulty := strings.ToUpper(strings.TrimSpace(atom.Difficulty))
+		if domainName == "" && category == "" && difficulty == "" {
+			continue
+		}
+		key := strings.Join([]string{domainName, category, difficulty}, "|")
+		group := groups[key]
+		if group == nil {
+			group = &interviewKnowledgeHealthCombination{
+				Domain:     domainName,
+				Category:   category,
+				Difficulty: difficulty,
+				Reasons:    []string{},
+				Actions:    []string{},
+			}
+			groups[key] = group
+		}
+		group.TotalCount++
+		switch strings.TrimSpace(atom.Status) {
+		case "published":
+			group.PublishedCount++
+			role := strings.TrimSpace(atom.QuestionRole)
+			if role == "opening" || role == "mixed" {
+				group.OpeningCount++
+			}
+			if role == "followup" || role == "mixed" {
+				group.FollowupCount++
+				if atom.VectorStatus == "indexed" {
+					group.IndexedFollowupCount++
+				}
+			}
+			if role == "mixed" {
+				group.MixedCount++
+			}
+			switch strings.TrimSpace(atom.VectorStatus) {
+			case "failed":
+				group.FailedCount++
+			case "pending", "":
+				group.PendingCount++
+			}
+		case "archived":
+			group.ArchivedCount++
+		default:
+			group.DraftCount++
+		}
+	}
+
+	response.Combinations = make([]interviewKnowledgeHealthCombination, 0, len(groups))
+	for _, group := range groups {
+		finalizeInterviewKnowledgeHealthCombination(group)
+		switch group.Status {
+		case "open":
+			response.Summary.OpenCombinations++
+		case "warning":
+			response.Summary.WarningCombinations++
+		default:
+			response.Summary.BlockedCombinations++
+		}
+		response.Combinations = append(response.Combinations, *group)
+	}
+	sort.Slice(response.Combinations, func(i, j int) bool {
+		left := response.Combinations[i]
+		right := response.Combinations[j]
+		if left.Status != right.Status {
+			return interviewKnowledgeHealthStatusRank(left.Status) < interviewKnowledgeHealthStatusRank(right.Status)
+		}
+		if left.Category != right.Category {
+			return left.Category < right.Category
+		}
+		if left.Difficulty != right.Difficulty {
+			return left.Difficulty < right.Difficulty
+		}
+		return left.Domain < right.Domain
+	})
+	return response
+}
+
+func finalizeInterviewKnowledgeHealthCombination(group *interviewKnowledgeHealthCombination) {
+	if group == nil {
+		return
+	}
+	reasons := []string{}
+	actions := []string{}
+	if group.OpeningCount == 0 {
+		reasons = append(reasons, "开场题不足")
+		actions = append(actions, "补充 opening 或 mixed 题目")
+	}
+	if group.FollowupCount == 0 {
+		reasons = append(reasons, "追问题不足")
+		actions = append(actions, "补充 followup 或 mixed 题目")
+	}
+	if group.FollowupCount > 0 && group.IndexedFollowupCount == 0 {
+		reasons = append(reasons, "追问索引未就绪")
+		actions = append(actions, "重建该组合追问索引")
+	}
+	if len(reasons) > 0 {
+		group.Status = "blocked"
+		group.Reasons = uniqueStrings(reasons)
+		group.Actions = uniqueStrings(actions)
+		return
+	}
+	if group.FailedCount > 0 {
+		reasons = append(reasons, fmt.Sprintf("%d 条已发布题索引失败", group.FailedCount))
+		actions = append(actions, "筛选 failed 并重建索引")
+	}
+	if group.PendingCount > 0 {
+		reasons = append(reasons, fmt.Sprintf("%d 条已发布题待索引", group.PendingCount))
+		actions = append(actions, "重建 pending 索引")
+	}
+	if len(reasons) > 0 {
+		group.Status = "warning"
+		group.Reasons = uniqueStrings(reasons)
+		group.Actions = uniqueStrings(actions)
+		return
+	}
+	group.Status = "open"
+	group.Reasons = []string{"组合可用于开场与追问检索"}
+	group.Actions = []string{}
+}
+
+func interviewKnowledgeHealthStatusRank(status string) int {
+	switch status {
+	case "blocked":
+		return 0
+	case "warning":
+		return 1
+	case "open":
+		return 2
+	default:
+		return 3
+	}
+}
+
+func (s *Server) previewInterviewKnowledgeRetrieval(ctx context.Context, req interviewKnowledgeRetrievalPreviewRequest) (interviewKnowledgeRetrievalPreviewResponse, error) {
+	req.Domain = strings.TrimSpace(req.Domain)
+	req.Category = strings.TrimSpace(req.Category)
+	req.Difficulty = strings.ToUpper(strings.TrimSpace(req.Difficulty))
+	queryText := strings.TrimSpace(firstNonEmpty(req.Query, req.Answer, req.Text))
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 5
+	}
+	if limit > 20 {
+		limit = 20
+	}
+	if req.Category == "" {
+		return interviewKnowledgeRetrievalPreviewResponse{}, fmt.Errorf("category is required")
+	}
+	if !interviewKnowledgeAllowedCategories[req.Category] {
+		return interviewKnowledgeRetrievalPreviewResponse{}, fmt.Errorf("category is invalid")
+	}
+	if !validInterviewKnowledgeDifficulty(req.Difficulty) {
+		return interviewKnowledgeRetrievalPreviewResponse{}, fmt.Errorf("difficulty must be L1-L5")
+	}
+	if queryText == "" {
+		return interviewKnowledgeRetrievalPreviewResponse{}, fmt.Errorf("query is required")
+	}
+
+	vectorStore := interviewKnowledgeVectorStore(s.store)
+	diagnostics := s.interviewKnowledgeRetrievalPreviewDiagnostics(req, queryText, limit, vectorStore != nil, s.embedding != nil)
+	response := interviewKnowledgeRetrievalPreviewResponse{
+		Results:     []interviewKnowledgeRetrievalPreviewResult{},
+		Diagnostics: diagnostics,
+	}
+	if vectorStore == nil {
+		response.FallbackUsed = true
+		response.FallbackReason = "题库检索不可用"
+		return response, nil
+	}
+	if diagnostics.IndexedCandidates == 0 {
+		response.FallbackUsed = true
+		response.FallbackReason = "当前组合没有已索引追问资源"
+		return response, nil
+	}
+	vector, embeddingIssue := s.embeddingVectorForInterviewPreview(ctx, queryText)
+	if embeddingIssue != "" {
+		response.FallbackUsed = true
+		response.FallbackReason = embeddingIssue
+		response.Diagnostics.EmbeddingAvailable = false
+		return response, nil
+	}
+	results, err := vectorStore.SearchInterviewKnowledge(ctx, store.InterviewKnowledgeVectorSearchQuery{
+		Domain:        req.Domain,
+		Category:      req.Category,
+		Difficulty:    req.Difficulty,
+		QuestionRoles: []string{"followup", "mixed"},
+		Vector:        vector,
+		Limit:         limit * 8,
+	})
+	if err != nil {
+		response.FallbackUsed = true
+		response.FallbackReason = "题库检索失败：" + truncateText(err.Error(), 120)
+		return response, nil
+	}
+	response.Results = s.interviewKnowledgeRetrievalPreviewResults(results, req, limit)
+	response.MatchedCount = len(response.Results)
+	if response.MatchedCount == 0 {
+		response.FallbackUsed = true
+		response.FallbackReason = "未命中可用题库追问原子"
+	}
+	return response, nil
+}
+
+func (s *Server) interviewKnowledgeRetrievalPreviewDiagnostics(req interviewKnowledgeRetrievalPreviewRequest, queryText string, limit int, vectorStoreAvailable, embeddingAvailable bool) interviewKnowledgeRetrievalPreviewDiagnostics {
+	diagnostics := interviewKnowledgeRetrievalPreviewDiagnostics{
+		Domain:               req.Domain,
+		Category:             req.Category,
+		Difficulty:           req.Difficulty,
+		Query:                queryText,
+		VectorStoreAvailable: vectorStoreAvailable,
+		EmbeddingAvailable:   embeddingAvailable,
+		SearchLimit:          limit,
+		FilterCounts:         map[string]int{},
+	}
+	for _, atom := range s.store.ListInterviewKnowledgeAtoms(domain.InterviewKnowledgeAtomFilter{}) {
+		if !interviewKnowledgeAtomMatchesPreviewCombo(atom, req) {
+			continue
+		}
+		role := strings.TrimSpace(atom.QuestionRole)
+		if role != "followup" && role != "mixed" {
+			diagnostics.FilterCounts["non_followup_role"]++
+			continue
+		}
+		diagnostics.CandidateCount++
+		switch strings.TrimSpace(atom.Status) {
+		case "published":
+			diagnostics.PublishedCandidates++
+			switch strings.TrimSpace(atom.VectorStatus) {
+			case "indexed":
+				diagnostics.IndexedCandidates++
+			case "failed":
+				diagnostics.FailedCandidates++
+			default:
+				diagnostics.PendingCandidates++
+			}
+		case "archived":
+			diagnostics.ArchivedCandidates++
+			diagnostics.FilterCounts["archived"]++
+		default:
+			diagnostics.FilterCounts["draft"]++
+		}
+	}
+	return diagnostics
+}
+
+func interviewKnowledgeAtomMatchesPreviewCombo(atom domain.InterviewKnowledgeAtom, req interviewKnowledgeRetrievalPreviewRequest) bool {
+	if req.Domain != "" && !strings.EqualFold(strings.TrimSpace(atom.Domain), req.Domain) {
+		return false
+	}
+	if req.Category != "" && !strings.EqualFold(strings.TrimSpace(atom.Category), req.Category) {
+		return false
+	}
+	if req.Difficulty != "" && !strings.EqualFold(strings.TrimSpace(atom.Difficulty), req.Difficulty) {
+		return false
+	}
+	return true
+}
+
+func (s *Server) embeddingVectorForInterviewPreview(ctx context.Context, queryText string) ([]float64, string) {
+	if s.embedding == nil {
+		return nil, "embedding client is not configured"
+	}
+	result, err := s.embedding.Embed(ctx, []string{queryText})
+	if err != nil {
+		return nil, "embedding 生成失败：" + truncateText(err.Error(), 120)
+	}
+	if len(result.Vectors) != 1 || len(result.Vectors[0]) != interviewKnowledgeExpectedEmbeddingDim {
+		return nil, "embedding 维度不匹配"
+	}
+	return append([]float64{}, result.Vectors[0]...), ""
+}
+
+func (s *Server) interviewKnowledgeRetrievalPreviewResults(results []store.InterviewKnowledgeVectorSearchResult, req interviewKnowledgeRetrievalPreviewRequest, limit int) []interviewKnowledgeRetrievalPreviewResult {
+	out := []interviewKnowledgeRetrievalPreviewResult{}
+	seenAtoms := map[string]bool{}
+	for _, result := range results {
+		atomID := strings.TrimSpace(result.Document.AtomID)
+		if atomID == "" || seenAtoms[atomID] {
+			continue
+		}
+		atom, ok := s.store.GetInterviewKnowledgeAtom(atomID)
+		if !ok || !interviewKnowledgeAtomMatchesPreviewCombo(*atom, req) {
+			continue
+		}
+		if atom.Status != "published" || atom.VectorStatus != "indexed" {
+			continue
+		}
+		if atom.QuestionRole != "followup" && atom.QuestionRole != "mixed" {
+			continue
+		}
+		seenAtoms[atomID] = true
+		out = append(out, interviewKnowledgeRetrievalPreviewResult{
+			AtomID:       atom.ID,
+			Version:      maxInt(atom.CurrentVersion, 1),
+			Title:        atom.Title,
+			Subject:      atom.Subject,
+			Domain:       atom.Domain,
+			Category:     atom.Category,
+			Difficulty:   atom.Difficulty,
+			QuestionRole: atom.QuestionRole,
+			Score:        result.Score,
+			DocType:      result.Document.DocType,
+			DocKey:       result.Document.DocKey,
+			Snippet:      truncateText(result.Document.DocText, 160),
+		})
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
 }
 
 func (s *Server) rebuildInterviewKnowledgeIndex(ctx context.Context, req interviewKnowledgeIndexRebuildRequest) (interviewKnowledgeIndexRebuildResponse, error) {

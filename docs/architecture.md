@@ -93,6 +93,8 @@
   负责 `/admin/interview-bank/*` 的摘要、列表、批次、导入校验、发布和索引重建。
 - `GET /api/v1/admin/interview-bank/summary`
   返回题库资源数、发布数、批次数、开放组合数和索引状态摘要。
+- `GET /api/v1/admin/interview-bank/health`
+  返回按 `domain + category + difficulty` 聚合的题库健康诊断，区分可开放、告警和阻断组合，并暴露开场题、追问题、已索引追问资源、待索引和索引失败数量。
 - `GET /api/v1/admin/interview-bank/atoms`
   支持按 `status`、`domain`、`difficulty`、`category`、`question_role`、`vector_status` 筛选当前题库资源。
 - `GET /api/v1/admin/interview-bank/atoms/{id}`
@@ -113,6 +115,8 @@
   复用同一套校验逻辑，通过后调用 `SaveInterviewKnowledgeAtomVersioned` 写入 atom 与版本，再保存导入批次。
 - `POST /api/v1/admin/interview-bank/index/rebuild`
   触发 admin-only 的同步限量索引重建，支持按 `atom_ids` 精确重建，或按 `vector_status=pending|failed|pending_failed` 选择候选资源。
+- `POST /api/v1/admin/interview-bank/retrieval-preview`
+  支持管理员按 `domain + category + difficulty` 输入模拟检索文本预览追问召回结果；该接口复用题库向量检索边界，只读取 `published + indexed + followup/mixed` 资源，不创建面试会话、不写正式检索日志、不推进版本或修改索引状态。
 
 题库向量索引采用独立的 `interview_knowledge_vector_documents` 表，不复用场景题的 `scenario_vector_documents`，避免 `question_id` / `source_version` 语义混用。重建接口只对 `status=published` 的 atom 调用 embedding 并写入向量文档；`draft` / `archived` 被请求重建时会删除旧向量文档并返回 skipped，不进入可检索索引。成功重建会将 `vector_status` 更新为 `indexed` 并写入 `last_indexed_at`；失败只将 `vector_status` 更新为 `failed`，不覆盖上一次成功索引时间，也不新增内容版本。导入发布链路仍不自动触发 embedding，避免发布接口受外部 provider 可用性影响。
 

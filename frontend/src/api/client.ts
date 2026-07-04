@@ -12,10 +12,13 @@ import type {
   InterviewKnowledgeAtomUpdateRequest,
   InterviewKnowledgeAtomVersion,
   InterviewKnowledgeBatch,
+  InterviewKnowledgeHealthResponse,
   InterviewKnowledgeIndexRebuildRequest,
   InterviewKnowledgeIndexRebuildResponse,
   InterviewKnowledgeImportReport,
   InterviewKnowledgePublishResponse,
+  InterviewKnowledgeRetrievalPreviewRequest,
+  InterviewKnowledgeRetrievalPreviewResponse,
   InterviewKnowledgeSummary,
   InterviewDifficultyLevel,
   InterviewFocusArea,
@@ -900,6 +903,9 @@ export const api = {
   adminInterviewBankSummary: (token: string) =>
     request<InterviewKnowledgeSummary>('/admin/interview-bank/summary', {}, token),
 
+  adminInterviewBankHealth: (token: string) =>
+    request<InterviewKnowledgeHealthResponse>('/admin/interview-bank/health', {}, token),
+
   adminInterviewBankAtoms: (token: string, filters: InterviewKnowledgeAtomFilters = {}) =>
     request<{ list: InterviewKnowledgeAtom[]; total: number; filters: InterviewKnowledgeAtomFilters }>(
       `/admin/interview-bank/atoms${queryString(filters as Record<string, string | number | undefined>)}`,
@@ -954,6 +960,13 @@ export const api = {
   rebuildInterviewBankIndex: (token: string, payload: InterviewKnowledgeIndexRebuildRequest) =>
     request<InterviewKnowledgeIndexRebuildResponse>(
       '/admin/interview-bank/index/rebuild',
+      { method: 'POST', body: JSON.stringify(payload) },
+      token,
+    ),
+
+  previewInterviewBankRetrieval: (token: string, payload: InterviewKnowledgeRetrievalPreviewRequest) =>
+    request<InterviewKnowledgeRetrievalPreviewResponse>(
+      '/admin/interview-bank/retrieval-preview',
       { method: 'POST', body: JSON.stringify(payload) },
       token,
     ),

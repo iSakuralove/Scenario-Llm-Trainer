@@ -130,6 +130,146 @@ func TestAdminInterviewBankPublishVersionsAndFailedVectorFilter(t *testing.T) {
 	}
 }
 
+func TestAdminInterviewBankHealthDiagnosesCombinations(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	opening := validInterviewBankAtomForRebuild("atom-health-opening", "published", "pending")
+	opening.QuestionRole = "opening"
+	indexedFollowup := validInterviewBankAtomForRebuild("atom-health-indexed-followup", "published", "indexed")
+	indexedFollowup.QuestionRole = "followup"
+	failedFollowup := validInterviewBankAtomForRebuild("atom-health-failed-followup", "published", "failed")
+	failedFollowup.QuestionRole = "followup"
+	blocked := validInterviewBankAtomForRebuild("atom-health-blocked-opening", "published", "indexed")
+	blocked.Category = "database"
+	blocked.Difficulty = "L2"
+	blocked.QuestionRole = "opening"
+	archived := validInterviewBankAtomForRebuild("atom-health-archived", "archived", "pending")
+	for _, atom := range []domain.InterviewKnowledgeAtom{opening, indexedFollowup, failedFollowup, blocked, archived} {
+		if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "健康诊断样例"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	demoToken := loginToken(t, handler, "demo", "demo123")
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	_, env := requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/health", demoToken, nil)
+	if env.Code != http.StatusForbidden {
+		t.Fatalf("student health code=%d", env.Code)
+	}
+
+	status, env := requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/health", adminToken, nil)
+	if status != http.StatusOK {
+		t.Fatalf("health status=%d message=%s", status, env.Message)
+	}
+	var response interviewKnowledgeHealthResponse
+	mustDecodeData(t, env, &response)
+	if response.Summary.TotalAtoms != 5 || response.Summary.WarningCombinations != 1 || response.Summary.BlockedCombinations != 1 {
+		t.Fatalf("unexpected health summary: %+v", response.Summary)
+	}
+	cacheCombo := findInterviewKnowledgeHealthCombination(response.Combinations, "backend", "cache", "L3")
+	if cacheCombo == nil || cacheCombo.Status != "warning" || cacheCombo.OpeningCount != 1 || cacheCombo.IndexedFollowupCount != 1 || cacheCombo.FailedCount != 1 {
+		t.Fatalf("unexpected cache health combination: %+v", cacheCombo)
+	}
+	if !strings.Contains(strings.Join(cacheCombo.Reasons, ";"), "索引失败") {
+		t.Fatalf("expected failed index reason, got %+v", cacheCombo.Reasons)
+	}
+	databaseCombo := findInterviewKnowledgeHealthCombination(response.Combinations, "backend", "database", "L2")
+	if databaseCombo == nil || databaseCombo.Status != "blocked" || databaseCombo.FollowupCount != 0 {
+		t.Fatalf("unexpected database health combination: %+v", databaseCombo)
+	}
+	if !strings.Contains(strings.Join(databaseCombo.Reasons, ";"), "追问题不足") {
+		t.Fatalf("expected followup shortage reason, got %+v", databaseCombo.Reasons)
+	}
+}
+
+func TestAdminInterviewBankRetrievalPreviewRequiresAdminAndReturnsMatches(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	atom := validInterviewBankAtomForRebuild("atom-preview-hit", "published", "pending")
+	atom.QuestionRole = "followup"
+	if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "检索预览样例"); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour))
+	embedding := &mockInterviewBankEmbeddingClient{model: "test-embedding", dim: 1536}
+	server.embedding = embedding
+	handler := server.Handler()
+	demoToken := loginToken(t, handler, "demo", "demo123")
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	_, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/retrieval-preview", demoToken, map[string]interface{}{
+		"domain":     "backend",
+		"category":   "cache",
+		"difficulty": "L3",
+		"query":      "热点 key 互斥锁",
+	})
+	if env.Code != http.StatusForbidden {
+		t.Fatalf("student retrieval preview code=%d", env.Code)
+	}
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/index/rebuild", adminToken, map[string]interface{}{
+		"atom_ids": []string{atom.ID},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("rebuild status=%d message=%s", status, env.Message)
+	}
+	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/retrieval-preview", adminToken, map[string]interface{}{
+		"domain":     "backend",
+		"category":   "cache",
+		"difficulty": "L3",
+		"query":      "热点 key 互斥锁",
+		"limit":      3,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("preview status=%d message=%s", status, env.Message)
+	}
+	var response interviewKnowledgeRetrievalPreviewResponse
+	mustDecodeData(t, env, &response)
+	if response.FallbackUsed || response.MatchedCount != 1 || len(response.Results) != 1 {
+		t.Fatalf("expected one preview hit without fallback, got %+v", response)
+	}
+	if response.Results[0].AtomID != atom.ID || response.Diagnostics.IndexedCandidates != 1 {
+		t.Fatalf("unexpected preview response: %+v", response)
+	}
+	if embedding.calls != 2 {
+		t.Fatalf("expected embedding for rebuild and preview, got %d", embedding.calls)
+	}
+	if versions := dataStore.ListInterviewKnowledgeAtomVersions(atom.ID); len(versions) != 1 {
+		t.Fatalf("retrieval preview must not create versions, got %+v", versions)
+	}
+}
+
+func TestAdminInterviewBankRetrievalPreviewMissingEmbeddingFallsBack(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	atom := validInterviewBankAtomForRebuild("atom-preview-no-embedding", "published", "indexed")
+	atom.QuestionRole = "mixed"
+	if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "检索预览 fallback 样例"); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/retrieval-preview", adminToken, map[string]interface{}{
+		"domain":     "backend",
+		"category":   "cache",
+		"difficulty": "L3",
+		"query":      "热点 key",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("preview status=%d message=%s", status, env.Message)
+	}
+	var response interviewKnowledgeRetrievalPreviewResponse
+	mustDecodeData(t, env, &response)
+	if !response.FallbackUsed || !strings.Contains(response.FallbackReason, "embedding") {
+		t.Fatalf("expected embedding fallback, got %+v", response)
+	}
+	if response.Diagnostics.IndexedCandidates != 1 || response.Diagnostics.EmbeddingAvailable {
+		t.Fatalf("unexpected diagnostics: %+v", response.Diagnostics)
+	}
+	if versions := dataStore.ListInterviewKnowledgeAtomVersions(atom.ID); len(versions) != 1 {
+		t.Fatalf("retrieval preview must not create versions, got %+v", versions)
+	}
+}
+
 func TestAdminInterviewBankAtomDetailVersionsAndManualEdit(t *testing.T) {
 	dataStore := store.NewMemoryStore(auth.HashPassword)
 	atom := validInterviewBankAtomForRebuild("atom-edit-manual", "published", "indexed")
@@ -512,6 +652,15 @@ func TestAdminInterviewBankRebuildMissingEmbeddingMarksFailed(t *testing.T) {
 	if !ok || updated.VectorStatus != "failed" || updated.LastIndexedAt != nil {
 		t.Fatalf("expected failed atom without last_indexed_at, ok=%v atom=%+v", ok, updated)
 	}
+}
+
+func findInterviewKnowledgeHealthCombination(items []interviewKnowledgeHealthCombination, domainName, category, difficulty string) *interviewKnowledgeHealthCombination {
+	for i := range items {
+		if items[i].Domain == domainName && items[i].Category == category && items[i].Difficulty == difficulty {
+			return &items[i]
+		}
+	}
+	return nil
 }
 
 func validInterviewBankImportPayload(batchID, atomID string) map[string]interface{} {

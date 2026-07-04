@@ -143,6 +143,7 @@
 .interview-bank-filter-grid,
 .interview-bank-actions,
 .interview-bank-main-grid,
+.interview-bank-ops-grid,
 .interview-bank-report-metrics,
 .interview-bank-list-title {
   min-width: 0;
@@ -156,7 +157,8 @@
 }
 
 .interview-bank-filter-grid label,
-.interview-bank-import-panel label {
+.interview-bank-import-panel label,
+.interview-bank-preview-form label {
   display: grid;
   gap: 7px;
   color: rgba(220, 228, 238, 0.82);
@@ -167,6 +169,9 @@
 .interview-bank-filter-grid input,
 .interview-bank-filter-grid select,
 .interview-bank-import-panel textarea,
+.interview-bank-preview-form input,
+.interview-bank-preview-form select,
+.interview-bank-preview-form textarea,
 .interview-bank-edit-grid input,
 .interview-bank-edit-grid select,
 .interview-bank-edit-grid textarea,
@@ -181,6 +186,8 @@
 
 .interview-bank-filter-grid input,
 .interview-bank-filter-grid select,
+.interview-bank-preview-form input,
+.interview-bank-preview-form select,
 .interview-bank-edit-grid input,
 .interview-bank-edit-grid select,
 .interview-bank-archive-box input {
@@ -189,11 +196,13 @@
 }
 
 .interview-bank-filter-grid select,
+.interview-bank-preview-form select,
 .interview-bank-edit-grid select {
   color-scheme: dark;
 }
 
 .interview-bank-filter-grid option,
+.interview-bank-preview-form option,
 .interview-bank-edit-grid option {
   background: #0c121b;
   color: #f6fafe;
@@ -201,6 +210,8 @@
 
 .interview-bank-filter-grid input::placeholder,
 .interview-bank-import-panel textarea::placeholder,
+.interview-bank-preview-form input::placeholder,
+.interview-bank-preview-form textarea::placeholder,
 .interview-bank-edit-grid input::placeholder,
 .interview-bank-edit-grid textarea::placeholder,
 .interview-bank-archive-box input::placeholder {
@@ -210,6 +221,9 @@
 .interview-bank-filter-grid input:focus,
 .interview-bank-filter-grid select:focus,
 .interview-bank-import-panel textarea:focus,
+.interview-bank-preview-form input:focus,
+.interview-bank-preview-form select:focus,
+.interview-bank-preview-form textarea:focus,
 .interview-bank-edit-grid input:focus,
 .interview-bank-edit-grid select:focus,
 .interview-bank-edit-grid textarea:focus,
@@ -221,6 +235,13 @@
 .interview-bank-main-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.interview-bank-ops-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
   gap: 18px;
   align-items: start;
 }
@@ -280,6 +301,9 @@
 }
 
 .interview-bank-report,
+.interview-bank-preview-result,
+.interview-bank-health-alert,
+.interview-bank-preview-hit,
 .interview-bank-publish-strip,
 .interview-bank-batch-row,
 .interview-bank-empty-row,
@@ -298,12 +322,14 @@
   padding: 16px;
 }
 
-.interview-bank-report.has-errors {
+.interview-bank-report.has-errors,
+.interview-bank-preview-result.has-errors {
   border-color: rgba(255, 90, 54, 0.32);
   background: rgba(74, 20, 12, 0.42);
 }
 
 .interview-bank-report-heading,
+.interview-bank-preview-hit,
 .interview-bank-publish-strip,
 .interview-bank-batch-row,
 .interview-bank-empty-row,
@@ -314,6 +340,7 @@
 }
 
 .interview-bank-report-heading strong,
+.interview-bank-preview-hit strong,
 .interview-bank-publish-strip strong,
 .interview-bank-batch-row strong,
 .interview-bank-empty-row strong,
@@ -324,6 +351,8 @@
 }
 
 .interview-bank-report-heading span,
+.interview-bank-preview-hit span,
+.interview-bank-preview-hit small,
 .interview-bank-publish-strip span,
 .interview-bank-batch-row span,
 .interview-bank-batch-row small,
@@ -350,6 +379,135 @@
 
 .interview-bank-report-metrics .metric strong {
   font-size: 24px;
+}
+
+.interview-bank-health-panel,
+.interview-bank-preview-panel,
+.interview-bank-preview-result {
+  display: grid;
+  gap: 14px;
+}
+
+.interview-bank-health-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.interview-bank-health-metrics .metric {
+  min-height: 82px;
+  padding: 14px;
+}
+
+.interview-bank-health-metrics .metric strong {
+  font-size: 24px;
+}
+
+.interview-bank-health-alerts,
+.interview-bank-preview-result-list {
+  display: grid;
+  gap: 10px;
+}
+
+.interview-bank-health-alert {
+  width: 100%;
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.interview-bank-health-alert.status-blocked {
+  border-color: rgba(255, 90, 54, 0.34);
+  background: rgba(74, 20, 12, 0.5);
+}
+
+.interview-bank-health-alert.status-warning {
+  border-color: rgba(255, 190, 92, 0.28);
+  background: rgba(88, 63, 20, 0.36);
+}
+
+.interview-bank-health-alert strong,
+.interview-bank-health-table strong {
+  color: #f5f8fc;
+}
+
+.interview-bank-health-alert span,
+.interview-bank-health-table span {
+  color: rgba(220, 228, 238, 0.72);
+  line-height: 1.55;
+}
+
+.interview-bank-health-table-wrap {
+  min-width: 0;
+  overflow: auto;
+}
+
+.interview-bank-health-table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+}
+
+.interview-bank-health-table th,
+.interview-bank-health-table td {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 12px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.interview-bank-health-table th {
+  color: rgba(220, 228, 238, 0.7);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.interview-bank-health-table td {
+  color: #e6edf5;
+}
+
+.interview-bank-health-table td:first-child strong,
+.interview-bank-health-table td:first-child span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.interview-bank-preview-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.interview-bank-preview-form textarea {
+  min-height: 128px;
+  padding: 12px;
+  resize: vertical;
+  line-height: 1.6;
+}
+
+.interview-bank-preview-form .span-4 {
+  grid-column: span 4;
+}
+
+.interview-bank-preview-result {
+  padding: 16px;
+}
+
+.interview-bank-preview-hit {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+}
+
+.interview-bank-preview-hit strong,
+.interview-bank-preview-hit span,
+.interview-bank-preview-hit small {
+  display: block;
+  overflow-wrap: anywhere;
 }
 
 .interview-bank-report-issues {
@@ -629,6 +787,24 @@
   color: #ffc7bc;
 }
 
+.interview-bank-pill.health-open {
+  border-color: rgba(92, 225, 198, 0.22);
+  background: rgba(92, 225, 198, 0.1);
+  color: #8ef0db;
+}
+
+.interview-bank-pill.health-warning {
+  border-color: rgba(255, 190, 92, 0.28);
+  background: rgba(88, 63, 20, 0.36);
+  color: #ffe0a8;
+}
+
+.interview-bank-pill.health-blocked {
+  border-color: rgba(255, 90, 54, 0.28);
+  background: rgba(74, 20, 12, 0.42);
+  color: #ffc7bc;
+}
+
 @media (max-width: 1280px) {
   .interview-bank-filter-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -637,6 +813,7 @@
 
 @media (max-width: 1100px) {
   .interview-bank-hero,
+  .interview-bank-ops-grid,
   .interview-bank-main-grid {
     grid-template-columns: 1fr;
   }
@@ -655,6 +832,8 @@
 
   .interview-bank-hero-metrics,
   .interview-bank-filter-grid,
+  .interview-bank-health-metrics,
+  .interview-bank-preview-form,
   .interview-bank-report-metrics {
     grid-template-columns: 1fr;
   }
@@ -686,5 +865,13 @@
   .interview-bank-page .ghost-button,
   .interview-bank-page .primary-button {
     width: 100%;
+  }
+
+  .interview-bank-preview-form .span-4 {
+    grid-column: span 1;
+  }
+
+  .interview-bank-preview-hit {
+    grid-template-columns: 1fr;
   }
 }

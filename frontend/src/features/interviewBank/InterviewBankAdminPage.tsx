@@ -24,10 +24,13 @@ import type {
   InterviewKnowledgeAtomUpdateRequest,
   InterviewKnowledgeAtomVersion,
   InterviewKnowledgeBatch,
+  InterviewKnowledgeHealthCombination,
+  InterviewKnowledgeHealthResponse,
   InterviewKnowledgeIndexRebuildRequest,
   InterviewKnowledgeIndexRebuildResponse,
   InterviewKnowledgeImportReport,
   InterviewKnowledgePublishResponse,
+  InterviewKnowledgeRetrievalPreviewResponse,
   InterviewKnowledgeSummary,
 } from '../../types'
 import './InterviewBankAdminPage.css'
@@ -75,9 +78,18 @@ interface AtomEditForm {
   followUpPathsText: string
 }
 
+interface RetrievalPreviewForm {
+  domain: string
+  category: string
+  difficulty: string
+  query: string
+  limit: number
+}
+
 export function InterviewBankAdminPage() {
   const token = useToken()
   const [summary, setSummary] = useState<InterviewKnowledgeSummary | null>(null)
+  const [health, setHealth] = useState<InterviewKnowledgeHealthResponse | null>(null)
   const [atoms, setAtoms] = useState<InterviewKnowledgeAtom[]>([])
   const [totalAtoms, setTotalAtoms] = useState(0)
   const [batches, setBatches] = useState<InterviewKnowledgeBatch[]>([])
@@ -101,17 +113,28 @@ export function InterviewBankAdminPage() {
   const [isSavingAtom, setIsSavingAtom] = useState(false)
   const [isArchivingAtom, setIsArchivingAtom] = useState(false)
   const [isRestoringAtom, setIsRestoringAtom] = useState(false)
+  const [isPreviewingRetrieval, setIsPreviewingRetrieval] = useState(false)
+  const [retrievalPreviewForm, setRetrievalPreviewForm] = useState<RetrievalPreviewForm>({
+    domain: 'backend',
+    category: 'cache',
+    difficulty: 'L3',
+    query: '',
+    limit: 5,
+  })
+  const [retrievalPreview, setRetrievalPreview] = useState<InterviewKnowledgeRetrievalPreviewResponse | null>(null)
 
   const loadData = useCallback(async () => {
     setIsLoading(true)
     setError('')
     try {
-      const [nextSummary, atomData, batchData] = await Promise.all([
+      const [nextSummary, nextHealth, atomData, batchData] = await Promise.all([
         api.adminInterviewBankSummary(token),
+        api.adminInterviewBankHealth(token),
         api.adminInterviewBankAtoms(token, filters),
         api.adminInterviewBankBatches(token, 20),
       ])
       setSummary(nextSummary)
+      setHealth(nextHealth)
       setAtoms(atomData.list ?? [])
       setTotalAtoms(atomData.total ?? 0)
       setBatches(batchData.list ?? [])
@@ -144,9 +167,35 @@ export function InterviewBankAdminPage() {
     { label: '失败索引', value: summary?.vector_failed_atoms ?? 0 },
     { label: '开放组合', value: summary?.open_combination_count ?? 0 },
   ], [summary])
+  const healthHighlights = useMemo(
+    () => (health?.combinations ?? []).filter((item) => item.status !== 'open').slice(0, 6),
+    [health],
+  )
 
   function updateFilter(key: keyof InterviewKnowledgeAtomFilters, value: string) {
     setFilters((current) => ({ ...current, [key]: value }))
+  }
+
+  function applyHealthCombination(combo: InterviewKnowledgeHealthCombination) {
+    setFilters({
+      status: '',
+      domain: combo.domain,
+      category: combo.category,
+      difficulty: combo.difficulty,
+      question_role: '',
+      vector_status: '',
+      page_size: 20,
+    })
+    setRetrievalPreviewForm((current) => ({
+      ...current,
+      domain: combo.domain,
+      category: combo.category,
+      difficulty: combo.difficulty,
+    }))
+  }
+
+  function updateRetrievalPreviewForm<K extends keyof RetrievalPreviewForm>(key: K, value: RetrievalPreviewForm[K]) {
+    setRetrievalPreviewForm((current) => ({ ...current, [key]: value }))
   }
 
   function parseImportPayload() {
@@ -262,6 +311,33 @@ export function InterviewBankAdminPage() {
       setError(err instanceof Error ? err.message : '索引重建失败')
     } finally {
       setIsRebuilding(false)
+    }
+  }
+
+  async function handleRetrievalPreview() {
+    setError('')
+    setMessage('')
+    setRetrievalPreview(null)
+    const query = retrievalPreviewForm.query.trim()
+    if (!retrievalPreviewForm.category || !retrievalPreviewForm.difficulty || !query) {
+      setError('请选择分类、难度并输入模拟文本')
+      return
+    }
+    try {
+      setIsPreviewingRetrieval(true)
+      const result = await api.previewInterviewBankRetrieval(token, {
+        domain: retrievalPreviewForm.domain.trim(),
+        category: retrievalPreviewForm.category,
+        difficulty: retrievalPreviewForm.difficulty,
+        query,
+        limit: retrievalPreviewForm.limit,
+      })
+      setRetrievalPreview(result)
+      setMessage(result.fallback_used ? `检索预览回退：${result.fallback_reason}` : `检索预览命中 ${result.matched_count} 个题库原子`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '检索预览失败')
+    } finally {
+      setIsPreviewingRetrieval(false)
     }
   }
 
@@ -445,6 +521,24 @@ export function InterviewBankAdminPage() {
         </div>
       </section>
 
+      <div className="interview-bank-ops-grid">
+        <HealthDiagnosticPanel
+          health={health}
+          highlights={healthHighlights}
+          onApplyCombination={applyHealthCombination}
+          onRebuild={() => void handleRebuild('pending_failed')}
+          isRebuilding={isRebuilding}
+        />
+        <RetrievalPreviewPanel
+          form={retrievalPreviewForm}
+          result={retrievalPreview}
+          isPreviewing={isPreviewingRetrieval}
+          onChange={updateRetrievalPreviewForm}
+          onSubmit={() => void handleRetrievalPreview()}
+          onOpenAtom={(atomID) => void handleOpenAtom(atomID)}
+        />
+      </div>
+
       <div className="interview-bank-main-grid">
         <section className="panel interview-bank-import-panel">
           <div className="panel-title"><FileJson size={18} /> 导入包</div>
@@ -576,6 +670,204 @@ export function InterviewBankAdminPage() {
         onArchive={() => void handleArchiveAtom()}
         onRestore={() => void handleRestoreAtom()}
       />
+    </section>
+  )
+}
+
+function HealthDiagnosticPanel({
+  health,
+  highlights,
+  onApplyCombination,
+  onRebuild,
+  isRebuilding,
+}: {
+  health: InterviewKnowledgeHealthResponse | null
+  highlights: InterviewKnowledgeHealthCombination[]
+  onApplyCombination: (combo: InterviewKnowledgeHealthCombination) => void
+  onRebuild: () => void
+  isRebuilding: boolean
+}) {
+  if (!health) {
+    return (
+      <section className="panel interview-bank-health-panel">
+        <div className="panel-title"><Database size={18} /> 健康诊断</div>
+        <div className="interview-bank-empty-row">
+          <strong>暂无健康数据</strong>
+          <span>刷新后会展示题库组合状态。</span>
+        </div>
+      </section>
+    )
+  }
+
+  return (
+    <section className="panel interview-bank-health-panel">
+      <div className="interview-bank-list-title">
+        <div className="panel-title"><Database size={18} /> 健康诊断</div>
+        <button className="ghost-button compact" type="button" onClick={onRebuild} disabled={isRebuilding}>
+          <RefreshCw size={16} />{isRebuilding ? '重建中' : '重建异常索引'}
+        </button>
+      </div>
+      <div className="interview-bank-health-metrics">
+        <Metric label="可开放" value={health.summary.open_combinations} variant="compact" />
+        <Metric label="告警" value={health.summary.warning_combinations} variant="compact" />
+        <Metric label="阻断" value={health.summary.blocked_combinations} variant="compact" />
+        <Metric label="索引失败" value={health.summary.vector_failed_atoms} variant="compact" />
+      </div>
+      {highlights.length > 0 ? (
+        <div className="interview-bank-health-alerts">
+          {highlights.map((combo) => (
+            <button
+              className={`interview-bank-health-alert status-${combo.status}`}
+              type="button"
+              key={`${combo.domain}|${combo.category}|${combo.difficulty}`}
+              onClick={() => onApplyCombination(combo)}
+            >
+              <strong>{categoryLabel(combo.category)} · {combo.difficulty}</strong>
+              <span>{healthStatusLabel(combo.status)} · {combo.reasons.join(' / ')}</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="interview-bank-empty-row">
+          <strong>当前组合健康</strong>
+          <span>已发布组合具备开场题、追问题和已索引追问资源。</span>
+        </div>
+      )}
+      <div className="interview-bank-health-table-wrap">
+        <table className="interview-bank-health-table">
+          <thead>
+            <tr>
+              <th>组合</th>
+              <th>状态</th>
+              <th>开场</th>
+              <th>追问</th>
+              <th>已索引追问</th>
+              <th>待索引</th>
+              <th>失败</th>
+              <th>原因</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {health.combinations.map((combo) => (
+              <tr key={`${combo.domain}|${combo.category}|${combo.difficulty}`}>
+                <td>
+                  <strong>{categoryLabel(combo.category)} · {combo.difficulty}</strong>
+                  <span>{combo.domain || '未填领域'} · {combo.total_count} 条</span>
+                </td>
+                <td><span className={`interview-bank-pill health-${combo.status}`}>{healthStatusLabel(combo.status)}</span></td>
+                <td>{combo.opening_count}</td>
+                <td>{combo.followup_count}</td>
+                <td>{combo.indexed_followup_count}</td>
+                <td>{combo.pending_count}</td>
+                <td>{combo.failed_count}</td>
+                <td>{combo.reasons.join(' / ')}</td>
+                <td>
+                  <button className="ghost-button compact" type="button" onClick={() => onApplyCombination(combo)}>
+                    <Search size={15} />定位
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
+function RetrievalPreviewPanel({
+  form,
+  result,
+  isPreviewing,
+  onChange,
+  onSubmit,
+  onOpenAtom,
+}: {
+  form: RetrievalPreviewForm
+  result: InterviewKnowledgeRetrievalPreviewResponse | null
+  isPreviewing: boolean
+  onChange: <K extends keyof RetrievalPreviewForm>(key: K, value: RetrievalPreviewForm[K]) => void
+  onSubmit: () => void
+  onOpenAtom: (atomID: string) => void
+}) {
+  return (
+    <section className="panel interview-bank-preview-panel">
+      <div className="panel-title"><Search size={18} /> 检索预览</div>
+      <div className="interview-bank-preview-form">
+        <label>
+          领域
+          <input value={form.domain} onChange={(event) => onChange('domain', event.target.value)} placeholder="backend" />
+        </label>
+        <label>
+          分类
+          <select value={form.category} onChange={(event) => onChange('category', event.target.value)}>
+            {categoryOptions.filter((option) => option.value).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>
+        <label>
+          难度
+          <select value={form.difficulty} onChange={(event) => onChange('difficulty', event.target.value)}>
+            {difficultyOptions.filter(Boolean).map((value) => <option key={value} value={value}>{value}</option>)}
+          </select>
+        </label>
+        <label>
+          返回数
+          <select value={form.limit} onChange={(event) => onChange('limit', Number(event.target.value))}>
+            {[3, 5, 10, 20].map((value) => <option key={value} value={value}>{value}</option>)}
+          </select>
+        </label>
+        <label className="span-4">
+          模拟文本
+          <textarea
+            value={form.query}
+            onChange={(event) => onChange('query', event.target.value)}
+            rows={5}
+            placeholder="输入候选人的回答、追问意图或检索 query"
+          />
+        </label>
+        <button className="primary-button compact span-4" type="button" onClick={onSubmit} disabled={isPreviewing}>
+          <Search size={16} />{isPreviewing ? '预览中' : '执行检索预览'}
+        </button>
+      </div>
+      {result ? (
+        <div className={`interview-bank-preview-result ${result.fallback_used ? 'has-errors' : ''}`}>
+          <div className="interview-bank-report-heading">
+            <strong>{result.fallback_used ? '检索回退' : `命中 ${result.matched_count} 个题库原子`}</strong>
+            <span>
+              候选 {result.diagnostics.candidate_count} · 已索引 {result.diagnostics.indexed_candidates}
+              {result.fallback_reason ? ` · ${result.fallback_reason}` : ''}
+            </span>
+          </div>
+          <div className="interview-bank-report-metrics">
+            <Metric label="已发布候选" value={result.diagnostics.published_candidates} variant="compact" />
+            <Metric label="待索引" value={result.diagnostics.pending_candidates} variant="compact" />
+            <Metric label="失败" value={result.diagnostics.failed_candidates} variant="compact" />
+            <Metric label="归档" value={result.diagnostics.archived_candidates} variant="compact" />
+          </div>
+          {result.results.length > 0 ? (
+            <div className="interview-bank-preview-result-list">
+              {result.results.map((item) => (
+                <div className="interview-bank-preview-hit" key={`${item.atom_id}|${item.doc_type}|${item.doc_key}`}>
+                  <div>
+                    <strong>{item.title}</strong>
+                    <span>{item.subject} · {questionRoleLabel(item.question_role)} · {item.difficulty} · {previewScoreLabel(item.score)}</span>
+                    <small>{docTypeLabel(item.doc_type)} · {item.snippet}</small>
+                  </div>
+                  <button className="ghost-button compact" type="button" onClick={() => onOpenAtom(item.atom_id)}>
+                    <Eye size={15} />查看
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="interview-bank-empty-row">
+              <strong>没有可展示命中</strong>
+              <span>检查组合题量、索引状态或输入文本。</span>
+            </div>
+          )}
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -947,8 +1239,41 @@ function vectorStatusLabel(value?: string) {
   }
 }
 
+function healthStatusLabel(value?: string) {
+  switch (value) {
+    case 'open':
+      return '可开放'
+    case 'warning':
+      return '告警'
+    case 'blocked':
+      return '阻断'
+    default:
+      return value || '未知'
+  }
+}
+
 function categoryLabel(value: string) {
   return categoryOptions.find((option) => option.value === value)?.label ?? value
+}
+
+function docTypeLabel(value: string) {
+  switch (value) {
+    case 'overview':
+      return '概览'
+    case 'principle':
+      return '原理'
+    case 'pitfall':
+      return '误区'
+    case 'follow_up':
+      return '追问'
+    default:
+      return value
+  }
+}
+
+function previewScoreLabel(value: number) {
+  if (!Number.isFinite(value)) return 'score -'
+  return `score ${value.toFixed(3)}`
 }
 
 function actionLabel(value: string) {

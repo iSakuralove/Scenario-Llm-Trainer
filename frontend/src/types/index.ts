@@ -589,6 +589,91 @@ export interface InterviewKnowledgeSummary {
   last_edited_at?: string
 }
 
+export interface InterviewKnowledgeHealthSummary {
+  total_atoms: number
+  published_atoms: number
+  draft_atoms: number
+  archived_atoms: number
+  vector_pending_atoms: number
+  vector_indexed_atoms: number
+  vector_failed_atoms: number
+  open_combinations: number
+  warning_combinations: number
+  blocked_combinations: number
+}
+
+export interface InterviewKnowledgeHealthCombination {
+  domain: string
+  category: string
+  difficulty: string
+  total_count: number
+  published_count: number
+  draft_count: number
+  archived_count: number
+  opening_count: number
+  followup_count: number
+  mixed_count: number
+  indexed_followup_count: number
+  pending_count: number
+  failed_count: number
+  status: 'open' | 'warning' | 'blocked' | string
+  reasons: string[]
+  actions: string[]
+}
+
+export interface InterviewKnowledgeHealthResponse {
+  summary: InterviewKnowledgeHealthSummary
+  combinations: InterviewKnowledgeHealthCombination[]
+}
+
+export interface InterviewKnowledgeRetrievalPreviewRequest {
+  domain: string
+  category: string
+  difficulty: string
+  query: string
+  limit?: number
+}
+
+export interface InterviewKnowledgeRetrievalPreviewDiagnostics {
+  domain: string
+  category: string
+  difficulty: string
+  query: string
+  candidate_count: number
+  published_candidates: number
+  indexed_candidates: number
+  pending_candidates: number
+  failed_candidates: number
+  archived_candidates: number
+  vector_store_available: boolean
+  embedding_available: boolean
+  search_limit: number
+  filter_counts: Record<string, number>
+}
+
+export interface InterviewKnowledgeRetrievalPreviewResult {
+  atom_id: string
+  version: number
+  title: string
+  subject: string
+  domain: string
+  category: string
+  difficulty: string
+  question_role: string
+  score: number
+  doc_type: string
+  doc_key: string
+  snippet: string
+}
+
+export interface InterviewKnowledgeRetrievalPreviewResponse {
+  matched_count: number
+  fallback_used: boolean
+  fallback_reason?: string
+  results: InterviewKnowledgeRetrievalPreviewResult[]
+  diagnostics: InterviewKnowledgeRetrievalPreviewDiagnostics
+}
+
 export interface InterviewKnowledgeAtomFilters {
   status?: string
   domain?: string

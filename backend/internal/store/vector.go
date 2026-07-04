@@ -96,6 +96,7 @@ type VectorSearchResult struct {
 }
 
 type InterviewKnowledgeVectorSearchQuery struct {
+	Domain        string
 	Category      string
 	Difficulty    string
 	QuestionRoles []string
@@ -213,6 +214,9 @@ func (s *MemoryVectorStore) SearchInterviewKnowledge(_ context.Context, query In
 	defer s.mu.RUnlock()
 	results := []InterviewKnowledgeVectorSearchResult{}
 	for _, doc := range s.knowledgeDocs {
+		if query.Domain != "" && doc.Metadata["domain"] != query.Domain {
+			continue
+		}
 		if query.Category != "" && doc.Metadata["category"] != query.Category {
 			continue
 		}
