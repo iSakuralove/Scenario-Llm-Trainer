@@ -95,6 +95,12 @@
   返回题库资源数、发布数、批次数、开放组合数和索引状态摘要。
 - `GET /api/v1/admin/interview-bank/atoms`
   支持按 `status`、`domain`、`difficulty`、`category`、`question_role`、`vector_status` 筛选当前题库资源。
+- `GET /api/v1/admin/interview-bank/atoms/{id}`
+  返回单条题库资源详情，供管理员在线查看与编辑。
+- `GET /api/v1/admin/interview-bank/atoms/{id}/versions`
+  返回单题版本历史，默认按最新版本优先展示。
+- `PATCH /api/v1/admin/interview-bank/atoms/{id}`
+  支持管理员在线编辑已发布题库资源内容；请求必须携带 `base_version` 与 `change_note`，保存时复用 `SaveInterviewKnowledgeAtomVersioned` 写入 `manual_edit` 版本，并将 `vector_status` 置为 `pending` 等待手动重建索引。
 - `GET /api/v1/admin/interview-bank/batches`
   返回最近导入批次，供前端展示导入历史。
 - `POST /api/v1/admin/interview-bank/import/validate`

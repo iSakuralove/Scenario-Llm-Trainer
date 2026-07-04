@@ -3,10 +3,13 @@ import {
   AlertTriangle,
   CheckCircle2,
   Database,
+  Eye,
   FileJson,
+  History,
   ListFilter,
   PackageCheck,
   RefreshCw,
+  Save,
   Search,
   Upload,
 } from 'lucide-react'
@@ -16,6 +19,8 @@ import { useToken } from '../../lib/auth'
 import type {
   InterviewKnowledgeAtom,
   InterviewKnowledgeAtomFilters,
+  InterviewKnowledgeAtomUpdateRequest,
+  InterviewKnowledgeAtomVersion,
   InterviewKnowledgeBatch,
   InterviewKnowledgeIndexRebuildRequest,
   InterviewKnowledgeIndexRebuildResponse,
@@ -52,6 +57,22 @@ const emptyFilters: InterviewKnowledgeAtomFilters = {
   page_size: 20,
 }
 
+interface AtomEditForm {
+  base_version: number
+  change_note: string
+  title: string
+  subject: string
+  domain: string
+  difficulty: string
+  category: string
+  question_role: string
+  source_ref: string
+  tagsText: string
+  principlesText: string
+  pitfallsText: string
+  followUpPathsText: string
+}
+
 export function InterviewBankAdminPage() {
   const token = useToken()
   const [summary, setSummary] = useState<InterviewKnowledgeSummary | null>(null)
@@ -70,6 +91,11 @@ export function InterviewBankAdminPage() {
   const [publishResult, setPublishResult] = useState<InterviewKnowledgePublishResponse | null>(null)
   const [rebuildResult, setRebuildResult] = useState<InterviewKnowledgeIndexRebuildResponse | null>(null)
   const [selectedAtomIds, setSelectedAtomIds] = useState<Set<string>>(() => new Set())
+  const [activeAtom, setActiveAtom] = useState<InterviewKnowledgeAtom | null>(null)
+  const [activeVersions, setActiveVersions] = useState<InterviewKnowledgeAtomVersion[]>([])
+  const [editForm, setEditForm] = useState<AtomEditForm | null>(null)
+  const [isDetailLoading, setIsDetailLoading] = useState(false)
+  const [isSavingAtom, setIsSavingAtom] = useState(false)
 
   const loadData = useCallback(async () => {
     setIsLoading(true)
@@ -231,6 +257,52 @@ export function InterviewBankAdminPage() {
       setError(err instanceof Error ? err.message : '索引重建失败')
     } finally {
       setIsRebuilding(false)
+    }
+  }
+
+  async function handleOpenAtom(atomID: string) {
+    setError('')
+    setMessage('')
+    setIsDetailLoading(true)
+    try {
+      const [detail, history] = await Promise.all([
+        api.adminInterviewBankAtom(token, atomID),
+        api.adminInterviewBankAtomVersions(token, atomID),
+      ])
+      setActiveAtom(detail.atom)
+      setActiveVersions(history.list ?? [])
+      setEditForm(atomToEditForm(detail.atom))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '题目详情读取失败')
+    } finally {
+      setIsDetailLoading(false)
+    }
+  }
+
+  function updateEditForm<K extends keyof AtomEditForm>(key: K, value: AtomEditForm[K]) {
+    setEditForm((current) => current ? { ...current, [key]: value } : current)
+  }
+
+  async function handleSaveAtom() {
+    if (!activeAtom || !editForm) return
+    setError('')
+    setMessage('')
+    const confirmed = window.confirm('保存后将立即影响后续新面试，历史会话不受影响')
+    if (!confirmed) return
+    try {
+      setIsSavingAtom(true)
+      const payload = editFormToPayload(editForm)
+      const result = await api.updateInterviewBankAtom(token, activeAtom.id, payload)
+      const history = await api.adminInterviewBankAtomVersions(token, activeAtom.id)
+      setActiveAtom(result.atom)
+      setActiveVersions(history.list ?? [])
+      setEditForm(atomToEditForm(result.atom))
+      setMessage(`保存完成：${result.atom.id} v${result.atom.current_version}`)
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '题目保存失败')
+    } finally {
+      setIsSavingAtom(false)
     }
   }
 
@@ -404,6 +476,7 @@ export function InterviewBankAdminPage() {
                   <th>索引</th>
                   <th>版本</th>
                   <th>更新时间</th>
+                  <th>操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -412,6 +485,7 @@ export function InterviewBankAdminPage() {
                     atom={atom}
                     checked={selectedAtomIds.has(atom.id)}
                     onCheckedChange={(checked) => toggleAtomSelection(atom, checked)}
+                    onOpen={() => void handleOpenAtom(atom.id)}
                     key={atom.id}
                   />
                 ))}
@@ -425,6 +499,16 @@ export function InterviewBankAdminPage() {
           </div>
         )}
       </section>
+
+      <AtomDetailPanel
+        atom={activeAtom}
+        versions={activeVersions}
+        form={editForm}
+        isLoading={isDetailLoading}
+        isSaving={isSavingAtom}
+        onChange={updateEditForm}
+        onSave={() => void handleSaveAtom()}
+      />
     </section>
   )
 }
@@ -433,10 +517,12 @@ function AtomRow({
   atom,
   checked,
   onCheckedChange,
+  onOpen,
 }: {
   atom: InterviewKnowledgeAtom
   checked: boolean
   onCheckedChange: (checked: boolean) => void
+  onOpen: () => void
 }) {
   const canSelect = canRebuildAtom(atom)
   return (
@@ -462,7 +548,146 @@ function AtomRow({
       <td><span className={`interview-bank-pill vector-${atom.vector_status}`}>{vectorStatusLabel(atom.vector_status)}</span></td>
       <td>v{atom.current_version}</td>
       <td>{formatOptionalDate(atom.updated_at)}</td>
+      <td>
+        <button className="ghost-button compact" type="button" onClick={onOpen}>
+          <Eye size={15} />查看
+        </button>
+      </td>
     </tr>
+  )
+}
+
+function AtomDetailPanel({
+  atom,
+  versions,
+  form,
+  isLoading,
+  isSaving,
+  onChange,
+  onSave,
+}: {
+  atom: InterviewKnowledgeAtom | null
+  versions: InterviewKnowledgeAtomVersion[]
+  form: AtomEditForm | null
+  isLoading: boolean
+  isSaving: boolean
+  onChange: <K extends keyof AtomEditForm>(key: K, value: AtomEditForm[K]) => void
+  onSave: () => void
+}) {
+  if (isLoading) {
+    return (
+      <section className="panel interview-bank-detail-panel">
+        <div className="panel-title"><Eye size={18} /> 题目详情</div>
+        <div className="interview-bank-empty-row">
+          <strong>正在读取题目详情</strong>
+          <span>请稍候。</span>
+        </div>
+      </section>
+    )
+  }
+
+  if (!atom || !form) {
+    return (
+      <section className="panel interview-bank-detail-panel">
+        <div className="panel-title"><Eye size={18} /> 题目详情</div>
+        <div className="interview-bank-empty-row">
+          <strong>未选择题目</strong>
+          <span>在题库资源列表中点击“查看”后可编辑内容并查看版本历史。</span>
+        </div>
+      </section>
+    )
+  }
+
+  return (
+    <section className="panel interview-bank-detail-panel">
+      <div className="interview-bank-detail-header">
+        <div>
+          <div className="panel-title"><Eye size={18} /> 题目详情</div>
+          <h2>{atom.title}</h2>
+          <p>{atom.id} · v{atom.current_version} · {statusLabel(atom.status)} · {vectorStatusLabel(atom.vector_status)}</p>
+        </div>
+        <button className="primary-button compact" type="button" onClick={onSave} disabled={isSaving}>
+          <Save size={16} />{isSaving ? '保存中' : '保存编辑'}
+        </button>
+      </div>
+
+      <div className="interview-bank-edit-grid">
+        <label>
+          展示标题
+          <input value={form.title} onChange={(event) => onChange('title', event.target.value)} />
+        </label>
+        <label>
+          考察点标题
+          <input value={form.subject} onChange={(event) => onChange('subject', event.target.value)} />
+        </label>
+        <label>
+          领域
+          <input value={form.domain} onChange={(event) => onChange('domain', event.target.value)} />
+        </label>
+        <label>
+          难度
+          <select value={form.difficulty} onChange={(event) => onChange('difficulty', event.target.value)}>
+            {difficultyOptions.filter(Boolean).map((value) => <option key={value} value={value}>{value}</option>)}
+          </select>
+        </label>
+        <label>
+          分类
+          <select value={form.category} onChange={(event) => onChange('category', event.target.value)}>
+            {categoryOptions.filter((option) => option.value).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>
+        <label>
+          题目角色
+          <select value={form.question_role} onChange={(event) => onChange('question_role', event.target.value)}>
+            {questionRoleOptions.filter(Boolean).map((value) => <option key={value} value={value}>{questionRoleLabel(value)}</option>)}
+          </select>
+        </label>
+        <label className="span-2">
+          来源追溯
+          <input value={form.source_ref} onChange={(event) => onChange('source_ref', event.target.value)} />
+        </label>
+        <label className="span-2">
+          标签
+          <textarea value={form.tagsText} onChange={(event) => onChange('tagsText', event.target.value)} rows={3} />
+        </label>
+        <label>
+          原理要点
+          <textarea value={form.principlesText} onChange={(event) => onChange('principlesText', event.target.value)} rows={6} />
+        </label>
+        <label>
+          常见误区
+          <textarea value={form.pitfallsText} onChange={(event) => onChange('pitfallsText', event.target.value)} rows={6} />
+        </label>
+        <label className="span-2">
+          追问路径
+          <textarea value={form.followUpPathsText} onChange={(event) => onChange('followUpPathsText', event.target.value)} rows={5} />
+        </label>
+        <label className="span-2">
+          编辑备注
+          <input value={form.change_note} onChange={(event) => onChange('change_note', event.target.value)} placeholder="说明本次修改原因" />
+        </label>
+      </div>
+
+      <div className="interview-bank-version-panel">
+        <div className="panel-title"><History size={18} /> 版本历史</div>
+        {versions.length > 0 ? (
+          <div className="interview-bank-version-list">
+            {versions.map((version) => (
+              <div className="interview-bank-version-row" key={version.id}>
+                <strong>v{version.version} · {versionTypeLabel(version.version_type)}</strong>
+                <span>{version.change_note || '无备注'} · {version.admin_id || 'system'} · {formatOptionalDate(version.created_at)}</span>
+                <small>{version.no_content_change ? '无内容变化' : changedFieldsLabel(version.diff_summary)}</small>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="interview-bank-empty-row">
+            <strong>暂无版本历史</strong>
+            <span>保存或导入后会生成版本记录。</span>
+          </div>
+        )}
+      </div>
+    </section>
   )
 }
 
@@ -524,6 +749,60 @@ function ImportReportPanel({ report }: { report: InterviewKnowledgeImportReport 
   )
 }
 
+function atomToEditForm(atom: InterviewKnowledgeAtom): AtomEditForm {
+  return {
+    base_version: atom.current_version,
+    change_note: '',
+    title: atom.title,
+    subject: atom.subject,
+    domain: atom.domain,
+    difficulty: atom.difficulty,
+    category: atom.category,
+    question_role: atom.question_role,
+    source_ref: atom.source_ref,
+    tagsText: atom.tags.join(', '),
+    principlesText: atom.principles.join('\n'),
+    pitfallsText: atom.pitfalls.join('\n'),
+    followUpPathsText: atom.follow_up_paths.join('\n'),
+  }
+}
+
+function editFormToPayload(form: AtomEditForm): InterviewKnowledgeAtomUpdateRequest {
+  return {
+    base_version: form.base_version,
+    change_note: form.change_note,
+    title: form.title,
+    subject: form.subject,
+    domain: form.domain,
+    difficulty: form.difficulty,
+    category: form.category,
+    question_role: form.question_role,
+    source_ref: form.source_ref,
+    tags: parseDelimitedList(form.tagsText),
+    principles: parseLineList(form.principlesText),
+    pitfalls: parseLineList(form.pitfallsText),
+    follow_up_paths: parseLineList(form.followUpPathsText),
+  }
+}
+
+function parseLineList(value: string) {
+  return value.split('\n').map((item) => item.trim()).filter(Boolean)
+}
+
+function parseDelimitedList(value: string) {
+  const seen = new Set<string>()
+  const items: string[] = []
+  for (const item of value.split(/[\n,，;；]/)) {
+    const normalized = item.trim()
+    if (!normalized) continue
+    const key = normalized.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    items.push(normalized)
+  }
+  return items
+}
+
 function statusLabel(value?: string) {
   switch (value) {
     case 'published':
@@ -580,6 +859,32 @@ function actionLabel(value: string) {
     default:
       return value
   }
+}
+
+function versionTypeLabel(value: string) {
+  switch (value) {
+    case 'content_update':
+      return '内容导入'
+    case 'duplicate_import':
+      return '重复导入'
+    case 'manual_edit':
+      return '在线编辑'
+    case 'restore_archived':
+      return '恢复归档'
+    default:
+      return value
+  }
+}
+
+function changedFieldsLabel(diffSummary: Record<string, unknown>) {
+  const fields = diffSummary.fields_changed
+  if (Array.isArray(fields) && fields.length > 0) {
+    return `变更字段：${fields.join(' / ')}`
+  }
+  if (diffSummary.created) {
+    return '创建版本'
+  }
+  return '无字段摘要'
 }
 
 function canRebuildAtom(atom: InterviewKnowledgeAtom) {

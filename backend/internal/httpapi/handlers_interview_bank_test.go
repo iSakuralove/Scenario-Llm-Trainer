@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,6 +127,125 @@ func TestAdminInterviewBankPublishVersionsAndFailedVectorFilter(t *testing.T) {
 	mustDecodeData(t, env, &system)
 	if system.InterviewBank.TotalAtoms != 1 || system.InterviewBank.VectorFailedAtoms != 1 {
 		t.Fatalf("expected system interview bank summary, got %+v", system.InterviewBank)
+	}
+}
+
+func TestAdminInterviewBankAtomDetailVersionsAndManualEdit(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	atom := validInterviewBankAtomForRebuild("atom-edit-manual", "published", "indexed")
+	if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "初始导入"); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	demoToken := loginToken(t, handler, "demo", "demo123")
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	_, env := requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/atoms/"+atom.ID, demoToken, nil)
+	if env.Code != http.StatusForbidden {
+		t.Fatalf("student atom detail code=%d", env.Code)
+	}
+
+	status, env := requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/atoms/"+atom.ID, adminToken, nil)
+	if status != http.StatusOK {
+		t.Fatalf("atom detail status=%d message=%s", status, env.Message)
+	}
+	var detail struct {
+		Atom domain.InterviewKnowledgeAtom `json:"atom"`
+	}
+	mustDecodeData(t, env, &detail)
+	if detail.Atom.ID != atom.ID || detail.Atom.CurrentVersion != 1 {
+		t.Fatalf("unexpected atom detail: %+v", detail.Atom)
+	}
+
+	update := validInterviewBankUpdatePayload(detail.Atom)
+	update["title"] = "缓存击穿治理修订"
+	update["change_note"] = "补充热点 key 处理"
+	status, env = requestJSON(t, handler, http.MethodPatch, "/api/v1/admin/interview-bank/atoms/"+atom.ID, adminToken, update)
+	if status != http.StatusOK {
+		t.Fatalf("manual edit status=%d message=%s", status, env.Message)
+	}
+	var edited struct {
+		Atom    domain.InterviewKnowledgeAtom        `json:"atom"`
+		Version domain.InterviewKnowledgeAtomVersion `json:"version"`
+	}
+	mustDecodeData(t, env, &edited)
+	if edited.Atom.CurrentVersion != 2 || edited.Atom.Title != "缓存击穿治理修订" {
+		t.Fatalf("expected updated atom version, got %+v", edited.Atom)
+	}
+	if edited.Atom.VectorStatus != "pending" {
+		t.Fatalf("manual edit must reset vector status to pending, got %+v", edited.Atom)
+	}
+	if edited.Version.VersionType != domain.InterviewKnowledgeVersionManualEdit || edited.Version.ChangeNote != "补充热点 key 处理" {
+		t.Fatalf("expected manual edit version, got %+v", edited.Version)
+	}
+	if edited.Version.NoContentChange {
+		t.Fatalf("changed title must not be marked no_content_change: %+v", edited.Version)
+	}
+
+	status, env = requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/atoms/"+atom.ID+"/versions", adminToken, nil)
+	if status != http.StatusOK {
+		t.Fatalf("version history status=%d message=%s", status, env.Message)
+	}
+	var history struct {
+		List []domain.InterviewKnowledgeAtomVersion `json:"list"`
+	}
+	mustDecodeData(t, env, &history)
+	if len(history.List) != 2 || history.List[0].Version != 2 || history.List[0].VersionType != domain.InterviewKnowledgeVersionManualEdit {
+		t.Fatalf("expected newest manual edit version first, got %+v", history.List)
+	}
+}
+
+func TestAdminInterviewBankManualEditValidationAndNoContentChange(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	atom := validInterviewBankAtomForRebuild("atom-edit-validation", "published", "failed")
+	if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "初始导入"); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	current, ok := dataStore.GetInterviewKnowledgeAtom(atom.ID)
+	if !ok {
+		t.Fatal("expected atom")
+	}
+	base := validInterviewBankUpdatePayload(*current)
+
+	missingNote := cloneStringMap(base)
+	missingNote["change_note"] = " "
+	status, env := requestJSON(t, handler, http.MethodPatch, "/api/v1/admin/interview-bank/atoms/"+atom.ID, adminToken, missingNote)
+	if status != http.StatusBadRequest || env.Message != "change_note is required" {
+		t.Fatalf("expected change note rejection, status=%d env=%+v", status, env)
+	}
+
+	conflict := cloneStringMap(base)
+	conflict["base_version"] = 99
+	status, env = requestJSON(t, handler, http.MethodPatch, "/api/v1/admin/interview-bank/atoms/"+atom.ID, adminToken, conflict)
+	if status != http.StatusBadRequest || env.Message != "版本已更新，请刷新后重试" {
+		t.Fatalf("expected version conflict, status=%d env=%+v", status, env)
+	}
+
+	invalid := cloneStringMap(base)
+	invalid["category"] = "unknown"
+	invalid["principles"] = []string{"只有一条"}
+	status, env = requestJSON(t, handler, http.MethodPatch, "/api/v1/admin/interview-bank/atoms/"+atom.ID, adminToken, invalid)
+	if status != http.StatusBadRequest || !strings.Contains(env.Message, "category is invalid") || !strings.Contains(env.Message, "principles must include at least 2 items") {
+		t.Fatalf("expected field validation errors, status=%d env=%+v", status, env)
+	}
+
+	status, env = requestJSON(t, handler, http.MethodPatch, "/api/v1/admin/interview-bank/atoms/"+atom.ID, adminToken, base)
+	if status != http.StatusOK {
+		t.Fatalf("no-change edit status=%d message=%s", status, env.Message)
+	}
+	var edited struct {
+		Atom    domain.InterviewKnowledgeAtom        `json:"atom"`
+		Version domain.InterviewKnowledgeAtomVersion `json:"version"`
+	}
+	mustDecodeData(t, env, &edited)
+	if edited.Atom.CurrentVersion != 2 || edited.Atom.VectorStatus != "pending" {
+		t.Fatalf("expected version advance and pending vector status, got %+v", edited.Atom)
+	}
+	if !edited.Version.NoContentChange || edited.Version.VersionType != domain.InterviewKnowledgeVersionManualEdit {
+		t.Fatalf("expected no-content-change manual edit version, got %+v", edited.Version)
 	}
 }
 
@@ -322,6 +442,32 @@ func validInterviewBankAtomForRebuild(id, status, vectorStatus string) domain.In
 		Status:        status,
 		VectorStatus:  vectorStatus,
 	}
+}
+
+func validInterviewBankUpdatePayload(atom domain.InterviewKnowledgeAtom) map[string]interface{} {
+	return map[string]interface{}{
+		"base_version":    atom.CurrentVersion,
+		"change_note":     "管理员在线编辑",
+		"title":           atom.Title,
+		"subject":         atom.Subject,
+		"domain":          atom.Domain,
+		"difficulty":      atom.Difficulty,
+		"category":        atom.Category,
+		"question_role":   atom.QuestionRole,
+		"source_ref":      atom.SourceRef,
+		"tags":            append([]string{}, atom.Tags...),
+		"principles":      append([]string{}, atom.Principles...),
+		"pitfalls":        append([]string{}, atom.Pitfalls...),
+		"follow_up_paths": append([]string{}, atom.FollowUpPaths...),
+	}
+}
+
+func cloneStringMap(input map[string]interface{}) map[string]interface{} {
+	output := make(map[string]interface{}, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
 }
 
 type mockInterviewBankEmbeddingClient struct {

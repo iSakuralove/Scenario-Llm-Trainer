@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,6 +59,9 @@ func TestConfiguredCORSAllowsExplicitOrigin(t *testing.T) {
 	}
 	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "https://review.example.com" {
 		t.Fatalf("expected configured allow origin header, got %q", got)
+	}
+	if got := rr.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(got, "PATCH") {
+		t.Fatalf("expected preflight methods to allow PATCH, got %q", got)
 	}
 }
 

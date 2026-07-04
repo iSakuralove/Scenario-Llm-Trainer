@@ -8,6 +8,8 @@ import type {
   CommunityPost,
   InterviewKnowledgeAtom,
   InterviewKnowledgeAtomFilters,
+  InterviewKnowledgeAtomUpdateRequest,
+  InterviewKnowledgeAtomVersion,
   InterviewKnowledgeBatch,
   InterviewKnowledgeIndexRebuildRequest,
   InterviewKnowledgeIndexRebuildResponse,
@@ -901,6 +903,19 @@ export const api = {
     request<{ list: InterviewKnowledgeAtom[]; total: number; filters: InterviewKnowledgeAtomFilters }>(
       `/admin/interview-bank/atoms${queryString(filters as Record<string, string | number | undefined>)}`,
       {},
+      token,
+    ),
+
+  adminInterviewBankAtom: (token: string, atomId: string) =>
+    request<{ atom: InterviewKnowledgeAtom }>(`/admin/interview-bank/atoms/${encodeURIComponent(atomId)}`, {}, token),
+
+  adminInterviewBankAtomVersions: (token: string, atomId: string) =>
+    request<{ list: InterviewKnowledgeAtomVersion[] }>(`/admin/interview-bank/atoms/${encodeURIComponent(atomId)}/versions`, {}, token),
+
+  updateInterviewBankAtom: (token: string, atomId: string, payload: InterviewKnowledgeAtomUpdateRequest) =>
+    request<{ atom: InterviewKnowledgeAtom; version: InterviewKnowledgeAtomVersion }>(
+      `/admin/interview-bank/atoms/${encodeURIComponent(atomId)}`,
+      { method: 'PATCH', body: JSON.stringify(payload) },
       token,
     ),
 

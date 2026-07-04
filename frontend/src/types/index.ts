@@ -513,6 +513,51 @@ export interface InterviewKnowledgeAtom {
   updated_at: string
 }
 
+export interface InterviewKnowledgeAtomSnapshot {
+  id: string
+  title: string
+  subject: string
+  domain: string
+  difficulty: string
+  category: string
+  question_role: string
+  sourceRef: string
+  tags: string[]
+  principles: string[]
+  pitfalls: string[]
+  followUpPaths: string[]
+  status: string
+}
+
+export interface InterviewKnowledgeAtomVersion {
+  id: string
+  atom_id: string
+  version: number
+  version_type: string
+  admin_id?: string
+  change_note?: string
+  snapshot: InterviewKnowledgeAtomSnapshot
+  diff_summary: Record<string, unknown>
+  no_content_change: boolean
+  created_at: string
+}
+
+export interface InterviewKnowledgeAtomUpdateRequest {
+  base_version: number
+  change_note: string
+  title: string
+  subject: string
+  domain: string
+  difficulty: string
+  category: string
+  question_role: string
+  source_ref: string
+  tags: string[]
+  principles: string[]
+  pitfalls: string[]
+  follow_up_paths: string[]
+}
+
 export interface InterviewKnowledgeBatch {
   id: string
   source_ref: string

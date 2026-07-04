@@ -6,6 +6,7 @@
 
 - 读取 [store-schema-contracts.md](./store-schema-contracts.md) 中与 Store/schema/migration 相关的契约。
 - 修改用户侧 API 聚合契约时，读取 [interview-launchpad-contracts.md](./interview-launchpad-contracts.md)。
+- 修改管理员面试题库详情、版本历史或在线编辑接口时，读取 [admin-interview-bank-contracts.md](./admin-interview-bank-contracts.md)。
 - 修改 `Store` 接口前，确认 MemoryStore 与 PostgresStore 都能同步实现。
 - 修改数据库结构前，同时检查 `backend/internal/store/schema.go` 与 `backend/migrations/001_schema.sql`。
 

@@ -166,7 +166,10 @@
 
 .interview-bank-filter-grid input,
 .interview-bank-filter-grid select,
-.interview-bank-import-panel textarea {
+.interview-bank-import-panel textarea,
+.interview-bank-edit-grid input,
+.interview-bank-edit-grid select,
+.interview-bank-edit-grid textarea {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 14px;
@@ -176,28 +179,37 @@
 }
 
 .interview-bank-filter-grid input,
-.interview-bank-filter-grid select {
+.interview-bank-filter-grid select,
+.interview-bank-edit-grid input,
+.interview-bank-edit-grid select {
   min-height: 42px;
   padding: 0 12px;
 }
 
-.interview-bank-filter-grid select {
+.interview-bank-filter-grid select,
+.interview-bank-edit-grid select {
   color-scheme: dark;
 }
 
-.interview-bank-filter-grid option {
+.interview-bank-filter-grid option,
+.interview-bank-edit-grid option {
   background: #0c121b;
   color: #f6fafe;
 }
 
 .interview-bank-filter-grid input::placeholder,
-.interview-bank-import-panel textarea::placeholder {
+.interview-bank-import-panel textarea::placeholder,
+.interview-bank-edit-grid input::placeholder,
+.interview-bank-edit-grid textarea::placeholder {
   color: rgba(220, 228, 238, 0.46);
 }
 
 .interview-bank-filter-grid input:focus,
 .interview-bank-filter-grid select:focus,
-.interview-bank-import-panel textarea:focus {
+.interview-bank-import-panel textarea:focus,
+.interview-bank-edit-grid input:focus,
+.interview-bank-edit-grid select:focus,
+.interview-bank-edit-grid textarea:focus {
   outline: 2px solid rgba(92, 225, 198, 0.16);
   border-color: rgba(92, 225, 198, 0.46);
 }
@@ -268,7 +280,8 @@
 .interview-bank-batch-row,
 .interview-bank-empty-row,
 .interview-bank-result-row,
-.interview-bank-report-issues {
+.interview-bank-report-issues,
+.interview-bank-version-row {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 16px;
   background: rgba(12, 20, 32, 0.88);
@@ -290,7 +303,8 @@
 .interview-bank-publish-strip,
 .interview-bank-batch-row,
 .interview-bank-empty-row,
-.interview-bank-result-row {
+.interview-bank-result-row,
+.interview-bank-version-row {
   display: grid;
   gap: 6px;
 }
@@ -300,6 +314,7 @@
 .interview-bank-batch-row strong,
 .interview-bank-empty-row strong,
 .interview-bank-result-row strong,
+.interview-bank-version-row strong,
 .interview-bank-table strong {
   color: #f5f8fc;
 }
@@ -310,6 +325,8 @@
 .interview-bank-batch-row small,
 .interview-bank-empty-row span,
 .interview-bank-result-row span,
+.interview-bank-version-row span,
+.interview-bank-version-row small,
 .interview-bank-table span,
 .interview-bank-table small {
   color: rgba(220, 228, 238, 0.72);
@@ -346,7 +363,8 @@
 }
 
 .interview-bank-result-list,
-.interview-bank-batch-list {
+.interview-bank-batch-list,
+.interview-bank-version-list {
   display: grid;
   gap: 10px;
 }
@@ -354,7 +372,8 @@
 .interview-bank-result-row,
 .interview-bank-batch-row,
 .interview-bank-empty-row,
-.interview-bank-publish-strip {
+.interview-bank-publish-strip,
+.interview-bank-version-row {
   padding: 12px 14px;
 }
 
@@ -401,7 +420,7 @@
 
 .interview-bank-table {
   width: 100%;
-  min-width: 1040px;
+  min-width: 1140px;
   border-collapse: collapse;
 }
 
@@ -465,6 +484,62 @@
 
 .interview-bank-table td:nth-child(2) small {
   margin-top: 4px;
+}
+
+.interview-bank-detail-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.interview-bank-detail-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.interview-bank-detail-header h2 {
+  margin: 0;
+  color: #f5f8fc;
+  font-size: 24px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.interview-bank-detail-header p {
+  margin: 8px 0 0;
+  color: rgba(220, 228, 238, 0.72);
+  line-height: 1.6;
+}
+
+.interview-bank-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.interview-bank-edit-grid label {
+  display: grid;
+  gap: 7px;
+  color: rgba(220, 228, 238, 0.82);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.interview-bank-edit-grid textarea {
+  min-height: 120px;
+  padding: 12px;
+  resize: vertical;
+  line-height: 1.6;
+}
+
+.interview-bank-edit-grid .span-2 {
+  grid-column: span 2;
+}
+
+.interview-bank-version-panel {
+  display: grid;
+  gap: 12px;
 }
 
 .interview-bank-pill {
@@ -538,10 +613,19 @@
   }
 
   .interview-bank-list-title,
-  .interview-bank-list-actions {
+  .interview-bank-list-actions,
+  .interview-bank-detail-header {
     display: grid;
     grid-template-columns: 1fr;
     justify-items: stretch;
+  }
+
+  .interview-bank-edit-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .interview-bank-edit-grid .span-2 {
+    grid-column: span 1;
   }
 
   .interview-bank-page .ghost-button,

@@ -121,6 +121,22 @@ type interviewKnowledgeIndexRebuildResponse struct {
 	Results []interviewKnowledgeIndexRebuildResult `json:"results"`
 }
 
+type interviewKnowledgeAtomUpdateRequest struct {
+	BaseVersion   int      `json:"base_version"`
+	ChangeNote    string   `json:"change_note"`
+	Title         string   `json:"title"`
+	Subject       string   `json:"subject"`
+	Domain        string   `json:"domain"`
+	Difficulty    string   `json:"difficulty"`
+	Category      string   `json:"category"`
+	QuestionRole  string   `json:"question_role"`
+	SourceRef     string   `json:"source_ref"`
+	Tags          []string `json:"tags"`
+	Principles    []string `json:"principles"`
+	Pitfalls      []string `json:"pitfalls"`
+	FollowUpPaths []string `json:"follow_up_paths"`
+}
+
 const interviewKnowledgeExpectedEmbeddingDim = 1536
 
 func (s *Server) handleAdminInterviewBank(w http.ResponseWriter, r *http.Request, user *domain.User, parts []string) {
@@ -143,6 +159,45 @@ func (s *Server) handleAdminInterviewBank(w http.ResponseWriter, r *http.Request
 			"total":   len(items),
 			"filters": filter,
 		})
+		return
+	}
+	if len(parts) == 2 && parts[0] == "atoms" && r.Method == http.MethodGet {
+		atom, ok := s.store.GetInterviewKnowledgeAtom(parts[1])
+		if !ok {
+			writeError(w, http.StatusNotFound, "interview knowledge atom not found")
+			return
+		}
+		writeOK(w, map[string]interface{}{"atom": atom})
+		return
+	}
+	if len(parts) == 3 && parts[0] == "atoms" && parts[2] == "versions" && r.Method == http.MethodGet {
+		if _, ok := s.store.GetInterviewKnowledgeAtom(parts[1]); !ok {
+			writeError(w, http.StatusNotFound, "interview knowledge atom not found")
+			return
+		}
+		writeOK(w, map[string]interface{}{"list": s.store.ListInterviewKnowledgeAtomVersions(parts[1])})
+		return
+	}
+	if len(parts) == 2 && parts[0] == "atoms" && r.Method == http.MethodPatch {
+		var req interviewKnowledgeAtomUpdateRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		atom, version, err := s.updateInterviewKnowledgeAtom(parts[1], req, user)
+		if err != nil {
+			status := http.StatusBadRequest
+			if err.Error() == "interview knowledge atom not found" {
+				status = http.StatusNotFound
+			}
+			writeError(w, status, err.Error())
+			return
+		}
+		s.audit(r, user, "admin.interview_bank_atom_edit", "interview_knowledge_atom", atom.ID, map[string]string{
+			"version":       strconv.Itoa(atom.CurrentVersion),
+			"vector_status": atom.VectorStatus,
+			"no_change":     strconv.FormatBool(version.NoContentChange),
+		})
+		writeOK(w, map[string]interface{}{"atom": atom, "version": version})
 		return
 	}
 	if len(parts) == 1 && parts[0] == "batches" && r.Method == http.MethodGet {
@@ -231,6 +286,44 @@ func (s *Server) handleAdminInterviewBank(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeError(w, http.StatusNotFound, "not found")
+}
+
+func (s *Server) updateInterviewKnowledgeAtom(atomID string, req interviewKnowledgeAtomUpdateRequest, user *domain.User) (domain.InterviewKnowledgeAtom, domain.InterviewKnowledgeAtomVersion, error) {
+	changeNote := strings.TrimSpace(req.ChangeNote)
+	if req.BaseVersion <= 0 {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf("base_version is required")
+	}
+	if changeNote == "" {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf("change_note is required")
+	}
+	current, ok := s.store.GetInterviewKnowledgeAtom(atomID)
+	if !ok {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf("interview knowledge atom not found")
+	}
+	if req.BaseVersion != current.CurrentVersion {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf("版本已更新，请刷新后重试")
+	}
+
+	updated := *current
+	updated.Title = strings.TrimSpace(req.Title)
+	updated.Subject = strings.TrimSpace(req.Subject)
+	updated.Domain = strings.TrimSpace(req.Domain)
+	updated.Difficulty = strings.ToUpper(strings.TrimSpace(req.Difficulty))
+	updated.Category = strings.TrimSpace(req.Category)
+	updated.QuestionRole = strings.TrimSpace(req.QuestionRole)
+	updated.SourceRef = strings.TrimSpace(req.SourceRef)
+	updated.Tags = normalizeImportStringList(req.Tags, true)
+	updated.Principles = normalizeImportStringList(req.Principles, false)
+	updated.Pitfalls = normalizeImportStringList(req.Pitfalls, false)
+	updated.FollowUpPaths = normalizeImportStringList(req.FollowUpPaths, false)
+	updated.Status = current.Status
+	// 内容变更后旧向量不再可信，等待管理员手动重建索引。
+	updated.VectorStatus = "pending"
+
+	if errors := validateInterviewKnowledgeAtomFields(updated); len(errors) > 0 {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf(strings.Join(errors, "; "))
+	}
+	return s.store.SaveInterviewKnowledgeAtomVersioned(updated, domain.InterviewKnowledgeVersionManualEdit, user.ID, changeNote)
 }
 
 func (s *Server) rebuildInterviewKnowledgeIndex(ctx context.Context, req interviewKnowledgeIndexRebuildRequest) (interviewKnowledgeIndexRebuildResponse, error) {
@@ -538,45 +631,7 @@ func (s *Server) validateInterviewKnowledgeImportItem(rawItem interviewKnowledge
 		},
 		VersionType: domain.InterviewKnowledgeVersionContentUpdate,
 	}
-	required := map[string]string{
-		"id":            result.Atom.ID,
-		"title":         result.Atom.Title,
-		"subject":       result.Atom.Subject,
-		"domain":        result.Atom.Domain,
-		"difficulty":    result.Atom.Difficulty,
-		"category":      result.Atom.Category,
-		"question_role": result.Atom.QuestionRole,
-		"source_ref":    result.Atom.SourceRef,
-	}
-	for field, value := range required {
-		if strings.TrimSpace(value) == "" {
-			result.Errors = append(result.Errors, field+" is required")
-		}
-	}
-	if !validInterviewKnowledgeDifficulty(result.Atom.Difficulty) {
-		result.Errors = append(result.Errors, "difficulty must be L1-L5")
-	}
-	if !interviewKnowledgeAllowedCategories[result.Atom.Category] {
-		result.Errors = append(result.Errors, "category is invalid")
-	}
-	if !interviewKnowledgeAllowedQuestionRoles[result.Atom.QuestionRole] {
-		result.Errors = append(result.Errors, "question_role is invalid")
-	}
-	if !interviewKnowledgeAllowedStatuses[result.Atom.Status] {
-		result.Errors = append(result.Errors, "status is invalid")
-	}
-	if !interviewKnowledgeAllowedVectorStatuses[result.Atom.VectorStatus] {
-		result.Errors = append(result.Errors, "vector_status is invalid")
-	}
-	if len(result.Atom.Principles) < 2 {
-		result.Errors = append(result.Errors, "principles must include at least 2 items")
-	}
-	if len(result.Atom.Pitfalls) < 2 {
-		result.Errors = append(result.Errors, "pitfalls must include at least 2 items")
-	}
-	if len(result.Atom.FollowUpPaths) < 2 {
-		result.Errors = append(result.Errors, "follow_up_paths must include at least 2 items")
-	}
+	result.Errors = append(result.Errors, validateInterviewKnowledgeAtomFields(result.Atom)...)
 
 	if existing, ok := s.store.GetInterviewKnowledgeAtom(result.Atom.ID); ok {
 		result.ExistingVersion = existing.CurrentVersion
@@ -589,6 +644,50 @@ func (s *Server) validateInterviewKnowledgeImportItem(rawItem interviewKnowledge
 		}
 	}
 	return result
+}
+
+func validateInterviewKnowledgeAtomFields(atom domain.InterviewKnowledgeAtom) []string {
+	errors := []string{}
+	required := map[string]string{
+		"id":            atom.ID,
+		"title":         atom.Title,
+		"subject":       atom.Subject,
+		"domain":        atom.Domain,
+		"difficulty":    atom.Difficulty,
+		"category":      atom.Category,
+		"question_role": atom.QuestionRole,
+		"source_ref":    atom.SourceRef,
+	}
+	for field, value := range required {
+		if strings.TrimSpace(value) == "" {
+			errors = append(errors, field+" is required")
+		}
+	}
+	if !validInterviewKnowledgeDifficulty(atom.Difficulty) {
+		errors = append(errors, "difficulty must be L1-L5")
+	}
+	if !interviewKnowledgeAllowedCategories[atom.Category] {
+		errors = append(errors, "category is invalid")
+	}
+	if !interviewKnowledgeAllowedQuestionRoles[atom.QuestionRole] {
+		errors = append(errors, "question_role is invalid")
+	}
+	if !interviewKnowledgeAllowedStatuses[atom.Status] {
+		errors = append(errors, "status is invalid")
+	}
+	if !interviewKnowledgeAllowedVectorStatuses[atom.VectorStatus] {
+		errors = append(errors, "vector_status is invalid")
+	}
+	if len(atom.Principles) < 2 {
+		errors = append(errors, "principles must include at least 2 items")
+	}
+	if len(atom.Pitfalls) < 2 {
+		errors = append(errors, "pitfalls must include at least 2 items")
+	}
+	if len(atom.FollowUpPaths) < 2 {
+		errors = append(errors, "follow_up_paths must include at least 2 items")
+	}
+	return errors
 }
 
 func validInterviewKnowledgeDifficulty(value string) bool {
