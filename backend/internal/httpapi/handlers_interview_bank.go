@@ -137,6 +137,10 @@ type interviewKnowledgeAtomUpdateRequest struct {
 	FollowUpPaths []string `json:"follow_up_paths"`
 }
 
+type interviewKnowledgeAtomArchiveRequest struct {
+	Reason string `json:"reason"`
+}
+
 const interviewKnowledgeExpectedEmbeddingDim = 1536
 
 func (s *Server) handleAdminInterviewBank(w http.ResponseWriter, r *http.Request, user *domain.User, parts []string) {
@@ -196,6 +200,44 @@ func (s *Server) handleAdminInterviewBank(w http.ResponseWriter, r *http.Request
 			"version":       strconv.Itoa(atom.CurrentVersion),
 			"vector_status": atom.VectorStatus,
 			"no_change":     strconv.FormatBool(version.NoContentChange),
+		})
+		writeOK(w, map[string]interface{}{"atom": atom, "version": version})
+		return
+	}
+	if len(parts) == 3 && parts[0] == "atoms" && parts[2] == "archive" && r.Method == http.MethodPost {
+		var req interviewKnowledgeAtomArchiveRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		atom, version, err := s.archiveInterviewKnowledgeAtom(r.Context(), parts[1], req, user)
+		if err != nil {
+			status := http.StatusBadRequest
+			if err.Error() == "interview knowledge atom not found" {
+				status = http.StatusNotFound
+			}
+			writeError(w, status, err.Error())
+			return
+		}
+		s.audit(r, user, "admin.interview_bank_atom_archive", "interview_knowledge_atom", atom.ID, map[string]string{
+			"version":       strconv.Itoa(atom.CurrentVersion),
+			"vector_status": atom.VectorStatus,
+		})
+		writeOK(w, map[string]interface{}{"atom": atom, "version": version})
+		return
+	}
+	if len(parts) == 3 && parts[0] == "atoms" && parts[2] == "restore" && r.Method == http.MethodPost {
+		atom, version, err := s.restoreInterviewKnowledgeAtom(parts[1], user)
+		if err != nil {
+			status := http.StatusBadRequest
+			if err.Error() == "interview knowledge atom not found" {
+				status = http.StatusNotFound
+			}
+			writeError(w, status, err.Error())
+			return
+		}
+		s.audit(r, user, "admin.interview_bank_atom_restore", "interview_knowledge_atom", atom.ID, map[string]string{
+			"version":       strconv.Itoa(atom.CurrentVersion),
+			"vector_status": atom.VectorStatus,
 		})
 		writeOK(w, map[string]interface{}{"atom": atom, "version": version})
 		return
@@ -324,6 +366,49 @@ func (s *Server) updateInterviewKnowledgeAtom(atomID string, req interviewKnowle
 		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf(strings.Join(errors, "; "))
 	}
 	return s.store.SaveInterviewKnowledgeAtomVersioned(updated, domain.InterviewKnowledgeVersionManualEdit, user.ID, changeNote)
+}
+
+func (s *Server) archiveInterviewKnowledgeAtom(ctx context.Context, atomID string, req interviewKnowledgeAtomArchiveRequest, user *domain.User) (domain.InterviewKnowledgeAtom, domain.InterviewKnowledgeAtomVersion, error) {
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf("reason is required")
+	}
+	current, ok := s.store.GetInterviewKnowledgeAtom(atomID)
+	if !ok {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf("interview knowledge atom not found")
+	}
+	if strings.TrimSpace(current.Status) == "archived" {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf("interview knowledge atom is already archived")
+	}
+	archived := *current
+	archived.Status = "archived"
+	// 归档题目不再可检索，旧向量会在保存后清理；状态同步改为 pending 避免管理端误判为可用索引。
+	archived.VectorStatus = "pending"
+	saved, version, err := s.store.SaveInterviewKnowledgeAtomVersioned(archived, domain.InterviewKnowledgeVersionArchive, user.ID, reason)
+	if err != nil {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, err
+	}
+	if vectorStore := interviewKnowledgeVectorStore(s.store); vectorStore != nil {
+		_ = vectorStore.DeleteInterviewKnowledgeByAtom(ctx, saved.ID)
+	}
+	return saved, version, nil
+}
+
+func (s *Server) restoreInterviewKnowledgeAtom(atomID string, user *domain.User) (domain.InterviewKnowledgeAtom, domain.InterviewKnowledgeAtomVersion, error) {
+	current, ok := s.store.GetInterviewKnowledgeAtom(atomID)
+	if !ok {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf("interview knowledge atom not found")
+	}
+	if strings.TrimSpace(current.Status) != "archived" {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf("only archived interview knowledge atoms can be restored")
+	}
+	restored := *current
+	restored.Status = "published"
+	restored.VectorStatus = "pending"
+	if errors := validateInterviewKnowledgeAtomFields(restored); len(errors) > 0 {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf(strings.Join(errors, "; "))
+	}
+	return s.store.SaveInterviewKnowledgeAtomVersioned(restored, domain.InterviewKnowledgeVersionRestoreArchived, user.ID, "恢复归档")
 }
 
 func (s *Server) rebuildInterviewKnowledgeIndex(ctx context.Context, req interviewKnowledgeIndexRebuildRequest) (interviewKnowledgeIndexRebuildResponse, error) {

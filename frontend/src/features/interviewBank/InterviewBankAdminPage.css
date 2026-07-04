@@ -169,7 +169,8 @@
 .interview-bank-import-panel textarea,
 .interview-bank-edit-grid input,
 .interview-bank-edit-grid select,
-.interview-bank-edit-grid textarea {
+.interview-bank-edit-grid textarea,
+.interview-bank-archive-box input {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 14px;
@@ -181,7 +182,8 @@
 .interview-bank-filter-grid input,
 .interview-bank-filter-grid select,
 .interview-bank-edit-grid input,
-.interview-bank-edit-grid select {
+.interview-bank-edit-grid select,
+.interview-bank-archive-box input {
   min-height: 42px;
   padding: 0 12px;
 }
@@ -200,7 +202,8 @@
 .interview-bank-filter-grid input::placeholder,
 .interview-bank-import-panel textarea::placeholder,
 .interview-bank-edit-grid input::placeholder,
-.interview-bank-edit-grid textarea::placeholder {
+.interview-bank-edit-grid textarea::placeholder,
+.interview-bank-archive-box input::placeholder {
   color: rgba(220, 228, 238, 0.46);
 }
 
@@ -209,7 +212,8 @@
 .interview-bank-import-panel textarea:focus,
 .interview-bank-edit-grid input:focus,
 .interview-bank-edit-grid select:focus,
-.interview-bank-edit-grid textarea:focus {
+.interview-bank-edit-grid textarea:focus,
+.interview-bank-archive-box input:focus {
   outline: 2px solid rgba(92, 225, 198, 0.16);
   border-color: rgba(92, 225, 198, 0.46);
 }
@@ -512,6 +516,54 @@
   line-height: 1.6;
 }
 
+.interview-bank-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.interview-bank-archive-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: rgba(12, 20, 32, 0.74);
+}
+
+.interview-bank-archive-box label {
+  display: grid;
+  gap: 7px;
+  color: rgba(220, 228, 238, 0.82);
+  font-size: 13px;
+  min-width: 0;
+}
+
+.interview-bank-archive-box.archived {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.interview-bank-archive-box span {
+  color: rgba(220, 228, 238, 0.76);
+  line-height: 1.6;
+}
+
+.interview-bank-page .danger-button {
+  border-color: rgba(255, 90, 54, 0.28);
+  background: rgba(74, 20, 12, 0.34);
+  color: #ffc7bc;
+}
+
+.interview-bank-page .danger-button:hover {
+  border-color: rgba(255, 90, 54, 0.46);
+  background: rgba(255, 90, 54, 0.12);
+}
+
 .interview-bank-edit-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -614,7 +666,10 @@
 
   .interview-bank-list-title,
   .interview-bank-list-actions,
-  .interview-bank-detail-header {
+  .interview-bank-detail-header,
+  .interview-bank-detail-actions,
+  .interview-bank-archive-box,
+  .interview-bank-archive-box.archived {
     display: grid;
     grid-template-columns: 1fr;
     justify-items: stretch;

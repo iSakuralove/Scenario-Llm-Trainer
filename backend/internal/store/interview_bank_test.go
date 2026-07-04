@@ -41,6 +41,22 @@ func TestMemorySaveInterviewKnowledgeAtomVersionedCreatesAndAdvancesVersions(t *
 	}
 }
 
+func TestInterviewKnowledgeArchiveVersionTypeIsValid(t *testing.T) {
+	store := NewMemoryStore(func(password string) string { return "hash:" + password })
+	atom := sampleInterviewKnowledgeAtom("atom-archive-version")
+	if _, _, err := store.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "首次导入"); err != nil {
+		t.Fatal(err)
+	}
+	atom.Status = "archived"
+	saved, version, err := store.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionArchive, "admin-1", "过期归档")
+	if err != nil {
+		t.Fatalf("archive version type should be valid: %v", err)
+	}
+	if saved.Status != "archived" || saved.CurrentVersion != 2 || version.VersionType != domain.InterviewKnowledgeVersionArchive {
+		t.Fatalf("unexpected archive save result atom=%+v version=%+v", saved, version)
+	}
+}
+
 func TestInterviewKnowledgeAtomSnapshotExcludesRuntimeIndexFields(t *testing.T) {
 	store := NewMemoryStore(func(password string) string { return "hash:" + password })
 	atom := sampleInterviewKnowledgeAtom("atom-database-index")

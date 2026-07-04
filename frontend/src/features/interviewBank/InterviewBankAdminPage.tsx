@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
+  Archive,
   CheckCircle2,
   Database,
   Eye,
@@ -9,6 +10,7 @@ import {
   ListFilter,
   PackageCheck,
   RefreshCw,
+  RotateCcw,
   Save,
   Search,
   Upload,
@@ -94,8 +96,11 @@ export function InterviewBankAdminPage() {
   const [activeAtom, setActiveAtom] = useState<InterviewKnowledgeAtom | null>(null)
   const [activeVersions, setActiveVersions] = useState<InterviewKnowledgeAtomVersion[]>([])
   const [editForm, setEditForm] = useState<AtomEditForm | null>(null)
+  const [archiveReason, setArchiveReason] = useState('')
   const [isDetailLoading, setIsDetailLoading] = useState(false)
   const [isSavingAtom, setIsSavingAtom] = useState(false)
+  const [isArchivingAtom, setIsArchivingAtom] = useState(false)
+  const [isRestoringAtom, setIsRestoringAtom] = useState(false)
 
   const loadData = useCallback(async () => {
     setIsLoading(true)
@@ -272,6 +277,7 @@ export function InterviewBankAdminPage() {
       setActiveAtom(detail.atom)
       setActiveVersions(history.list ?? [])
       setEditForm(atomToEditForm(detail.atom))
+      setArchiveReason('')
     } catch (err) {
       setError(err instanceof Error ? err.message : '题目详情读取失败')
     } finally {
@@ -303,6 +309,61 @@ export function InterviewBankAdminPage() {
       setError(err instanceof Error ? err.message : '题目保存失败')
     } finally {
       setIsSavingAtom(false)
+    }
+  }
+
+  async function handleArchiveAtom() {
+    if (!activeAtom) return
+    setError('')
+    setMessage('')
+    const reason = archiveReason.trim()
+    if (!reason) {
+      setError('请填写归档原因')
+      return
+    }
+    const confirmed = window.confirm('归档后该题将不再进入后续新面试和追问检索')
+    if (!confirmed) return
+    try {
+      setIsArchivingAtom(true)
+      const result = await api.archiveInterviewBankAtom(token, activeAtom.id, { reason })
+      const history = await api.adminInterviewBankAtomVersions(token, activeAtom.id)
+      setActiveAtom(result.atom)
+      setActiveVersions(history.list ?? [])
+      setEditForm(atomToEditForm(result.atom))
+      setArchiveReason('')
+      setSelectedAtomIds((current) => {
+        const next = new Set(current)
+        next.delete(result.atom.id)
+        return next
+      })
+      setMessage(`归档完成：${result.atom.id} v${result.atom.current_version}`)
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '题目归档失败')
+    } finally {
+      setIsArchivingAtom(false)
+    }
+  }
+
+  async function handleRestoreAtom() {
+    if (!activeAtom) return
+    setError('')
+    setMessage('')
+    const confirmed = window.confirm('恢复后将进入后续新面试；追问增强需等待管理员重建索引')
+    if (!confirmed) return
+    try {
+      setIsRestoringAtom(true)
+      const result = await api.restoreInterviewBankAtom(token, activeAtom.id)
+      const history = await api.adminInterviewBankAtomVersions(token, activeAtom.id)
+      setActiveAtom(result.atom)
+      setActiveVersions(history.list ?? [])
+      setEditForm(atomToEditForm(result.atom))
+      setMessage(`恢复完成：${result.atom.id} v${result.atom.current_version}`)
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '题目恢复失败')
+    } finally {
+      setIsRestoringAtom(false)
     }
   }
 
@@ -506,8 +567,14 @@ export function InterviewBankAdminPage() {
         form={editForm}
         isLoading={isDetailLoading}
         isSaving={isSavingAtom}
+        archiveReason={archiveReason}
+        isArchiving={isArchivingAtom}
+        isRestoring={isRestoringAtom}
         onChange={updateEditForm}
+        onArchiveReasonChange={setArchiveReason}
         onSave={() => void handleSaveAtom()}
+        onArchive={() => void handleArchiveAtom()}
+        onRestore={() => void handleRestoreAtom()}
       />
     </section>
   )
@@ -563,16 +630,28 @@ function AtomDetailPanel({
   form,
   isLoading,
   isSaving,
+  archiveReason,
+  isArchiving,
+  isRestoring,
   onChange,
+  onArchiveReasonChange,
   onSave,
+  onArchive,
+  onRestore,
 }: {
   atom: InterviewKnowledgeAtom | null
   versions: InterviewKnowledgeAtomVersion[]
   form: AtomEditForm | null
   isLoading: boolean
   isSaving: boolean
+  archiveReason: string
+  isArchiving: boolean
+  isRestoring: boolean
   onChange: <K extends keyof AtomEditForm>(key: K, value: AtomEditForm[K]) => void
+  onArchiveReasonChange: (value: string) => void
   onSave: () => void
+  onArchive: () => void
+  onRestore: () => void
 }) {
   if (isLoading) {
     return (
@@ -606,10 +685,36 @@ function AtomDetailPanel({
           <h2>{atom.title}</h2>
           <p>{atom.id} · v{atom.current_version} · {statusLabel(atom.status)} · {vectorStatusLabel(atom.vector_status)}</p>
         </div>
-        <button className="primary-button compact" type="button" onClick={onSave} disabled={isSaving}>
-          <Save size={16} />{isSaving ? '保存中' : '保存编辑'}
-        </button>
+        <div className="interview-bank-detail-actions">
+          <button className="primary-button compact" type="button" onClick={onSave} disabled={isSaving || isArchiving || isRestoring}>
+            <Save size={16} />{isSaving ? '保存中' : '保存编辑'}
+          </button>
+          {atom.status === 'archived' ? (
+            <button className="ghost-button compact" type="button" onClick={onRestore} disabled={isSaving || isArchiving || isRestoring}>
+              <RotateCcw size={16} />{isRestoring ? '恢复中' : '恢复'}
+            </button>
+          ) : null}
+        </div>
       </div>
+
+      {atom.status !== 'archived' ? (
+        <div className="interview-bank-archive-box">
+          <label>
+            归档原因
+            <input value={archiveReason} onChange={(event) => onArchiveReasonChange(event.target.value)} placeholder="说明为什么下架该题" />
+          </label>
+          <button className="ghost-button compact danger-button" type="button" onClick={onArchive} disabled={isSaving || isArchiving || isRestoring}>
+            <Archive size={16} />{isArchiving ? '归档中' : '归档'}
+          </button>
+        </div>
+      ) : (
+        <div className="interview-bank-archive-box archived">
+          <span>该题已归档，不会进入后续新面试或追问检索。</span>
+          <button className="ghost-button compact" type="button" onClick={onRestore} disabled={isSaving || isArchiving || isRestoring}>
+            <RotateCcw size={16} />{isRestoring ? '恢复中' : '恢复为已发布'}
+          </button>
+        </div>
+      )}
 
       <div className="interview-bank-edit-grid">
         <label>
@@ -869,6 +974,8 @@ function versionTypeLabel(value: string) {
       return '重复导入'
     case 'manual_edit':
       return '在线编辑'
+    case 'archive':
+      return '归档'
     case 'restore_archived':
       return '恢复归档'
     default:

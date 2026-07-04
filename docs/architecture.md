@@ -73,7 +73,7 @@
 - `backend/internal/domain/interview_bank.go`
   定义 `InterviewKnowledgeAtom`、`InterviewKnowledgeAtomVersion`、`InterviewKnowledgeBatch`、`InterviewRetrievalLog` 等题库治理领域对象。
 - `backend/internal/store`
-  通过 `SaveInterviewKnowledgeAtomVersioned` 统一写入导入、重复导入、在线编辑和恢复归档产生的版本事件；MemoryStore 与 PostgresStore 必须保持同一版本推进口径。
+  通过 `SaveInterviewKnowledgeAtomVersioned` 统一写入导入、重复导入、在线编辑、归档和恢复归档产生的版本事件；MemoryStore 与 PostgresStore 必须保持同一版本推进口径。
 - `interview_knowledge_atoms`
   保存题目当前版本内容、发布状态、`current_version` 和运行时索引状态。
 - `interview_knowledge_atom_versions`
@@ -101,6 +101,10 @@
   返回单题版本历史，默认按最新版本优先展示。
 - `PATCH /api/v1/admin/interview-bank/atoms/{id}`
   支持管理员在线编辑已发布题库资源内容；请求必须携带 `base_version` 与 `change_note`，保存时复用 `SaveInterviewKnowledgeAtomVersioned` 写入 `manual_edit` 版本，并将 `vector_status` 置为 `pending` 等待手动重建索引。
+- `POST /api/v1/admin/interview-bank/atoms/{id}/archive`
+  支持管理员归档题库资源；请求必须携带非空 `reason`，保存时写入 `archive` 版本，并清理该 atom 的题库向量文档，归档题不会进入后续新面试或追问检索。
+- `POST /api/v1/admin/interview-bank/atoms/{id}/restore`
+  支持管理员将归档题恢复为 `published`；恢复前复用题库硬校验，通过后写入 `restore_archived` 版本，并将 `vector_status` 置为 `pending` 等待手动重建索引。
 - `GET /api/v1/admin/interview-bank/batches`
   返回最近导入批次，供前端展示导入历史。
 - `POST /api/v1/admin/interview-bank/import/validate`

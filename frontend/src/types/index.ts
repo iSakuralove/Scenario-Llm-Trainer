@@ -558,6 +558,10 @@ export interface InterviewKnowledgeAtomUpdateRequest {
   follow_up_paths: string[]
 }
 
+export interface InterviewKnowledgeAtomArchiveRequest {
+  reason: string
+}
+
 export interface InterviewKnowledgeBatch {
   id: string
   source_ref: string

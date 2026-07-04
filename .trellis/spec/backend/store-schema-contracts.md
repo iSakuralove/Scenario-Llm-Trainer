@@ -18,7 +18,7 @@
 ### 3. Contracts
 
 - `current_version` starts at `1` for a new atom and increments by one for every version event.
-- Supported `version_type` values are `content_update`, `duplicate_import`, `manual_edit`, `restore_archived`.
+- Supported `version_type` values are `content_update`, `duplicate_import`, `manual_edit`, `archive`, `restore_archived`.
 - `duplicate_import` must still create a version row and advance `current_version`, even when content is unchanged.
 - `snapshot` must contain only stable content fields: `id`, `title`, `subject`, `domain`, `difficulty`, `category`, `question_role`, `sourceRef`, `tags`, `principles`, `pitfalls`, `followUpPaths`, `status`.
 - `snapshot` must not contain runtime index fields such as `vector_status` or `last_indexed_at`.
@@ -30,6 +30,7 @@
 
 - Empty atom ID -> return error before writing.
 - Unknown `version_type` -> return error before writing.
+- Adding a new `version_type` -> update domain constants, Store validation, `SchemaSQL`, `LegacyCompatibilitySQL`, `backend/migrations/001_schema.sql`, and schema text tests in the same change.
 - Missing existing atom -> create atom with version `1`.
 - Existing atom -> lock/read current row in Postgres and write atom update plus version insert in one transaction.
 - Existing atom with empty incoming `vector_status` -> preserve existing runtime index status.

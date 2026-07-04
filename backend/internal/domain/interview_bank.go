@@ -6,6 +6,7 @@ const (
 	InterviewKnowledgeVersionContentUpdate   = "content_update"
 	InterviewKnowledgeVersionDuplicateImport = "duplicate_import"
 	InterviewKnowledgeVersionManualEdit      = "manual_edit"
+	InterviewKnowledgeVersionArchive         = "archive"
 	InterviewKnowledgeVersionRestoreArchived = "restore_archived"
 )
 
@@ -14,6 +15,7 @@ func ValidInterviewKnowledgeVersionType(versionType string) bool {
 	case InterviewKnowledgeVersionContentUpdate,
 		InterviewKnowledgeVersionDuplicateImport,
 		InterviewKnowledgeVersionManualEdit,
+		InterviewKnowledgeVersionArchive,
 		InterviewKnowledgeVersionRestoreArchived:
 		return true
 	default:

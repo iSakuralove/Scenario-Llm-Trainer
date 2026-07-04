@@ -168,7 +168,7 @@ CREATE TABLE IF NOT EXISTS interview_knowledge_atom_versions (
     id TEXT PRIMARY KEY,
     atom_id TEXT NOT NULL REFERENCES interview_knowledge_atoms(id) ON DELETE CASCADE,
     version INT NOT NULL,
-    version_type VARCHAR(32) NOT NULL CHECK (version_type IN ('content_update','duplicate_import','manual_edit','restore_archived')),
+    version_type VARCHAR(32) NOT NULL CHECK (version_type IN ('content_update','duplicate_import','manual_edit','archive','restore_archived')),
     admin_id TEXT,
     change_note TEXT,
     snapshot JSONB NOT NULL,

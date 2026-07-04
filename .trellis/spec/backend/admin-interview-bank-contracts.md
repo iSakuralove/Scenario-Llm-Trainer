@@ -4,7 +4,7 @@
 
 ### 1. Scope / Trigger
 
-- Trigger: 修改管理员面试题库单题详情、版本历史、在线编辑接口，或前端管理页与这些接口的请求/响应合同。
+- Trigger: 修改管理员面试题库单题详情、版本历史、在线编辑、归档/恢复接口，或前端管理页与这些接口的请求/响应合同。
 - Applies to: `backend/internal/httpapi/handlers_interview_bank.go`, `backend/internal/httpapi/server.go`, `frontend/src/api/client.ts`, `frontend/src/features/interviewBank/InterviewBankAdminPage.tsx`。
 
 ### 2. Signatures
@@ -79,3 +79,76 @@ await api.updateInterviewKnowledgeAtom(token, id, {
 ```
 
 The client sends the version it edited from, and the backend rejects stale writes before saving a new audit version.
+
+## Scenario: Interview Knowledge Atom Archive / Restore
+
+### 1. Scope / Trigger
+
+- Trigger: 修改管理员题库归档、恢复归档、状态流转、版本类型、向量清理或前端详情页治理动作。
+- Applies to: `backend/internal/domain/interview_bank.go`, `backend/internal/httpapi/handlers_interview_bank.go`, `backend/internal/store/schema.go`, `backend/migrations/001_schema.sql`, `frontend/src/api/client.ts`, `frontend/src/features/interviewBank/InterviewBankAdminPage.tsx`。
+
+### 2. Signatures
+
+- API: `POST /api/v1/admin/interview-bank/atoms/{id}/archive`
+- API: `POST /api/v1/admin/interview-bank/atoms/{id}/restore`
+- Archive request: `{ reason: string }`
+- Restore request: empty JSON body is accepted.
+- Response: `{ atom: InterviewKnowledgeAtom, version: InterviewKnowledgeAtomVersion }`
+- Version types: `archive`, `restore_archived`
+- DB CHECK: `interview_knowledge_atom_versions.version_type` must allow both version types in runtime schema, legacy compatibility SQL, and Docker init migration.
+
+### 3. Contracts
+
+- Archive requires admin auth and non-empty `reason`.
+- Archive changes `status` to `archived`, writes an `archive` version with `change_note=reason`, marks `vector_status=pending`, and deletes topic-bank vector documents for that atom when a vector store is available.
+- Restore requires admin auth and only accepts atoms whose current `status=archived`.
+- Restore changes `status` to `published`, validates the atom with the same hard validation as import/edit, writes a `restore_archived` version, and marks `vector_status=pending`.
+- Runtime retrieval must not use archived atoms; either the vector documents are deleted or the retrieval path filters the current atom by `status=published` and `vector_status=indexed`. This project does both.
+- Frontend detail panel shows archive action for non-archived atoms and restore action for archived atoms; successful actions refresh detail, versions, list, and summary.
+
+### 4. Validation & Error Matrix
+
+- Missing/invalid auth -> existing admin unauthorized/forbidden response.
+- Archive missing atom -> `404`.
+- Archive empty `reason` -> `400`, `reason is required`.
+- Archive already archived atom -> `400`.
+- Restore missing atom -> `404`.
+- Restore non-archived atom -> `400`.
+- Restore hard validation failure -> `400` with validation messages.
+- Adding `archive` in Go constants but not DB CHECK -> persistent mode writes fail; schema tests must catch this.
+
+### 5. Good/Base/Bad Cases
+
+- Good: Admin archives a published indexed atom; current atom becomes `archived/pending`, version history gets `archive`, and old vector docs are gone.
+- Good: Admin restores an archived atom; current atom becomes `published/pending`, version history gets `restore_archived`, and index rebuild remains manual.
+- Base: Archived atom is requested in index rebuild; rebuild skips it and deletes old vector docs without embedding.
+- Bad: UI hides archived status but backend still leaves vector docs searchable and retrieval does not filter current status.
+- Bad: Store accepts `archive` in memory but Postgres CHECK rejects it because migrations were not updated.
+
+### 6. Tests Required
+
+- Backend API: admin-only archive/restore, empty reason rejection, duplicate archive rejection, non-archived restore rejection, hard validation failure on restore.
+- Backend API: archive writes `archive`, restore writes `restore_archived`, versions are newest-first.
+- Vector behavior: archive deletes topic-bank vector docs or retrieval filters them out; rebuild skips archived atoms.
+- Store/schema: `archive` is a valid version type; runtime schema, legacy SQL, and Docker init schema include `archive`.
+- Frontend: `npm --prefix frontend run lint` and `npm --prefix frontend run build`.
+- Browser: real page can open detail, archive with a reason, restore, and observe final `published/pending` atom with expected version order.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```go
+const InterviewKnowledgeVersionArchive = "archive"
+```
+
+Only adding the Go constant works in memory mode but fails in Postgres when the existing CHECK constraint rejects `archive`.
+
+#### Correct
+
+```go
+const InterviewKnowledgeVersionArchive = "archive"
+// Also update SchemaSQL, LegacyCompatibilitySQL, migrations/001_schema.sql, and schema tests.
+```
+
+The domain constant, Store validation, runtime schema, migration schema, and legacy constraint upgrade stay aligned.

@@ -121,7 +121,7 @@ CREATE TABLE IF NOT EXISTS interview_knowledge_atom_versions (
     id TEXT PRIMARY KEY,
     atom_id TEXT NOT NULL REFERENCES interview_knowledge_atoms(id) ON DELETE CASCADE,
     version INT NOT NULL,
-    version_type VARCHAR(32) NOT NULL CHECK (version_type IN ('content_update','duplicate_import','manual_edit','restore_archived')),
+    version_type VARCHAR(32) NOT NULL CHECK (version_type IN ('content_update','duplicate_import','manual_edit','archive','restore_archived')),
     admin_id TEXT,
     change_note TEXT,
     snapshot JSONB NOT NULL,
@@ -419,7 +419,7 @@ CREATE TABLE IF NOT EXISTS interview_knowledge_atom_versions (
     id TEXT PRIMARY KEY,
     atom_id TEXT NOT NULL REFERENCES interview_knowledge_atoms(id) ON DELETE CASCADE,
     version INT NOT NULL,
-    version_type VARCHAR(32) NOT NULL CHECK (version_type IN ('content_update','duplicate_import','manual_edit','restore_archived')),
+    version_type VARCHAR(32) NOT NULL CHECK (version_type IN ('content_update','duplicate_import','manual_edit','archive','restore_archived')),
     admin_id TEXT,
     change_note TEXT,
     snapshot JSONB NOT NULL,
@@ -435,6 +435,12 @@ CREATE INDEX IF NOT EXISTS interview_knowledge_atom_versions_type_created_idx
     ON interview_knowledge_atom_versions(version_type, created_at DESC);
 CREATE INDEX IF NOT EXISTS interview_knowledge_atom_versions_admin_created_idx
     ON interview_knowledge_atom_versions(admin_id, created_at DESC);
+
+ALTER TABLE IF EXISTS interview_knowledge_atom_versions
+    DROP CONSTRAINT IF EXISTS interview_knowledge_atom_versions_version_type_check;
+ALTER TABLE IF EXISTS interview_knowledge_atom_versions
+    ADD CONSTRAINT interview_knowledge_atom_versions_version_type_check
+    CHECK (version_type IN ('content_update','duplicate_import','manual_edit','archive','restore_archived'));
 
 CREATE TABLE IF NOT EXISTS interview_knowledge_batches (
     id TEXT PRIMARY KEY,

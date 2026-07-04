@@ -97,6 +97,7 @@ func TestInterviewKnowledgeBankSchemaIncludesVersionGovernance(t *testing.T) {
 		"current_version INT DEFAULT 1",
 		"CREATE TABLE IF NOT EXISTS interview_knowledge_atom_versions",
 		"version_type VARCHAR(32) NOT NULL CHECK",
+		"'archive'",
 		"snapshot JSONB NOT NULL",
 		"diff_summary JSONB DEFAULT '{}'",
 		"no_content_change BOOLEAN DEFAULT FALSE",
@@ -125,6 +126,7 @@ func TestDockerInitSchemaIncludesInterviewKnowledgeBank(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS interview_knowledge_atoms",
 		"current_version INT DEFAULT 1",
 		"CREATE TABLE IF NOT EXISTS interview_knowledge_atom_versions",
+		"'archive'",
 		"interview_knowledge_atom_versions_atom_version_idx",
 		"CREATE TABLE IF NOT EXISTS interview_knowledge_batches",
 		"CREATE TABLE IF NOT EXISTS interview_retrieval_logs",
@@ -143,6 +145,7 @@ func TestLegacyCompatibilitySQLBackfillsInterviewSessionSnapshots(t *testing.T) 
 		"ALTER TABLE IF EXISTS interview_sessions ADD COLUMN IF NOT EXISTS selected_atom_snapshots JSONB DEFAULT '[]';",
 		"CREATE TABLE IF NOT EXISTS interview_knowledge_atoms",
 		"CREATE TABLE IF NOT EXISTS interview_knowledge_atom_versions",
+		"interview_knowledge_atom_versions_version_type_check",
 		"CREATE TABLE IF NOT EXISTS interview_knowledge_batches",
 	} {
 		if !strings.Contains(LegacyCompatibilitySQL, required) {

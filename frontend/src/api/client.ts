@@ -7,6 +7,7 @@ import type {
   Asset,
   CommunityPost,
   InterviewKnowledgeAtom,
+  InterviewKnowledgeAtomArchiveRequest,
   InterviewKnowledgeAtomFilters,
   InterviewKnowledgeAtomUpdateRequest,
   InterviewKnowledgeAtomVersion,
@@ -916,6 +917,20 @@ export const api = {
     request<{ atom: InterviewKnowledgeAtom; version: InterviewKnowledgeAtomVersion }>(
       `/admin/interview-bank/atoms/${encodeURIComponent(atomId)}`,
       { method: 'PATCH', body: JSON.stringify(payload) },
+      token,
+    ),
+
+  archiveInterviewBankAtom: (token: string, atomId: string, payload: InterviewKnowledgeAtomArchiveRequest) =>
+    request<{ atom: InterviewKnowledgeAtom; version: InterviewKnowledgeAtomVersion }>(
+      `/admin/interview-bank/atoms/${encodeURIComponent(atomId)}/archive`,
+      { method: 'POST', body: JSON.stringify(payload) },
+      token,
+    ),
+
+  restoreInterviewBankAtom: (token: string, atomId: string) =>
+    request<{ atom: InterviewKnowledgeAtom; version: InterviewKnowledgeAtomVersion }>(
+      `/admin/interview-bank/atoms/${encodeURIComponent(atomId)}/restore`,
+      { method: 'POST', body: JSON.stringify({}) },
       token,
     ),
 

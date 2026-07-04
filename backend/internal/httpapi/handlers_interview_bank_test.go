@@ -249,6 +249,119 @@ func TestAdminInterviewBankManualEditValidationAndNoContentChange(t *testing.T) 
 	}
 }
 
+func TestAdminInterviewBankArchiveAndRestore(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	atom := validInterviewBankAtomForRebuild("atom-archive-restore", "published", "indexed")
+	if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "初始导入"); err != nil {
+		t.Fatal(err)
+	}
+	vectorStore := dataStore.VectorStore()
+	if err := vectorStore.RebuildInterviewKnowledgeIndex(context.Background(), ai.BuildInterviewKnowledgeVectorDocuments(atom)); err != nil {
+		t.Fatalf("seed vector docs: %v", err)
+	}
+	beforeArchive, err := vectorStore.SearchInterviewKnowledge(context.Background(), store.InterviewKnowledgeVectorSearchQuery{
+		Category:      atom.Category,
+		Difficulty:    atom.Difficulty,
+		QuestionRoles: []string{atom.QuestionRole},
+		Text:          "singleflight",
+		Limit:         5,
+	})
+	if err != nil || len(beforeArchive) == 0 {
+		t.Fatalf("expected searchable vector docs before archive, results=%+v err=%v", beforeArchive, err)
+	}
+
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	demoToken := loginToken(t, handler, "demo", "demo123")
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	_, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/atoms/"+atom.ID+"/archive", demoToken, map[string]string{"reason": "过期题目"})
+	if env.Code != http.StatusForbidden {
+		t.Fatalf("student archive code=%d", env.Code)
+	}
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/atoms/"+atom.ID+"/archive", adminToken, map[string]string{"reason": " "})
+	if status != http.StatusBadRequest || env.Message != "reason is required" {
+		t.Fatalf("expected reason rejection, status=%d env=%+v", status, env)
+	}
+
+	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/atoms/"+atom.ID+"/archive", adminToken, map[string]string{"reason": "过期题目"})
+	if status != http.StatusOK {
+		t.Fatalf("archive status=%d message=%s", status, env.Message)
+	}
+	var archived struct {
+		Atom    domain.InterviewKnowledgeAtom        `json:"atom"`
+		Version domain.InterviewKnowledgeAtomVersion `json:"version"`
+	}
+	mustDecodeData(t, env, &archived)
+	if archived.Atom.Status != "archived" || archived.Atom.VectorStatus != "pending" || archived.Atom.CurrentVersion != 2 {
+		t.Fatalf("expected archived pending atom v2, got %+v", archived.Atom)
+	}
+	if archived.Version.VersionType != domain.InterviewKnowledgeVersionArchive || archived.Version.ChangeNote != "过期题目" {
+		t.Fatalf("expected archive version, got %+v", archived.Version)
+	}
+	afterArchive, err := vectorStore.SearchInterviewKnowledge(context.Background(), store.InterviewKnowledgeVectorSearchQuery{
+		Category:      atom.Category,
+		Difficulty:    atom.Difficulty,
+		QuestionRoles: []string{atom.QuestionRole},
+		Text:          "singleflight",
+		Limit:         5,
+	})
+	if err != nil || len(afterArchive) != 0 {
+		t.Fatalf("expected archived atom vector docs deleted, results=%+v err=%v", afterArchive, err)
+	}
+
+	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/atoms/"+atom.ID+"/archive", adminToken, map[string]string{"reason": "重复归档"})
+	if status != http.StatusBadRequest || env.Message != "interview knowledge atom is already archived" {
+		t.Fatalf("expected duplicate archive rejection, status=%d env=%+v", status, env)
+	}
+
+	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/atoms/"+atom.ID+"/restore", adminToken, nil)
+	if status != http.StatusOK {
+		t.Fatalf("restore status=%d message=%s", status, env.Message)
+	}
+	var restored struct {
+		Atom    domain.InterviewKnowledgeAtom        `json:"atom"`
+		Version domain.InterviewKnowledgeAtomVersion `json:"version"`
+	}
+	mustDecodeData(t, env, &restored)
+	if restored.Atom.Status != "published" || restored.Atom.VectorStatus != "pending" || restored.Atom.CurrentVersion != 3 {
+		t.Fatalf("expected restored published pending atom v3, got %+v", restored.Atom)
+	}
+	if restored.Version.VersionType != domain.InterviewKnowledgeVersionRestoreArchived {
+		t.Fatalf("expected restore version, got %+v", restored.Version)
+	}
+	versions := dataStore.ListInterviewKnowledgeAtomVersions(atom.ID)
+	if len(versions) != 3 || versions[0].VersionType != domain.InterviewKnowledgeVersionRestoreArchived || versions[1].VersionType != domain.InterviewKnowledgeVersionArchive {
+		t.Fatalf("expected restore then archive versions, got %+v", versions)
+	}
+}
+
+func TestAdminInterviewBankRestoreValidation(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	published := validInterviewBankAtomForRebuild("atom-restore-published", "published", "pending")
+	if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(published, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "已发布样例"); err != nil {
+		t.Fatal(err)
+	}
+	invalidArchived := validInterviewBankAtomForRebuild("atom-restore-invalid", "archived", "pending")
+	invalidArchived.Principles = []string{"只有一条"}
+	if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(invalidArchived, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "非法归档样例"); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/atoms/"+published.ID+"/restore", adminToken, nil)
+	if status != http.StatusBadRequest || env.Message != "only archived interview knowledge atoms can be restored" {
+		t.Fatalf("expected non-archived restore rejection, status=%d env=%+v", status, env)
+	}
+
+	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/atoms/"+invalidArchived.ID+"/restore", adminToken, nil)
+	if status != http.StatusBadRequest || !strings.Contains(env.Message, "principles must include at least 2 items") {
+		t.Fatalf("expected restore hard validation rejection, status=%d env=%+v", status, env)
+	}
+}
+
 func TestAdminInterviewBankRebuildRequiresAdminAndIndexesPendingFailed(t *testing.T) {
 	dataStore := store.NewMemoryStore(auth.HashPassword)
 	pending := validInterviewBankAtomForRebuild("atom-rebuild-pending", "published", "pending")
