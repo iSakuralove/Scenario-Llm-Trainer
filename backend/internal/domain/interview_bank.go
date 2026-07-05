@@ -150,3 +150,45 @@ type InterviewRetrievalLog struct {
 	ErrorMessage string                                `json:"error_message,omitempty"`
 	CreatedAt    time.Time                             `json:"created_at"`
 }
+
+type InterviewRetrievalLogFilter struct {
+	Domain       string
+	Category     string
+	Difficulty   string
+	FallbackUsed *bool
+	Limit        int
+}
+
+type InterviewRetrievalAtomHit struct {
+	AtomID       string     `json:"atom_id"`
+	Version      int        `json:"version"`
+	Title        string     `json:"title"`
+	Subject      string     `json:"subject"`
+	Domain       string     `json:"domain"`
+	Category     string     `json:"category"`
+	Difficulty   string     `json:"difficulty"`
+	QuestionRole string     `json:"question_role"`
+	HitCount     int        `json:"hit_count"`
+	LastHitAt    *time.Time `json:"last_hit_at,omitempty"`
+}
+
+type InterviewRetrievalFallbackCombination struct {
+	Domain       string     `json:"domain"`
+	Category     string     `json:"category"`
+	Difficulty   string     `json:"difficulty"`
+	Count        int        `json:"count"`
+	RecentReason string     `json:"recent_reason,omitempty"`
+	LastSeenAt   *time.Time `json:"last_seen_at,omitempty"`
+}
+
+type InterviewRetrievalAnalytics struct {
+	TotalLogs            int                                     `json:"total_logs"`
+	HitLogs              int                                     `json:"hit_logs"`
+	FallbackLogs         int                                     `json:"fallback_logs"`
+	HitRate              float64                                 `json:"hit_rate"`
+	FallbackRate         float64                                 `json:"fallback_rate"`
+	TopHitAtoms          []InterviewRetrievalAtomHit             `json:"top_hit_atoms"`
+	LowHitAtoms          []InterviewRetrievalAtomHit             `json:"low_hit_atoms"`
+	FallbackCombinations []InterviewRetrievalFallbackCombination `json:"fallback_combinations"`
+	RecentFallbacks      []InterviewRetrievalLog                 `json:"recent_fallbacks"`
+}

@@ -304,6 +304,8 @@
 .interview-bank-preview-result,
 .interview-bank-health-alert,
 .interview-bank-preview-hit,
+.interview-bank-retrieval-row,
+.interview-bank-retrieval-log-row,
 .interview-bank-publish-strip,
 .interview-bank-batch-row,
 .interview-bank-empty-row,
@@ -330,6 +332,8 @@
 
 .interview-bank-report-heading,
 .interview-bank-preview-hit,
+.interview-bank-retrieval-row,
+.interview-bank-retrieval-log-row,
 .interview-bank-publish-strip,
 .interview-bank-batch-row,
 .interview-bank-empty-row,
@@ -341,6 +345,8 @@
 
 .interview-bank-report-heading strong,
 .interview-bank-preview-hit strong,
+.interview-bank-retrieval-row strong,
+.interview-bank-retrieval-log-row strong,
 .interview-bank-publish-strip strong,
 .interview-bank-batch-row strong,
 .interview-bank-empty-row strong,
@@ -353,6 +359,10 @@
 .interview-bank-report-heading span,
 .interview-bank-preview-hit span,
 .interview-bank-preview-hit small,
+.interview-bank-retrieval-row span,
+.interview-bank-retrieval-row small,
+.interview-bank-retrieval-log-row span,
+.interview-bank-retrieval-log-row small,
 .interview-bank-publish-strip span,
 .interview-bank-batch-row span,
 .interview-bank-batch-row small,
@@ -383,9 +393,35 @@
 
 .interview-bank-health-panel,
 .interview-bank-preview-panel,
+.interview-bank-retrieval-ops-panel,
 .interview-bank-preview-result {
   display: grid;
   gap: 14px;
+}
+
+.interview-bank-retrieval-ops-panel {
+  grid-column: 1 / -1;
+}
+
+.interview-bank-panel-subtitle {
+  max-width: 760px;
+  margin: -10px 0 0;
+  color: rgba(220, 228, 238, 0.66);
+  line-height: 1.6;
+}
+
+.interview-bank-retrieval-window {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(92, 225, 198, 0.18);
+  border-radius: 999px;
+  padding: 0 11px;
+  background: rgba(92, 225, 198, 0.1);
+  color: #dffaf4;
+  font-size: 12px;
+  font-weight: 850;
+  white-space: nowrap;
 }
 
 .interview-bank-health-metrics {
@@ -401,6 +437,84 @@
 
 .interview-bank-health-metrics .metric strong {
   font-size: 24px;
+}
+
+.interview-bank-retrieval-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.interview-bank-retrieval-metrics .metric {
+  min-height: 82px;
+  padding: 14px;
+}
+
+.interview-bank-retrieval-metrics .metric strong {
+  font-size: 24px;
+}
+
+.interview-bank-retrieval-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.interview-bank-retrieval-column,
+.interview-bank-retrieval-list,
+.interview-bank-retrieval-log-list {
+  min-width: 0;
+}
+
+.interview-bank-retrieval-column,
+.interview-bank-retrieval-list,
+.interview-bank-retrieval-log-list,
+.interview-bank-retrieval-log-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.interview-bank-retrieval-column.span-2 {
+  grid-column: span 2;
+}
+
+.interview-bank-retrieval-column-title {
+  color: rgba(245, 248, 252, 0.92);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.interview-bank-retrieval-row,
+.interview-bank-retrieval-log-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+}
+
+.interview-bank-retrieval-row.tone-hot {
+  border-color: rgba(92, 225, 198, 0.18);
+}
+
+.interview-bank-retrieval-row.tone-cold,
+.interview-bank-retrieval-log-row.is-fallback {
+  border-color: rgba(255, 190, 92, 0.28);
+  background: rgba(88, 63, 20, 0.26);
+}
+
+.interview-bank-retrieval-row strong,
+.interview-bank-retrieval-row span,
+.interview-bank-retrieval-row small,
+.interview-bank-retrieval-log-row strong,
+.interview-bank-retrieval-log-row span,
+.interview-bank-retrieval-log-row small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.interview-bank-retrieval-log-actions {
+  justify-items: end;
 }
 
 .interview-bank-health-alerts,
@@ -535,7 +649,9 @@
 .interview-bank-batch-row,
 .interview-bank-empty-row,
 .interview-bank-publish-strip,
-.interview-bank-version-row {
+.interview-bank-version-row,
+.interview-bank-retrieval-row,
+.interview-bank-retrieval-log-row {
   padding: 12px 14px;
 }
 
@@ -833,9 +949,15 @@
   .interview-bank-hero-metrics,
   .interview-bank-filter-grid,
   .interview-bank-health-metrics,
+  .interview-bank-retrieval-metrics,
+  .interview-bank-retrieval-columns,
   .interview-bank-preview-form,
   .interview-bank-report-metrics {
     grid-template-columns: 1fr;
+  }
+
+  .interview-bank-retrieval-column.span-2 {
+    grid-column: span 1;
   }
 
   .interview-bank-actions {
@@ -873,5 +995,14 @@
 
   .interview-bank-preview-hit {
     grid-template-columns: 1fr;
+  }
+
+  .interview-bank-retrieval-row,
+  .interview-bank-retrieval-log-row {
+    grid-template-columns: 1fr;
+  }
+
+  .interview-bank-retrieval-log-actions {
+    justify-items: stretch;
   }
 }

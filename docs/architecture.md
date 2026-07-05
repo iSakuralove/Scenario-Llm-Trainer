@@ -82,6 +82,8 @@
   保存创建会话时的开场题快照，避免后续改题污染历史面试。
 - `interview_sessions.selected_atom_snapshots`
   保存追问命中的轻量知识原子快照，只保留元数据，不保存大段正文。
+- `interview_retrieval_logs`
+  保存真实面试追问检索的轻量运营日志，只记录 `session_id`、轮次、脱敏截断 query、命中原子快照、回退状态、错误摘要和创建时间，用于管理员运营看板聚合命中率、回退率和低效资源。
 
 版本快照只包含稳定内容字段：`id`、`title`、`subject`、`domain`、`difficulty`、`category`、`question_role`、`sourceRef`、`tags`、`principles`、`pitfalls`、`followUpPaths`、`status`。`vector_status` 和 `last_indexed_at` 属于运行时索引状态，不进入版本快照。
 
@@ -117,6 +119,10 @@
   触发 admin-only 的同步限量索引重建，支持按 `atom_ids` 精确重建，或按 `vector_status=pending|failed|pending_failed` 选择候选资源。
 - `POST /api/v1/admin/interview-bank/retrieval-preview`
   支持管理员按 `domain + category + difficulty` 输入模拟检索文本预览追问召回结果；该接口复用题库向量检索边界，只读取 `published + indexed + followup/mixed` 资源，不创建面试会话、不写正式检索日志、不推进版本或修改索引状态。
+- `GET /api/v1/admin/interview-bank/retrieval-logs`
+  返回最近真实追问检索日志，支持 `domain`、`category`、`difficulty`、`fallback_used` 和 `limit` 过滤；响应只包含脱敏截断后的 query、轻量命中原子和回退摘要。
+- `GET /api/v1/admin/interview-bank/retrieval-analytics`
+  从有限窗口内聚合真实检索次数、命中率、回退率、热门命中原子、低/未命中原子、回退组合排行和最近回退原因，供管理端题库运营面板使用。
 
 题库向量索引采用独立的 `interview_knowledge_vector_documents` 表，不复用场景题的 `scenario_vector_documents`，避免 `question_id` / `source_version` 语义混用。重建接口只对 `status=published` 的 atom 调用 embedding 并写入向量文档；`draft` / `archived` 被请求重建时会删除旧向量文档并返回 skipped，不进入可检索索引。成功重建会将 `vector_status` 更新为 `indexed` 并写入 `last_indexed_at`；失败只将 `vector_status` 更新为 `failed`，不覆盖上一次成功索引时间，也不新增内容版本。导入发布链路仍不自动触发 embedding，避免发布接口受外部 provider 可用性影响。
 
@@ -128,6 +134,7 @@
 - 会话级输入首期只包含 `difficulty_level`、`focus_areas[]`、`setup_notes`，不参与开场题选择，只进入追问检索和反馈生成。
 - 长期个人档案只保存 `resume_summary` 与 `project_summary`，前端可把它们合成为本场 `setup_notes` 的默认输入，但不会把本场输入回写到个人档案。
 - Agent 评分链路在五维评分之后增加追问检索步骤：检索 `followup|mixed` 且 `vector_status=indexed` 的题库原子；检索不可用、未命中或索引未就绪时回退规则追问，面试流程不中断。
+- 每次真实追问检索结束后写入 `InterviewRetrievalLog`，命中和回退路径都记录；写入失败只降级记录内部错误，不中断面试提交。日志 query 使用脱敏逻辑并截断到 500 字，不保存用户身份、完整回答、完整简历或项目背景。
 - 面试报告展示聚合摘要、每轮 `subject`、`fallback_used`、`follow_up_type`，并基于会话评价数据生成知识点覆盖分布与规则复训建议；不展示原子正文、内部检索 query、命中片段、管理端标题细节或 selected atom 快照。复训建议首期只作为报告展示内容，不自动写入长期学习计划或个人画像。
 
 ## 当前安全约束

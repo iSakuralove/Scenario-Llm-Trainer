@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	agentruntime "situational-teaching/backend/internal/agent"
 	"situational-teaching/backend/internal/ai"
 	"situational-teaching/backend/internal/auth"
 	"situational-teaching/backend/internal/domain"
@@ -267,6 +268,197 @@ func TestAdminInterviewBankRetrievalPreviewMissingEmbeddingFallsBack(t *testing.
 	}
 	if versions := dataStore.ListInterviewKnowledgeAtomVersions(atom.ID); len(versions) != 1 {
 		t.Fatalf("retrieval preview must not create versions, got %+v", versions)
+	}
+}
+
+func TestInterviewRuntimeRetrievalWritesSanitizedHitAndFallbackLogs(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	atom := validInterviewBankAtomForRebuild("atom-runtime-retrieval-hit", "published", "indexed")
+	atom.QuestionRole = "followup"
+	if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "运行时检索样例"); err != nil {
+		t.Fatal(err)
+	}
+	docs := ai.BuildInterviewKnowledgeVectorDocuments(atom)
+	if err := dataStore.VectorStore().RebuildInterviewKnowledgeIndex(context.Background(), docs); err != nil {
+		t.Fatalf("seed interview knowledge vectors: %v", err)
+	}
+	server := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour))
+
+	session := &domain.InterviewSession{
+		ID:           "session-runtime-retrieval",
+		CurrentRound: 2,
+		SetupNotes:   "候选人提到了 password=secret 和 10.1.2.3",
+		QuestionSnapshot: domain.InterviewQuestionSnapshot{
+			Domain:     "backend",
+			Category:   "cache",
+			Difficulty: "L3",
+			Subject:    "缓存击穿治理",
+			Title:      "缓存击穿治理",
+		},
+	}
+	question := &domain.InterviewQuestion{Title: "缓存击穿治理", Description: "singleflight", Domain: "backend", Difficulty: "L3"}
+	result, err := server.retrieveInterviewFollowUpContext(context.Background(), agentruntime.InterviewRetrievalRequest{
+		Session:  session,
+		Question: question,
+		Answer:   strings.Repeat("singleflight ", 80) + "api_key=abc 10.1.2.3",
+		Evaluation: domain.InterviewEvaluation{
+			Round:             2,
+			FollowUpTriggered: true,
+			FollowUpQuestion:  "请继续说明 singleflight。",
+			FollowUpType:      "deepen",
+			DimensionScores:   map[string]int{"technical_accuracy": 55},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FallbackUsed || len(result.MatchedAtoms) == 0 {
+		t.Fatalf("expected runtime retrieval hit, got %+v", result)
+	}
+
+	fallbackSession := &domain.InterviewSession{
+		ID:           "session-runtime-fallback",
+		CurrentRound: 3,
+		QuestionSnapshot: domain.InterviewQuestionSnapshot{
+			Domain:     "backend",
+			Category:   "database",
+			Difficulty: "L3",
+			Subject:    "慢查询定位",
+			Title:      "慢查询定位",
+		},
+	}
+	fallback, err := server.retrieveInterviewFollowUpContext(context.Background(), agentruntime.InterviewRetrievalRequest{
+		Session:  fallbackSession,
+		Question: &domain.InterviewQuestion{Title: "慢查询定位", Description: "EXPLAIN", Domain: "backend", Difficulty: "L3"},
+		Answer:   "没有覆盖缓存内容 token=abcdef",
+		Evaluation: domain.InterviewEvaluation{
+			Round:             3,
+			FollowUpTriggered: true,
+			FollowUpQuestion:  "请补充排查路径。",
+			FollowUpType:      "supplement",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fallback.FallbackUsed {
+		t.Fatalf("expected runtime retrieval fallback, got %+v", fallback)
+	}
+
+	logs := dataStore.ListInterviewRetrievalLogs(domain.InterviewRetrievalLogFilter{Limit: 10})
+	if len(logs) != 2 {
+		t.Fatalf("expected 2 retrieval logs, got %+v", logs)
+	}
+	var hitLog, fallbackLog *domain.InterviewRetrievalLog
+	for i := range logs {
+		if logs[i].SessionID == session.ID {
+			hitLog = &logs[i]
+		}
+		if logs[i].SessionID == fallbackSession.ID {
+			fallbackLog = &logs[i]
+		}
+	}
+	if hitLog == nil || fallbackLog == nil {
+		t.Fatalf("expected hit and fallback logs, got %+v", logs)
+	}
+	if hitLog.SessionID != session.ID || hitLog.Round != 2 || hitLog.FallbackUsed || len(hitLog.MatchedAtoms) == 0 {
+		t.Fatalf("unexpected hit log: %+v", hitLog)
+	}
+	if len([]rune(hitLog.QueryText)) > 500 || strings.Contains(hitLog.QueryText, "10.1.2.3") || strings.Contains(hitLog.QueryText, "api_key=abc") || strings.Contains(hitLog.QueryText, "password=secret") {
+		t.Fatalf("query text must be sanitized and truncated, got %q", hitLog.QueryText)
+	}
+	if fallbackLog.SessionID != fallbackSession.ID || !fallbackLog.FallbackUsed || fallbackLog.ErrorMessage == "" {
+		t.Fatalf("unexpected fallback log: %+v", fallbackLog)
+	}
+}
+
+func TestAdminInterviewBankRetrievalLogsAndAnalytics(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	hitAtom := validInterviewBankAtomForRebuild("atom-analytics-hit", "published", "indexed")
+	hitAtom.QuestionRole = "followup"
+	lowAtom := validInterviewBankAtomForRebuild("atom-analytics-low", "published", "indexed")
+	lowAtom.QuestionRole = "followup"
+	for _, atom := range []domain.InterviewKnowledgeAtom{hitAtom, lowAtom} {
+		if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "运营看板样例"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dataStore.InterviewSessions["session-analytics"] = &domain.InterviewSession{
+		ID: "session-analytics",
+		QuestionSnapshot: domain.InterviewQuestionSnapshot{
+			Domain:     "backend",
+			Category:   "cache",
+			Difficulty: "L3",
+		},
+	}
+	dataStore.SaveInterviewRetrievalLog(domain.InterviewRetrievalLog{
+		SessionID: "session-analytics",
+		Round:     1,
+		QueryText: "singleflight",
+		MatchedAtoms: []domain.InterviewKnowledgeAtomLightSnapshot{{
+			AtomID:   hitAtom.ID,
+			Version:  1,
+			Title:    hitAtom.Title,
+			Subject:  hitAtom.Subject,
+			Domain:   hitAtom.Domain,
+			Category: hitAtom.Category,
+		}},
+		CreatedAt: time.Now().Add(-time.Minute),
+	})
+	dataStore.SaveInterviewRetrievalLog(domain.InterviewRetrievalLog{
+		SessionID:    "session-analytics",
+		Round:        2,
+		QueryText:    "未命中",
+		FallbackUsed: true,
+		ErrorMessage: "未命中可用题库追问原子，继续使用规则追问。",
+		CreatedAt:    time.Now(),
+	})
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	demoToken := loginToken(t, handler, "demo", "demo123")
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	_, env := requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/retrieval-logs", demoToken, nil)
+	if env.Code != http.StatusForbidden {
+		t.Fatalf("student retrieval logs code=%d", env.Code)
+	}
+	status, env := requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/retrieval-logs?fallback_used=bad", adminToken, nil)
+	if status != http.StatusBadRequest || env.Message != "fallback_used must be true or false" {
+		t.Fatalf("expected fallback_used validation, status=%d env=%+v", status, env)
+	}
+
+	status, env = requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/retrieval-logs?fallback_used=true&domain=backend&category=cache&difficulty=L3&limit=5", adminToken, nil)
+	if status != http.StatusOK {
+		t.Fatalf("retrieval logs status=%d message=%s", status, env.Message)
+	}
+	var logResponse struct {
+		List  []domain.InterviewRetrievalLog `json:"list"`
+		Total int                            `json:"total"`
+	}
+	mustDecodeData(t, env, &logResponse)
+	if logResponse.Total != 1 || len(logResponse.List) != 1 || !logResponse.List[0].FallbackUsed {
+		t.Fatalf("expected one fallback retrieval log, got %+v", logResponse)
+	}
+
+	status, env = requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/retrieval-analytics?domain=backend&category=cache&difficulty=L3&limit=20", adminToken, nil)
+	if status != http.StatusOK {
+		t.Fatalf("analytics status=%d message=%s", status, env.Message)
+	}
+	var analytics domain.InterviewRetrievalAnalytics
+	mustDecodeData(t, env, &analytics)
+	if analytics.TotalLogs != 2 || analytics.HitLogs != 1 || analytics.FallbackLogs != 1 {
+		t.Fatalf("unexpected analytics counters: %+v", analytics)
+	}
+	if len(analytics.TopHitAtoms) != 1 || analytics.TopHitAtoms[0].AtomID != hitAtom.ID {
+		t.Fatalf("unexpected top hits: %+v", analytics.TopHitAtoms)
+	}
+	if len(analytics.LowHitAtoms) == 0 || analytics.LowHitAtoms[0].AtomID != lowAtom.ID {
+		t.Fatalf("unexpected low hits: %+v", analytics.LowHitAtoms)
+	}
+	if len(analytics.FallbackCombinations) != 1 || analytics.FallbackCombinations[0].Category != "cache" {
+		t.Fatalf("unexpected fallback combinations: %+v", analytics.FallbackCombinations)
+	}
+	if len(analytics.RecentFallbacks) != 1 || analytics.RecentFallbacks[0].ErrorMessage == "" {
+		t.Fatalf("expected recent fallback details, got %+v", analytics.RecentFallbacks)
 	}
 }
 

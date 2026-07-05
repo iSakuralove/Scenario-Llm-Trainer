@@ -364,6 +364,25 @@ func (s *Server) handleAdminInterviewBank(w http.ResponseWriter, r *http.Request
 		writeOK(w, response)
 		return
 	}
+	if len(parts) == 1 && parts[0] == "retrieval-logs" && r.Method == http.MethodGet {
+		filter, err := parseInterviewRetrievalLogFilter(r, 50, 200)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		items := s.store.ListInterviewRetrievalLogs(filter)
+		writeOK(w, map[string]interface{}{"list": items, "total": len(items)})
+		return
+	}
+	if len(parts) == 1 && parts[0] == "retrieval-analytics" && r.Method == http.MethodGet {
+		filter, err := parseInterviewRetrievalLogFilter(r, 500, 1000)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeOK(w, s.store.InterviewRetrievalAnalytics(filter))
+		return
+	}
 	if len(parts) == 1 && parts[0] == "retrieval-preview" && r.Method == http.MethodPost {
 		var req interviewKnowledgeRetrievalPreviewRequest
 		if !decode(w, r, &req) {
@@ -433,6 +452,31 @@ func (s *Server) handleAdminInterviewBank(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeError(w, http.StatusNotFound, "not found")
+}
+
+func parseInterviewRetrievalLogFilter(r *http.Request, defaultLimit, maxLimit int) (domain.InterviewRetrievalLogFilter, error) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = defaultLimit
+	}
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+	filter := domain.InterviewRetrievalLogFilter{
+		Domain:     r.URL.Query().Get("domain"),
+		Category:   r.URL.Query().Get("category"),
+		Difficulty: r.URL.Query().Get("difficulty"),
+		Limit:      limit,
+	}
+	fallbackValue := strings.TrimSpace(r.URL.Query().Get("fallback_used"))
+	if fallbackValue != "" {
+		parsed, err := strconv.ParseBool(fallbackValue)
+		if err != nil {
+			return domain.InterviewRetrievalLogFilter{}, fmt.Errorf("fallback_used must be true or false")
+		}
+		filter.FallbackUsed = &parsed
+	}
+	return filter, nil
 }
 
 func (s *Server) updateInterviewKnowledgeAtom(atomID string, req interviewKnowledgeAtomUpdateRequest, user *domain.User) (domain.InterviewKnowledgeAtom, domain.InterviewKnowledgeAtomVersion, error) {

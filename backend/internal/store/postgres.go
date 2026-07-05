@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"sort"
 	"strings"
@@ -41,6 +42,12 @@ const interviewKnowledgeBatchSelectSQL = `
 	       COALESCE(validation_report, '{}'::jsonb), COALESCE(publish_note, ''),
 	       COALESCE(admin_id, ''), created_at, updated_at
 	FROM interview_knowledge_batches
+`
+
+const interviewRetrievalLogSelectSQL = `
+	SELECT id, COALESCE(session_id, ''), round, COALESCE(query_text, ''),
+	       COALESCE(matched_atoms, '[]'::jsonb), fallback_used, COALESCE(error_message, ''), created_at
+	FROM interview_retrieval_logs
 `
 
 func NewPostgresStore(ctx context.Context, databaseURL string, hashPassword func(string) string) (*PostgresStore, error) {
@@ -824,6 +831,101 @@ func (s *PostgresStore) InterviewKnowledgeSummary() domain.InterviewKnowledgeSum
 		s.ListInterviewKnowledgeAtoms(domain.InterviewKnowledgeAtomFilter{}),
 		s.ListInterviewKnowledgeBatches(0),
 	)
+}
+
+func (s *PostgresStore) SaveInterviewRetrievalLog(log domain.InterviewRetrievalLog) domain.InterviewRetrievalLog {
+	log = prepareInterviewRetrievalLogForSave(log, time.Now())
+	matchedAtomsJSON, err := marshal(log.MatchedAtoms)
+	if err != nil {
+		return cloneInterviewRetrievalLog(log)
+	}
+	_, _ = s.pool.Exec(context.Background(), `
+		INSERT INTO interview_retrieval_logs
+		    (id, session_id, round, query_text, matched_atoms, fallback_used, error_message, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		ON CONFLICT (id) DO UPDATE SET
+		    session_id = EXCLUDED.session_id,
+		    round = EXCLUDED.round,
+		    query_text = EXCLUDED.query_text,
+		    matched_atoms = EXCLUDED.matched_atoms,
+		    fallback_used = EXCLUDED.fallback_used,
+		    error_message = EXCLUDED.error_message,
+		    created_at = EXCLUDED.created_at
+	`, log.ID, emptyToNil(log.SessionID), log.Round, emptyToNil(log.QueryText), matchedAtomsJSON,
+		log.FallbackUsed, emptyToNil(log.ErrorMessage), log.CreatedAt)
+	return cloneInterviewRetrievalLog(log)
+}
+
+func (s *PostgresStore) ListInterviewRetrievalLogs(filter domain.InterviewRetrievalLogFilter) []domain.InterviewRetrievalLog {
+	limit := normalizeRetrievalLogListLimit(filter.Limit)
+	fetchLimit := limit
+	if retrievalLogNeedsContextFilter(filter) {
+		fetchLimit = maxIntStore(limit*5, interviewRetrievalLogListMaxLimit)
+		if fetchLimit > interviewRetrievalAnalyticsMax {
+			fetchLimit = interviewRetrievalAnalyticsMax
+		}
+	}
+	items := s.listInterviewRetrievalLogsWindow(filter, fetchLimit)
+	if len(items) > limit {
+		return items[:limit]
+	}
+	return items
+}
+
+func (s *PostgresStore) InterviewRetrievalAnalytics(filter domain.InterviewRetrievalLogFilter) domain.InterviewRetrievalAnalytics {
+	limit := normalizeRetrievalAnalyticsLimit(filter.Limit)
+	logs := s.listInterviewRetrievalLogsWindow(filter, limit)
+	atoms := s.ListInterviewKnowledgeAtoms(domain.InterviewKnowledgeAtomFilter{})
+	return interviewRetrievalAnalytics(logs, atoms, filter, s.interviewRetrievalAtomByID, s.interviewRetrievalSessionSnapshotByID)
+}
+
+func (s *PostgresStore) listInterviewRetrievalLogsWindow(filter domain.InterviewRetrievalLogFilter, limit int) []domain.InterviewRetrievalLog {
+	limit = normalizeRetrievalLogLimit(limit, interviewRetrievalLogListDefaultLimit, interviewRetrievalAnalyticsMax)
+	query := interviewRetrievalLogSelectSQL
+	args := []interface{}{}
+	if filter.FallbackUsed != nil {
+		args = append(args, *filter.FallbackUsed)
+		query += ` WHERE fallback_used = $1`
+	}
+	args = append(args, limit)
+	query += fmt.Sprintf(` ORDER BY created_at DESC, id ASC LIMIT $%d`, len(args))
+	rows, err := s.pool.Query(context.Background(), query, args...)
+	if err != nil {
+		return []domain.InterviewRetrievalLog{}
+	}
+	rawItems := []domain.InterviewRetrievalLog{}
+	for rows.Next() {
+		item, err := scanInterviewRetrievalLogRows(rows)
+		if err == nil {
+			rawItems = append(rawItems, item)
+		}
+	}
+	rows.Close()
+
+	items := []domain.InterviewRetrievalLog{}
+	for _, item := range rawItems {
+		if !interviewRetrievalLogMatchesFilter(item, filter, s.interviewRetrievalAtomByID, s.interviewRetrievalSessionSnapshotByID) {
+			continue
+		}
+		items = append(items, cloneInterviewRetrievalLog(item))
+	}
+	return items
+}
+
+func (s *PostgresStore) interviewRetrievalAtomByID(atomID string) (domain.InterviewKnowledgeAtom, bool) {
+	atom, ok := s.GetInterviewKnowledgeAtom(atomID)
+	if !ok || atom == nil {
+		return domain.InterviewKnowledgeAtom{}, false
+	}
+	return *cloneInterviewKnowledgeAtom(atom), true
+}
+
+func (s *PostgresStore) interviewRetrievalSessionSnapshotByID(sessionID string) (domain.InterviewQuestionSnapshot, bool) {
+	session, ok := s.GetInterviewSession(sessionID)
+	if !ok || session == nil {
+		return domain.InterviewQuestionSnapshot{}, false
+	}
+	return cloneInterviewQuestionSnapshot(session.QuestionSnapshot), true
 }
 
 func (s *PostgresStore) AddCommunityPost(post domain.CommunityPost) domain.CommunityPost {
@@ -1776,6 +1878,21 @@ func scanInterviewKnowledgeBatchRows(rows pgx.Rows) (domain.InterviewKnowledgeBa
 		item.ValidationReport = map[string]interface{}{}
 	}
 	return *cloneInterviewKnowledgeBatch(&item), nil
+}
+
+func scanInterviewRetrievalLogRows(rows pgx.Rows) (domain.InterviewRetrievalLog, error) {
+	var item domain.InterviewRetrievalLog
+	var matchedAtomsJSON []byte
+	err := rows.Scan(&item.ID, &item.SessionID, &item.Round, &item.QueryText, &matchedAtomsJSON,
+		&item.FallbackUsed, &item.ErrorMessage, &item.CreatedAt)
+	if err != nil {
+		return item, err
+	}
+	_ = unmarshal(matchedAtomsJSON, &item.MatchedAtoms)
+	if item.MatchedAtoms == nil {
+		item.MatchedAtoms = []domain.InterviewKnowledgeAtomLightSnapshot{}
+	}
+	return cloneInterviewRetrievalLog(item), nil
 }
 
 func scanInterviewSession(row scanner) (*domain.InterviewSession, bool) {

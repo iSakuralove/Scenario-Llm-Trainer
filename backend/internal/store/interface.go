@@ -42,6 +42,9 @@ type Store interface {
 	SaveInterviewKnowledgeBatch(batch domain.InterviewKnowledgeBatch) domain.InterviewKnowledgeBatch
 	ListInterviewKnowledgeBatches(limit int) []domain.InterviewKnowledgeBatch
 	InterviewKnowledgeSummary() domain.InterviewKnowledgeSummary
+	SaveInterviewRetrievalLog(log domain.InterviewRetrievalLog) domain.InterviewRetrievalLog
+	ListInterviewRetrievalLogs(filter domain.InterviewRetrievalLogFilter) []domain.InterviewRetrievalLog
+	InterviewRetrievalAnalytics(filter domain.InterviewRetrievalLogFilter) domain.InterviewRetrievalAnalytics
 
 	AddCommunityPost(post domain.CommunityPost) domain.CommunityPost
 	GetCommunityPost(id string) (*domain.CommunityPost, bool)

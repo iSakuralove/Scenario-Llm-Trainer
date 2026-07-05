@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/store-schema-contracts.md","reason":"检索日志 Store、schema、migration 和隐私边界契约"}
+{"file":".trellis/spec/backend/admin-interview-bank-contracts.md","reason":"管理端题库健康诊断、检索预览和 admin-only 观测接口契约"}
+{"file":".trellis/spec/frontend/index.md","reason":"前端实现入口规范"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"本任务跨运行时、Store、API 和前端展示，需要检查层间数据契约"}

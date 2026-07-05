@@ -436,3 +436,43 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 14: 面试题库真实命中运营看板
+
+**Date**: 2026-07-05
+**Task**: 面试题库真实命中运营看板
+**Branch**: `main`
+
+### Summary
+
+实现真实追问检索日志闭环、管理员日志/分析接口和题库管理页运营面板；日志只保存脱敏截断 query 与轻量原子快照，写入失败不阻断面试流程。
+
+### Main Changes
+
+- 运行时追问检索命中和回退路径写入 `InterviewRetrievalLog`。
+- Store 增加检索日志保存、查询和运营聚合，MemoryStore/PostgresStore 同步实现。
+- 管理端新增 retrieval logs / analytics API，并在前端题库管理页展示命中率、回退率、热门命中、低命中、回退组合和最近日志。
+- 更新架构文档、feature 文档和 Store/schema contract。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| (see git log) | `18实现：面试题库真实命中运营看板` |
+
+### Testing
+
+- [OK] `go test ./internal/httpapi ./internal/store`
+- [OK] `go test ./...`
+- [OK] `npm --prefix frontend run lint`
+- [OK] `npm --prefix frontend run build`
+- [INFO] Chrome 真实页面验证未执行：当前未发现本项目前端/后端监听端口或本地项目标签页。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

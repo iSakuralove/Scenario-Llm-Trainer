@@ -20,6 +20,8 @@ import type {
   InterviewKnowledgeRetrievalPreviewRequest,
   InterviewKnowledgeRetrievalPreviewResponse,
   InterviewKnowledgeSummary,
+  InterviewRetrievalAnalyticsResponse,
+  InterviewRetrievalLog,
   InterviewDifficultyLevel,
   InterviewFocusArea,
   InterviewQuestion,
@@ -114,6 +116,14 @@ export interface StreamStage {
 }
 
 type InterviewSubmitResponse = { evaluation: InterviewSession['evaluations'][number]; session_status: string; session: InterviewSession }
+
+type InterviewRetrievalLogFilters = {
+  domain?: string
+  category?: string
+  difficulty?: string
+  fallback_used?: string
+  limit?: number
+}
 
 export interface InterviewLaunchpadSummary {
   open_track_count: number
@@ -961,6 +971,20 @@ export const api = {
     request<InterviewKnowledgeIndexRebuildResponse>(
       '/admin/interview-bank/index/rebuild',
       { method: 'POST', body: JSON.stringify(payload) },
+      token,
+    ),
+
+  adminInterviewBankRetrievalLogs: (token: string, filters: InterviewRetrievalLogFilters = {}) =>
+    request<{ list: InterviewRetrievalLog[]; total: number }>(
+      `/admin/interview-bank/retrieval-logs${queryString(filters)}`,
+      {},
+      token,
+    ),
+
+  adminInterviewBankRetrievalAnalytics: (token: string, filters: InterviewRetrievalLogFilters = {}) =>
+    request<InterviewRetrievalAnalyticsResponse>(
+      `/admin/interview-bank/retrieval-analytics${queryString(filters)}`,
+      {},
       token,
     ),
 

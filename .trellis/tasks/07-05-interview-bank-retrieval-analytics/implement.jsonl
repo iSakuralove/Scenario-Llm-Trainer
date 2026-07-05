@@ -1,0 +1,4 @@
+{"file":".trellis/tasks/07-05-interview-bank-retrieval-analytics/prd.md","reason":"需求、验收标准和不做范围"}
+{"file":".trellis/tasks/07-05-interview-bank-retrieval-analytics/design.md","reason":"运行时日志、Store 聚合、admin API 和前端面板设计"}
+{"file":".trellis/tasks/07-05-interview-bank-retrieval-analytics/implement.md","reason":"实施顺序、风险文件和验证计划"}
+{"file":".trellis/spec/backend/store-schema-contracts.md","reason":"Store/schema/migration 同步和检索日志隐私契约"}

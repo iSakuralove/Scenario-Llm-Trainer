@@ -209,6 +209,13 @@ CREATE TABLE IF NOT EXISTS interview_retrieval_logs (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE INDEX IF NOT EXISTS interview_retrieval_logs_created_idx
+    ON interview_retrieval_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS interview_retrieval_logs_fallback_created_idx
+    ON interview_retrieval_logs(fallback_used, created_at DESC);
+CREATE INDEX IF NOT EXISTS interview_retrieval_logs_session_round_idx
+    ON interview_retrieval_logs(session_id, round);
+
 CREATE TABLE IF NOT EXISTS community_posts (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id),

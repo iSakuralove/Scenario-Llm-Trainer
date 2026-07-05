@@ -674,6 +674,51 @@ export interface InterviewKnowledgeRetrievalPreviewResponse {
   diagnostics: InterviewKnowledgeRetrievalPreviewDiagnostics
 }
 
+export interface InterviewRetrievalLog {
+  id: string
+  session_id: string
+  round: number
+  query_text: string
+  matched_atoms: InterviewKnowledgeAtomLightSnapshot[]
+  fallback_used: boolean
+  error_message?: string
+  created_at: string
+}
+
+export interface InterviewRetrievalAtomHit {
+  atom_id: string
+  version: number
+  title: string
+  subject: string
+  domain: string
+  category: string
+  difficulty: string
+  question_role: string
+  hit_count: number
+  last_hit_at?: string
+}
+
+export interface InterviewRetrievalFallbackCombination {
+  domain: string
+  category: string
+  difficulty: string
+  count: number
+  recent_reason?: string
+  last_seen_at?: string
+}
+
+export interface InterviewRetrievalAnalyticsResponse {
+  total_logs: number
+  hit_logs: number
+  fallback_logs: number
+  hit_rate: number
+  fallback_rate: number
+  top_hit_atoms: InterviewRetrievalAtomHit[]
+  low_hit_atoms: InterviewRetrievalAtomHit[]
+  fallback_combinations: InterviewRetrievalFallbackCombination[]
+  recent_fallbacks: InterviewRetrievalLog[]
+}
+
 export interface InterviewKnowledgeAtomFilters {
   status?: string
   domain?: string

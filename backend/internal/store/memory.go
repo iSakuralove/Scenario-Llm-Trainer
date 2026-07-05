@@ -30,6 +30,7 @@ type MemoryStore struct {
 	InterviewKnowledgeAtoms        map[string]*domain.InterviewKnowledgeAtom
 	InterviewKnowledgeAtomVersions map[string][]domain.InterviewKnowledgeAtomVersion
 	InterviewKnowledgeBatches      map[string]*domain.InterviewKnowledgeBatch
+	InterviewRetrievalLogs         []domain.InterviewRetrievalLog
 	CommunityPosts                 map[string]*domain.CommunityPost
 	Assets                         map[string]*domain.Asset
 	AIJobs                         map[string]*domain.AIJob
@@ -52,6 +53,7 @@ func NewMemoryStore(hashPassword func(string) string) *MemoryStore {
 		InterviewKnowledgeAtoms:        map[string]*domain.InterviewKnowledgeAtom{},
 		InterviewKnowledgeAtomVersions: map[string][]domain.InterviewKnowledgeAtomVersion{},
 		InterviewKnowledgeBatches:      map[string]*domain.InterviewKnowledgeBatch{},
+		InterviewRetrievalLogs:         []domain.InterviewRetrievalLog{},
 		CommunityPosts:                 map[string]*domain.CommunityPost{},
 		Assets:                         map[string]*domain.Asset{},
 		AIJobs:                         map[string]*domain.AIJob{},
@@ -626,6 +628,75 @@ func (s *MemoryStore) InterviewKnowledgeSummary() domain.InterviewKnowledgeSumma
 	atoms := s.ListInterviewKnowledgeAtoms(domain.InterviewKnowledgeAtomFilter{})
 	batches := s.ListInterviewKnowledgeBatches(0)
 	return interviewKnowledgeSummary(atoms, batches)
+}
+
+func (s *MemoryStore) SaveInterviewRetrievalLog(log domain.InterviewRetrievalLog) domain.InterviewRetrievalLog {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	log = prepareInterviewRetrievalLogForSave(log, time.Now())
+	if s.InterviewRetrievalLogs == nil {
+		s.InterviewRetrievalLogs = []domain.InterviewRetrievalLog{}
+	}
+	s.InterviewRetrievalLogs = append(s.InterviewRetrievalLogs, cloneInterviewRetrievalLog(log))
+	return cloneInterviewRetrievalLog(log)
+}
+
+func (s *MemoryStore) ListInterviewRetrievalLogs(filter domain.InterviewRetrievalLogFilter) []domain.InterviewRetrievalLog {
+	limit := normalizeRetrievalLogListLimit(filter.Limit)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := s.filteredInterviewRetrievalLogsLocked(filter, limit)
+	return items
+}
+
+func (s *MemoryStore) InterviewRetrievalAnalytics(filter domain.InterviewRetrievalLogFilter) domain.InterviewRetrievalAnalytics {
+	limit := normalizeRetrievalAnalyticsLimit(filter.Limit)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	logs := s.filteredInterviewRetrievalLogsLocked(filter, limit)
+	atoms := make([]domain.InterviewKnowledgeAtom, 0, len(s.InterviewKnowledgeAtoms))
+	for _, atom := range s.InterviewKnowledgeAtoms {
+		if atom != nil {
+			atoms = append(atoms, *cloneInterviewKnowledgeAtom(atom))
+		}
+	}
+	return interviewRetrievalAnalytics(logs, atoms, filter, s.interviewRetrievalAtomByIDLocked, s.interviewRetrievalSessionSnapshotByIDLocked)
+}
+
+func (s *MemoryStore) filteredInterviewRetrievalLogsLocked(filter domain.InterviewRetrievalLogFilter, limit int) []domain.InterviewRetrievalLog {
+	items := make([]domain.InterviewRetrievalLog, 0, len(s.InterviewRetrievalLogs))
+	for _, log := range s.InterviewRetrievalLogs {
+		if !interviewRetrievalLogMatchesFilter(log, filter, s.interviewRetrievalAtomByIDLocked, s.interviewRetrievalSessionSnapshotByIDLocked) {
+			continue
+		}
+		items = append(items, cloneInterviewRetrievalLog(log))
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].CreatedAt.After(items[j].CreatedAt)
+	})
+	if limit > 0 && len(items) > limit {
+		return items[:limit]
+	}
+	return items
+}
+
+func (s *MemoryStore) interviewRetrievalAtomByIDLocked(atomID string) (domain.InterviewKnowledgeAtom, bool) {
+	atom, ok := s.InterviewKnowledgeAtoms[strings.TrimSpace(atomID)]
+	if !ok || atom == nil {
+		return domain.InterviewKnowledgeAtom{}, false
+	}
+	return *cloneInterviewKnowledgeAtom(atom), true
+}
+
+func (s *MemoryStore) interviewRetrievalSessionSnapshotByIDLocked(sessionID string) (domain.InterviewQuestionSnapshot, bool) {
+	session, ok := s.InterviewSessions[strings.TrimSpace(sessionID)]
+	if !ok || session == nil {
+		return domain.InterviewQuestionSnapshot{}, false
+	}
+	return cloneInterviewQuestionSnapshot(session.QuestionSnapshot), true
 }
 
 func (s *MemoryStore) AddCommunityPost(post domain.CommunityPost) domain.CommunityPost {

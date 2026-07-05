@@ -32,6 +32,10 @@ import type {
   InterviewKnowledgePublishResponse,
   InterviewKnowledgeRetrievalPreviewResponse,
   InterviewKnowledgeSummary,
+  InterviewRetrievalAnalyticsResponse,
+  InterviewRetrievalAtomHit,
+  InterviewRetrievalFallbackCombination,
+  InterviewRetrievalLog,
 } from '../../types'
 import './InterviewBankAdminPage.css'
 
@@ -122,22 +126,28 @@ export function InterviewBankAdminPage() {
     limit: 5,
   })
   const [retrievalPreview, setRetrievalPreview] = useState<InterviewKnowledgeRetrievalPreviewResponse | null>(null)
+  const [retrievalAnalytics, setRetrievalAnalytics] = useState<InterviewRetrievalAnalyticsResponse | null>(null)
+  const [retrievalLogs, setRetrievalLogs] = useState<InterviewRetrievalLog[]>([])
 
   const loadData = useCallback(async () => {
     setIsLoading(true)
     setError('')
     try {
-      const [nextSummary, nextHealth, atomData, batchData] = await Promise.all([
+      const [nextSummary, nextHealth, atomData, batchData, nextRetrievalAnalytics, nextRetrievalLogs] = await Promise.all([
         api.adminInterviewBankSummary(token),
         api.adminInterviewBankHealth(token),
         api.adminInterviewBankAtoms(token, filters),
         api.adminInterviewBankBatches(token, 20),
+        api.adminInterviewBankRetrievalAnalytics(token, { limit: 500 }),
+        api.adminInterviewBankRetrievalLogs(token, { limit: 20 }),
       ])
       setSummary(nextSummary)
       setHealth(nextHealth)
       setAtoms(atomData.list ?? [])
       setTotalAtoms(atomData.total ?? 0)
       setBatches(batchData.list ?? [])
+      setRetrievalAnalytics(nextRetrievalAnalytics)
+      setRetrievalLogs(nextRetrievalLogs.list ?? [])
       setSelectedAtomIds((current) => {
         const visibleIDs = new Set((atomData.list ?? []).map((atom) => atom.id))
         return new Set([...current].filter((id) => visibleIDs.has(id)))
@@ -192,6 +202,25 @@ export function InterviewBankAdminPage() {
       category: combo.category,
       difficulty: combo.difficulty,
     }))
+  }
+
+  function applyRetrievalCombination(combo: InterviewRetrievalFallbackCombination) {
+    setFilters({
+      status: '',
+      domain: combo.domain,
+      category: combo.category,
+      difficulty: combo.difficulty,
+      question_role: '',
+      vector_status: '',
+      page_size: 20,
+    })
+    setRetrievalPreviewForm((current) => ({
+      ...current,
+      domain: combo.domain,
+      category: combo.category,
+      difficulty: combo.difficulty,
+    }))
+    setMessage('已套用回退组合到题库筛选和检索预览')
   }
 
   function updateRetrievalPreviewForm<K extends keyof RetrievalPreviewForm>(key: K, value: RetrievalPreviewForm[K]) {
@@ -537,6 +566,12 @@ export function InterviewBankAdminPage() {
           onSubmit={() => void handleRetrievalPreview()}
           onOpenAtom={(atomID) => void handleOpenAtom(atomID)}
         />
+        <RetrievalOperationsPanel
+          analytics={retrievalAnalytics}
+          logs={retrievalLogs}
+          onOpenAtom={(atomID) => void handleOpenAtom(atomID)}
+          onApplyCombination={applyRetrievalCombination}
+        />
       </div>
 
       <div className="interview-bank-main-grid">
@@ -869,6 +904,190 @@ function RetrievalPreviewPanel({
         </div>
       ) : null}
     </section>
+  )
+}
+
+function RetrievalOperationsPanel({
+  analytics,
+  logs,
+  onOpenAtom,
+  onApplyCombination,
+}: {
+  analytics: InterviewRetrievalAnalyticsResponse | null
+  logs: InterviewRetrievalLog[]
+  onOpenAtom: (atomID: string) => void
+  onApplyCombination: (combo: InterviewRetrievalFallbackCombination) => void
+}) {
+  const hasAnalytics = Boolean(analytics && analytics.total_logs > 0)
+  const recentFallbacks = analytics?.recent_fallbacks ?? []
+
+  return (
+    <section className="panel interview-bank-retrieval-ops-panel">
+      <div className="interview-bank-list-title">
+        <div>
+          <div className="panel-title"><Search size={18} /> 真实检索运营</div>
+          <p className="interview-bank-panel-subtitle">仅展示脱敏截断后的追问检索日志，不包含用户身份、完整回答或简历原文。</p>
+        </div>
+        <span className="interview-bank-retrieval-window">最近 {analytics?.total_logs ?? 0} 次</span>
+      </div>
+
+      <div className="interview-bank-retrieval-metrics">
+        <Metric label="真实检索" value={analytics?.total_logs ?? 0} variant="compact" />
+        <Metric label="命中率" value={formatPercent(analytics?.hit_rate)} variant="compact" />
+        <Metric label="回退率" value={formatPercent(analytics?.fallback_rate)} variant="compact" />
+        <Metric label="回退次数" value={analytics?.fallback_logs ?? 0} variant="compact" />
+      </div>
+
+      {hasAnalytics ? (
+        <>
+          <div className="interview-bank-retrieval-columns">
+            <RetrievalAtomHitList
+              title="热门命中原子"
+              emptyTitle="暂无命中原子"
+              emptyText="真实追问命中后会在这里展示高频资源。"
+              atoms={analytics?.top_hit_atoms ?? []}
+              tone="hot"
+              onOpenAtom={onOpenAtom}
+            />
+            <RetrievalAtomHitList
+              title="低命中/未命中原子"
+              emptyTitle="暂无低命中资源"
+              emptyText="当前分析窗口内没有需要关注的低命中资源。"
+              atoms={analytics?.low_hit_atoms ?? []}
+              tone="cold"
+              onOpenAtom={onOpenAtom}
+            />
+            <div className="interview-bank-retrieval-column">
+              <div className="interview-bank-retrieval-column-title">回退组合排行</div>
+              {(analytics?.fallback_combinations ?? []).length > 0 ? (
+                <div className="interview-bank-retrieval-list">
+                  {(analytics?.fallback_combinations ?? []).map((combo) => (
+                    <div className="interview-bank-retrieval-row" key={`${combo.domain}|${combo.category}|${combo.difficulty}`}>
+                      <div>
+                        <strong>{retrievalCombinationLabel(combo)}</strong>
+                        <span>{combo.count} 次回退 · {formatOptionalDate(combo.last_seen_at)}</span>
+                        <small>{combo.recent_reason || '暂无最近原因'}</small>
+                      </div>
+                      <button className="ghost-button compact" type="button" onClick={() => onApplyCombination(combo)}>
+                        <Search size={15} />套用
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="interview-bank-empty-row">
+                  <strong>暂无回退组合</strong>
+                  <span>当前窗口内没有真实回退记录。</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="interview-bank-retrieval-columns lower">
+            <div className="interview-bank-retrieval-column">
+              <div className="interview-bank-retrieval-column-title">最近回退原因</div>
+              {recentFallbacks.length > 0 ? (
+                <div className="interview-bank-retrieval-list">
+                  {recentFallbacks.map((log) => (
+                    <RetrievalLogRow log={log} onOpenAtom={onOpenAtom} key={log.id} />
+                  ))}
+                </div>
+              ) : (
+                <div className="interview-bank-empty-row">
+                  <strong>暂无最近回退</strong>
+                  <span>真实追问检索回退后会记录原因。</span>
+                </div>
+              )}
+            </div>
+            <div className="interview-bank-retrieval-column span-2">
+              <div className="interview-bank-retrieval-column-title">最近真实检索日志</div>
+              {logs.length > 0 ? (
+                <div className="interview-bank-retrieval-log-list">
+                  {logs.map((log) => (
+                    <RetrievalLogRow log={log} onOpenAtom={onOpenAtom} key={log.id} />
+                  ))}
+                </div>
+              ) : (
+                <div className="interview-bank-empty-row">
+                  <strong>暂无真实检索日志</strong>
+                  <span>用户面试触发追问检索后会出现在这里。</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="interview-bank-empty-row">
+          <strong>暂无真实检索数据</strong>
+          <span>完成真实面试追问后会生成脱敏日志，再形成命中率、回退率和资源排行。</span>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function RetrievalAtomHitList({
+  title,
+  emptyTitle,
+  emptyText,
+  atoms,
+  tone,
+  onOpenAtom,
+}: {
+  title: string
+  emptyTitle: string
+  emptyText: string
+  atoms: InterviewRetrievalAtomHit[]
+  tone: 'hot' | 'cold'
+  onOpenAtom: (atomID: string) => void
+}) {
+  return (
+    <div className="interview-bank-retrieval-column">
+      <div className="interview-bank-retrieval-column-title">{title}</div>
+      {atoms.length > 0 ? (
+        <div className="interview-bank-retrieval-list">
+          {atoms.map((atom) => (
+            <div className={`interview-bank-retrieval-row tone-${tone}`} key={atom.atom_id}>
+              <div>
+                <strong>{atom.title || atom.atom_id}</strong>
+                <span>{atom.subject || '未填考察点'} · {compactCategoryLabel(atom.category)} · {atom.difficulty || '未填难度'}</span>
+                <small>{atom.hit_count} 次命中 · {questionRoleLabel(atom.question_role)} · {formatOptionalDate(atom.last_hit_at)}</small>
+              </div>
+              <button className="ghost-button compact" type="button" onClick={() => onOpenAtom(atom.atom_id)}>
+                <Eye size={15} />查看
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="interview-bank-empty-row">
+          <strong>{emptyTitle}</strong>
+          <span>{emptyText}</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function RetrievalLogRow({ log, onOpenAtom }: { log: InterviewRetrievalLog; onOpenAtom: (atomID: string) => void }) {
+  const matchedAtoms = Array.isArray(log.matched_atoms) ? log.matched_atoms : []
+  return (
+    <div className={`interview-bank-retrieval-log-row ${log.fallback_used ? 'is-fallback' : ''}`}>
+      <div>
+        <strong>{log.fallback_used ? '检索回退' : `命中 ${matchedAtoms.length} 个原子`} · 第 {log.round} 轮</strong>
+        <span>{formatOptionalDate(log.created_at)} · {truncateDisplayText(log.query_text || '无 query', 96)}</span>
+        <small>{log.error_message || (matchedAtoms.length > 0 ? matchedAtoms.map((atom) => atom.title || atom.atom_id).join(' / ') : '无错误信息')}</small>
+      </div>
+      {matchedAtoms.length > 0 ? (
+        <div className="interview-bank-retrieval-log-actions">
+          {matchedAtoms.slice(0, 3).map((atom) => (
+            <button className="ghost-button compact" type="button" onClick={() => onOpenAtom(atom.atom_id)} key={`${log.id}|${atom.atom_id}`}>
+              <Eye size={14} />{truncateDisplayText(atom.title || atom.atom_id, 18)}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
   )
 }
 
@@ -1256,6 +1475,14 @@ function categoryLabel(value: string) {
   return categoryOptions.find((option) => option.value === value)?.label ?? value
 }
 
+function compactCategoryLabel(value?: string) {
+  return value ? categoryLabel(value) : '未填分类'
+}
+
+function retrievalCombinationLabel(combo: InterviewRetrievalFallbackCombination) {
+  return `${combo.domain || '未填领域'} · ${compactCategoryLabel(combo.category)} · ${combo.difficulty || '未填难度'}`
+}
+
 function docTypeLabel(value: string) {
   switch (value) {
     case 'overview':
@@ -1274,6 +1501,16 @@ function docTypeLabel(value: string) {
 function previewScoreLabel(value: number) {
   if (!Number.isFinite(value)) return 'score -'
   return `score ${value.toFixed(3)}`
+}
+
+function formatPercent(value?: number) {
+  if (!Number.isFinite(value ?? Number.NaN)) return '0%'
+  return `${((value ?? 0) * 100).toFixed(1)}%`
+}
+
+function truncateDisplayText(value: string, maxLength: number) {
+  if (value.length <= maxLength) return value
+  return `${value.slice(0, Math.max(0, maxLength - 1))}…`
 }
 
 function actionLabel(value: string) {

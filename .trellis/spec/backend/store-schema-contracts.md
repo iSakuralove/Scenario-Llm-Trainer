@@ -67,6 +67,78 @@ saved, version, err := store.SaveInterviewKnowledgeAtomVersioned(atom, domain.In
 
 The shared Store method advances `current_version`, writes the current atom, writes a version snapshot, and keeps MemoryStore/PostgresStore behavior aligned.
 
+## Scenario: Interview Retrieval Log Operations
+
+### 1. Scope / Trigger
+
+- Trigger: 新增或修改真实面试追问检索日志、运营聚合、`interview_retrieval_logs` schema 或管理端日志查询。
+- Applies to: `backend/internal/domain/interview_bank.go`, `backend/internal/httpapi/interview_runtime.go`, `backend/internal/httpapi/handlers_interview_bank.go`, `backend/internal/store`, `backend/internal/store/schema.go`, `backend/migrations/001_schema.sql`, `frontend/src/features/interviewBank`。
+
+### 2. Signatures
+
+- Store write: `SaveInterviewRetrievalLog(log domain.InterviewRetrievalLog) domain.InterviewRetrievalLog`。
+- Store list: `ListInterviewRetrievalLogs(filter domain.InterviewRetrievalLogFilter) []domain.InterviewRetrievalLog`。
+- Store analytics: `InterviewRetrievalAnalytics(filter domain.InterviewRetrievalLogFilter) domain.InterviewRetrievalAnalytics`。
+- API: `GET /api/v1/admin/interview-bank/retrieval-logs`。
+- API: `GET /api/v1/admin/interview-bank/retrieval-analytics`。
+- DB table: `interview_retrieval_logs(id TEXT PRIMARY KEY, session_id TEXT, round INT, query_text TEXT, matched_atoms JSONB, fallback_used BOOLEAN, error_message TEXT, created_at TIMESTAMPTZ)`。
+
+### 3. Contracts
+
+- Runtime only writes logs for real interview follow-up retrieval; admin retrieval preview must not create logs.
+- Log writes are best-effort. Store or DB failure must not fail the user interview submission.
+- `query_text` must be sanitized and capped at 500 runes before persistence; Store layer should keep the same cap as a defensive boundary.
+- `error_message` is display-only and should be capped before persistence.
+- Logs must not contain user id, complete answer text, full resume, full project background, or atom body content.
+- `matched_atoms` contains only lightweight atom metadata: id/version/title/subject/domain/category.
+- MemoryStore and PostgresStore must implement save, list, analytics and clone behavior with the same filtering semantics.
+- List endpoints default to a small limit and cap the maximum limit; analytics must aggregate from a bounded window.
+- Schema changes must stay aligned across `SchemaSQL` and `backend/migrations/001_schema.sql`; indexes for recent logs, fallback logs, and session/round lookup belong in both places.
+
+### 4. Validation & Error Matrix
+
+- Missing/invalid auth for admin APIs -> existing admin unauthorized/forbidden response.
+- Invalid `limit` -> clamp to the documented default/max instead of scanning unbounded history.
+- Invalid `fallback_used` query value -> ignore as unset or reject consistently with the handler contract; do not silently invert the filter.
+- Empty `session_id` on runtime write -> still keep retrieval telemetry only if the caller has a real session context; do not invent user identity.
+- Empty matched atoms with no fallback -> counts as a non-hit log unless the retrieval result explicitly contains a matched atom.
+
+### 5. Good/Base/Bad Cases
+
+- Good: Runtime vector retrieval hits two atoms, writes one sanitized log with two lightweight snapshots, and analytics counts one hit.
+- Good: Runtime retrieval falls back because embedding is unavailable, writes `fallback_used=true`, and analytics counts one fallback plus the inferred combination.
+- Base: Admin preview calls retrieval-preview repeatedly and analytics does not change.
+- Bad: Storing the full candidate answer or resume text in `query_text` creates a privacy leak.
+- Bad: Postgres analytics scans the entire table without a limit, causing admin page refreshes to become a DB hot path.
+
+### 6. Tests Required
+
+- Runtime: hit and fallback retrieval write logs without changing the main submission response.
+- Store unit: MemoryStore and PostgresStore save/list/filter/analytics behavior, clone safety, query truncation, and aggregation counts.
+- HTTP API: admin-only logs and analytics, filter parsing, limit cap, and response shape.
+- Schema text: runtime schema and Docker init migration both contain the retrieval log indexes.
+- Frontend: `npm --prefix frontend run lint` and `npm --prefix frontend run build`.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```go
+log.QueryText = candidateAnswer + "\n" + resumeText
+store.SaveInterviewRetrievalLog(log)
+```
+
+This persists sensitive user content and turns an operations log into a privacy risk.
+
+#### Correct
+
+```go
+log.QueryText = truncateStringRunes(ai.Sanitize(query), 500)
+_ = store.SaveInterviewRetrievalLog(log)
+```
+
+The runtime stores only a bounded, sanitized retrieval query and treats logging as non-blocking telemetry.
+
 ## Scenario: Interview Bank Admin Import MVP
 
 ### 1. Scope / Trigger

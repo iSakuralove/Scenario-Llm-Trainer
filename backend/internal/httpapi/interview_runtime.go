@@ -8,6 +8,7 @@ import (
 	"time"
 
 	agentruntime "situational-teaching/backend/internal/agent"
+	"situational-teaching/backend/internal/ai"
 	"situational-teaching/backend/internal/domain"
 	"situational-teaching/backend/internal/store"
 )
@@ -316,13 +317,17 @@ func (s *Server) retrieveInterviewFollowUpContext(ctx context.Context, req agent
 			SummaryText:     "本轮未触发追问，保留当前考察点摘要。",
 		}, nil
 	}
+	queryText := buildInterviewRetrievalQuery(req)
 	vectorStore := interviewKnowledgeVectorStore(s.store)
 	if vectorStore == nil {
-		return interviewRetrievalFallback(baseSubject, "题库检索不可用，继续使用规则追问。"), nil
+		result := interviewRetrievalFallback(baseSubject, "题库检索不可用，继续使用规则追问。")
+		s.recordInterviewRetrievalLog(req, queryText, result)
+		return result, nil
 	}
-	queryText := buildInterviewRetrievalQuery(req)
 	if strings.TrimSpace(queryText) == "" {
-		return interviewRetrievalFallback(baseSubject, "追问检索上下文为空，继续使用规则追问。"), nil
+		result := interviewRetrievalFallback(baseSubject, "追问检索上下文为空，继续使用规则追问。")
+		s.recordInterviewRetrievalLog(req, queryText, result)
+		return result, nil
 	}
 	vector := s.embeddingVectorForInterviewRetrieval(ctx, queryText)
 	results, err := vectorStore.SearchInterviewKnowledge(ctx, store.InterviewKnowledgeVectorSearchQuery{
@@ -334,15 +339,21 @@ func (s *Server) retrieveInterviewFollowUpContext(ctx context.Context, req agent
 		Limit:         6,
 	})
 	if err != nil {
-		return interviewRetrievalFallback(baseSubject, "题库检索失败，继续使用规则追问。"), nil
+		result := interviewRetrievalFallback(baseSubject, "题库检索失败，继续使用规则追问。")
+		s.recordInterviewRetrievalLog(req, queryText, result)
+		return result, nil
 	}
 	matches, subjects := s.filteredInterviewRetrievalMatches(results)
 	if len(matches) == 0 {
-		return interviewRetrievalFallback(baseSubject, "未命中可用题库追问原子，继续使用规则追问。"), nil
+		result := interviewRetrievalFallback(baseSubject, "未命中可用题库追问原子，继续使用规则追问。")
+		s.recordInterviewRetrievalLog(req, queryText, result)
+		return result, nil
 	}
 	top, ok := s.store.GetInterviewKnowledgeAtom(matches[0].AtomID)
 	if !ok {
-		return interviewRetrievalFallback(baseSubject, "命中原子已不可用，继续使用规则追问。"), nil
+		result := interviewRetrievalFallback(baseSubject, "命中原子已不可用，继续使用规则追问。")
+		s.recordInterviewRetrievalLog(req, queryText, result)
+		return result, nil
 	}
 	followUpQuestion := firstFollowUpPath(*top)
 	if followUpQuestion == "" {
@@ -350,7 +361,7 @@ func (s *Server) retrieveInterviewFollowUpContext(ctx context.Context, req agent
 	}
 	followUpType := firstNonEmpty(req.Evaluation.FollowUpType, "deepen")
 	subject := firstNonEmpty(top.Subject, baseSubject)
-	return agentruntime.InterviewRetrievalResult{
+	result := agentruntime.InterviewRetrievalResult{
 		FollowUpQuestion:  followUpQuestion,
 		FollowUpType:      followUpType,
 		FollowUpSubject:   subject,
@@ -358,7 +369,9 @@ func (s *Server) retrieveInterviewFollowUpContext(ctx context.Context, req agent
 		RetrievedSubjects: subjects,
 		MatchedAtoms:      matches,
 		SummaryText:       fmt.Sprintf("命中 %d 个题库考察点，优先围绕“%s”追问。", len(matches), subject),
-	}, nil
+	}
+	s.recordInterviewRetrievalLog(req, queryText, result)
+	return result, nil
 }
 
 func (s *Server) embeddingVectorForInterviewRetrieval(ctx context.Context, queryText string) []float64 {
@@ -411,16 +424,54 @@ func interviewRetrievalFallback(subject, summary string) agentruntime.InterviewR
 	}
 }
 
+func (s *Server) recordInterviewRetrievalLog(req agentruntime.InterviewRetrievalRequest, queryText string, result agentruntime.InterviewRetrievalResult) {
+	if req.Session == nil {
+		return
+	}
+	round := req.Evaluation.Round
+	if round <= 0 {
+		round = req.Session.CurrentRound
+	}
+	errorMessage := ""
+	if result.FallbackUsed {
+		errorMessage = ai.Sanitize(result.SummaryText)
+	}
+	s.store.SaveInterviewRetrievalLog(domain.InterviewRetrievalLog{
+		SessionID:    req.Session.ID,
+		Round:        round,
+		QueryText:    truncateText(ai.Sanitize(queryText), 500),
+		MatchedAtoms: result.MatchedAtoms,
+		FallbackUsed: result.FallbackUsed,
+		ErrorMessage: truncateText(errorMessage, 300),
+	})
+}
+
 func buildInterviewRetrievalQuery(req agentruntime.InterviewRetrievalRequest) string {
+	setupNotes := ""
+	focusAreas := []string{}
+	difficultyLevel := ""
+	snapshot := domain.InterviewQuestionSnapshot{}
+	if req.Session != nil {
+		setupNotes = req.Session.SetupNotes
+		focusAreas = req.Session.FocusAreas
+		difficultyLevel = req.Session.DifficultyLevel
+		snapshot = req.Session.QuestionSnapshot
+	}
+	questionTitle := ""
+	questionDescription := ""
+	if req.Question != nil {
+		questionTitle = req.Question.Title
+		questionDescription = req.Question.Description
+	}
 	parts := []string{
 		req.Answer,
-		req.Session.SetupNotes,
-		interviewFocusAreaLabelsText(req.Session.FocusAreas),
-		req.Session.DifficultyLevel,
-		req.Session.QuestionSnapshot.Subject,
-		req.Session.QuestionSnapshot.Title,
-		req.Question.Title,
-		req.Question.Description,
+		setupNotes,
+		interviewFocusAreaLabelsText(focusAreas),
+		difficultyLevel,
+		snapshot.Subject,
+		snapshot.Title,
+		questionTitle,
+		questionDescription,
 		lowScoreDimensionsText(req.Evaluation),
 	}
 	return strings.Join(nonEmptyTexts(parts...), "\n")
