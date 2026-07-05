@@ -161,6 +161,12 @@
 
 ## Testing Decisions
 
+- 本任务后续实现必须走 TDD 的 red-green-refactor 循环，不允许“先写完全部实现，再补一批测试”的横切式做法。
+- 每个实现 issue 都应按 tracer bullet 垂直切片推进：先写一个通过公开接口验证单一行为的失败测试，再写最小实现让它通过，然后继续下一个行为。
+- 测试必须验证外部可观察行为，而不是私有函数、内部调用顺序或数据库细节。
+- 首个 tracer bullet 已确认从“管理员手工创建一个题库运营动作，并能通过 admin API 列表读回”开始，因为它能同时验证权限、Store、schema、API 和最小领域模型。
+- 候选生成相关逻辑可以作为 deep module 测试，但测试入口仍应表达业务行为，例如“高回退组合生成 fill_gap 候选”，不要测试内部排序 helper 或中间 map 结构。
+- UI 相关实现也应先锁定用户可见行为：空状态、候选预览、保存结果、动作详情、状态切换错误提示，而不是快照测试整页 DOM。
 - Tests should focus on externally visible behavior and state transitions, not implementation details such as private helper ordering.
 - Candidate generator tests should be pure unit tests:
   - high fallback combination creates a fill-gap candidate

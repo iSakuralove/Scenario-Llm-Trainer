@@ -1,4 +1,6 @@
 {"file":".trellis/tasks/07-05-interview-bank-ops-action-prd/prd.md","reason":"详细 PRD、用户故事、实现决策、测试决策和不做范围"}
+{"file":".trellis/tasks/07-05-interview-bank-ops-action-prd/design.md","reason":"运营动作架构边界、数据模型、API 契约和首个 TDD tracer bullet"}
+{"file":".trellis/tasks/07-05-interview-bank-ops-action-prd/implement.md","reason":"按 red-green-refactor 拆解的实施顺序和验证计划"}
 {"file":".trellis/spec/backend/store-schema-contracts.md","reason":"后续实现若新增 Store/schema，需要保持 MemoryStore/PostgresStore 和 migration 同步"}
 {"file":".trellis/spec/backend/admin-interview-bank-contracts.md","reason":"后续实现会扩展管理端题库治理接口和前端管理页"}
 {"file":".trellis/spec/frontend/index.md","reason":"后续前端实现入口规范"}

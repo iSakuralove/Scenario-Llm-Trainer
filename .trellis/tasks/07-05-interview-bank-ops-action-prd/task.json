@@ -3,7 +3,7 @@
   "name": "interview-bank-ops-action-prd",
   "title": "面试题库运营动作闭环 PRD",
   "description": "基于真实检索运营看板和已记录决策，定义下一阶段把运营数据转化为可执行题库建设动作的详细 PRD。",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
