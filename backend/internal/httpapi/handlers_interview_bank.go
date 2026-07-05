@@ -382,6 +382,19 @@ func (s *Server) handleAdminInterviewBank(w http.ResponseWriter, r *http.Request
 		writeOK(w, map[string]interface{}{"list": items, "total": len(items), "filters": filter})
 		return
 	}
+	if len(parts) == 2 && parts[0] == "ops-actions" && parts[1] == "candidates" && r.Method == http.MethodPost {
+		var req domain.InterviewBankOpsActionCandidateRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		response, err := s.generateInterviewBankOpsActionCandidates(req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeOK(w, response)
+		return
+	}
 	if len(parts) == 1 && parts[0] == "ops-actions" && r.Method == http.MethodPost {
 		var req interviewBankOpsActionCreateRequest
 		if !decode(w, r, &req) {
@@ -551,6 +564,216 @@ func parseInterviewBankOpsActionFilter(r *http.Request) domain.InterviewBankOpsA
 		AtomID:     r.URL.Query().Get("atom_id"),
 		Limit:      limit,
 	}
+}
+
+func (s *Server) generateInterviewBankOpsActionCandidates(req domain.InterviewBankOpsActionCandidateRequest) (domain.InterviewBankOpsActionCandidateResponse, error) {
+	policy, err := normalizeInterviewBankOpsActionCandidatePolicy(req)
+	if err != nil {
+		return domain.InterviewBankOpsActionCandidateResponse{}, err
+	}
+	response := domain.InterviewBankOpsActionCandidateResponse{
+		List:   []domain.InterviewBankOpsActionCandidate{},
+		Policy: policy,
+	}
+	seen := map[string]bool{}
+	active := s.activeInterviewBankOpsActionKeys()
+	add := func(candidate domain.InterviewBankOpsActionCandidate) {
+		candidate.DedupeKey = strings.TrimSpace(candidate.DedupeKey)
+		if candidate.DedupeKey == "" || seen[candidate.DedupeKey] {
+			return
+		}
+		seen[candidate.DedupeKey] = true
+		if active[candidate.DedupeKey] {
+			response.SkippedExisting++
+			return
+		}
+		if candidate.CandidateKey == "" {
+			candidate.CandidateKey = candidate.Source + "|" + candidate.DedupeKey
+		}
+		if candidate.Evidence == nil {
+			candidate.Evidence = map[string]interface{}{}
+		}
+		response.List = append(response.List, candidate)
+	}
+	for _, source := range policy.Sources {
+		switch source {
+		case domain.InterviewBankOpsActionSourceHealthDiagnostic:
+			for _, combo := range s.interviewKnowledgeHealth().Combinations {
+				if !interviewKnowledgeHealthCombinationMatchesCandidateRequest(combo, req) {
+					continue
+				}
+				actionType := ""
+				priority := ""
+				title := ""
+				switch combo.Status {
+				case "blocked":
+					actionType = domain.InterviewBankOpsActionTypeFillGap
+					priority = "P0"
+					title = fmt.Sprintf("补齐 %s/%s/%s 题库资源", combo.Domain, combo.Category, combo.Difficulty)
+				case "warning":
+					actionType = domain.InterviewBankOpsActionTypeRebuildIndex
+					priority = "P2"
+					if combo.FailedCount > 0 {
+						priority = "P1"
+					}
+					title = fmt.Sprintf("重建 %s/%s/%s 组合题库索引", combo.Domain, combo.Category, combo.Difficulty)
+				default:
+					continue
+				}
+				action := domain.InterviewBankOpsAction{
+					ActionType: actionType,
+					Domain:     combo.Domain,
+					Category:   combo.Category,
+					Difficulty: combo.Difficulty,
+				}
+				add(domain.InterviewBankOpsActionCandidate{
+					ActionType: actionType,
+					Priority:   priority,
+					Source:     domain.InterviewBankOpsActionSourceHealthDiagnostic,
+					DedupeKey:  domain.InterviewBankOpsActionDedupeKey(action),
+					Title:      title,
+					Reason:     strings.Join(combo.Reasons, "；"),
+					Domain:     combo.Domain,
+					Category:   combo.Category,
+					Difficulty: combo.Difficulty,
+					Evidence: map[string]interface{}{
+						"status":                 combo.Status,
+						"reasons":                append([]string{}, combo.Reasons...),
+						"actions":                append([]string{}, combo.Actions...),
+						"opening_count":          combo.OpeningCount,
+						"followup_count":         combo.FollowupCount,
+						"indexed_followup_count": combo.IndexedFollowupCount,
+						"published_count":        combo.PublishedCount,
+					},
+				})
+			}
+		case domain.InterviewBankOpsActionSourceIndexStatus:
+			for _, atom := range s.store.ListInterviewKnowledgeAtoms(domain.InterviewKnowledgeAtomFilter{}) {
+				if !interviewKnowledgeAtomMatchesCandidateRequest(atom, req) {
+					continue
+				}
+				if strings.TrimSpace(atom.Status) != "published" {
+					continue
+				}
+				vectorStatus := strings.TrimSpace(atom.VectorStatus)
+				priority := ""
+				switch vectorStatus {
+				case "failed":
+					priority = "P1"
+				case "pending":
+					priority = "P2"
+				default:
+					continue
+				}
+				action := domain.InterviewBankOpsAction{
+					ActionType: domain.InterviewBankOpsActionTypeRebuildIndex,
+					AtomID:     strings.TrimSpace(atom.ID),
+				}
+				add(domain.InterviewBankOpsActionCandidate{
+					ActionType: domain.InterviewBankOpsActionTypeRebuildIndex,
+					Priority:   priority,
+					Source:     domain.InterviewBankOpsActionSourceIndexStatus,
+					DedupeKey:  domain.InterviewBankOpsActionDedupeKey(action),
+					Title:      "重建题库索引：" + strings.TrimSpace(atom.Title),
+					Reason:     fmt.Sprintf("已发布题目索引状态为 %s，可能影响后续追问检索。", vectorStatus),
+					Domain:     strings.TrimSpace(atom.Domain),
+					Category:   strings.TrimSpace(atom.Category),
+					Difficulty: strings.ToUpper(strings.TrimSpace(atom.Difficulty)),
+					AtomID:     strings.TrimSpace(atom.ID),
+					Evidence: map[string]interface{}{
+						"atom_id":         strings.TrimSpace(atom.ID),
+						"title":           strings.TrimSpace(atom.Title),
+						"subject":         strings.TrimSpace(atom.Subject),
+						"domain":          strings.TrimSpace(atom.Domain),
+						"category":        strings.TrimSpace(atom.Category),
+						"difficulty":      strings.ToUpper(strings.TrimSpace(atom.Difficulty)),
+						"question_role":   strings.TrimSpace(atom.QuestionRole),
+						"vector_status":   vectorStatus,
+						"current_version": atom.CurrentVersion,
+					},
+				})
+			}
+		}
+	}
+	if len(response.List) > policy.Limit {
+		response.List = response.List[:policy.Limit]
+	}
+	response.Total = len(response.List)
+	return response, nil
+}
+
+func normalizeInterviewBankOpsActionCandidatePolicy(req domain.InterviewBankOpsActionCandidateRequest) (domain.InterviewBankOpsActionCandidatePolicy, error) {
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	sources := []string{}
+	if len(req.Sources) == 0 {
+		sources = []string{domain.InterviewBankOpsActionSourceHealthDiagnostic, domain.InterviewBankOpsActionSourceIndexStatus}
+	} else {
+		seen := map[string]bool{}
+		for _, source := range req.Sources {
+			source = strings.TrimSpace(source)
+			if source == "" || seen[source] {
+				continue
+			}
+			if source != domain.InterviewBankOpsActionSourceHealthDiagnostic && source != domain.InterviewBankOpsActionSourceIndexStatus {
+				return domain.InterviewBankOpsActionCandidatePolicy{}, fmt.Errorf("source is invalid")
+			}
+			seen[source] = true
+			sources = append(sources, source)
+		}
+	}
+	if len(sources) == 0 {
+		return domain.InterviewBankOpsActionCandidatePolicy{}, fmt.Errorf("source is required")
+	}
+	return domain.InterviewBankOpsActionCandidatePolicy{Sources: sources, Limit: limit}, nil
+}
+
+func (s *Server) activeInterviewBankOpsActionKeys() map[string]bool {
+	active := map[string]bool{}
+	for _, status := range []string{
+		domain.InterviewBankOpsActionStatusOpen,
+		domain.InterviewBankOpsActionStatusInProgress,
+		domain.InterviewBankOpsActionStatusWatching,
+		domain.InterviewBankOpsActionStatusReopened,
+	} {
+		for _, action := range s.store.ListInterviewBankOpsActions(domain.InterviewBankOpsActionFilter{Status: status, Limit: 200}) {
+			if strings.TrimSpace(action.DedupeKey) != "" {
+				active[action.DedupeKey] = true
+			}
+		}
+	}
+	return active
+}
+
+func interviewKnowledgeHealthCombinationMatchesCandidateRequest(combo interviewKnowledgeHealthCombination, req domain.InterviewBankOpsActionCandidateRequest) bool {
+	if req.Domain != "" && !strings.EqualFold(combo.Domain, strings.TrimSpace(req.Domain)) {
+		return false
+	}
+	if req.Category != "" && !strings.EqualFold(combo.Category, strings.TrimSpace(req.Category)) {
+		return false
+	}
+	if req.Difficulty != "" && !strings.EqualFold(combo.Difficulty, strings.ToUpper(strings.TrimSpace(req.Difficulty))) {
+		return false
+	}
+	return true
+}
+
+func interviewKnowledgeAtomMatchesCandidateRequest(atom domain.InterviewKnowledgeAtom, req domain.InterviewBankOpsActionCandidateRequest) bool {
+	if req.Domain != "" && !strings.EqualFold(strings.TrimSpace(atom.Domain), strings.TrimSpace(req.Domain)) {
+		return false
+	}
+	if req.Category != "" && !strings.EqualFold(strings.TrimSpace(atom.Category), strings.TrimSpace(req.Category)) {
+		return false
+	}
+	if req.Difficulty != "" && !strings.EqualFold(strings.TrimSpace(atom.Difficulty), strings.ToUpper(strings.TrimSpace(req.Difficulty))) {
+		return false
+	}
+	return true
 }
 
 func (s *Server) updateInterviewKnowledgeAtom(atomID string, req interviewKnowledgeAtomUpdateRequest, user *domain.User) (domain.InterviewKnowledgeAtom, domain.InterviewKnowledgeAtomVersion, error) {

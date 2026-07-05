@@ -255,7 +255,7 @@ func prepareInterviewBankOpsActionForCreate(action domain.InterviewBankOpsAction
 	}
 	action.UpdatedAt = now
 	if action.DedupeKey == "" {
-		action.DedupeKey = interviewBankOpsActionDedupeKey(action)
+		action.DedupeKey = domain.InterviewBankOpsActionDedupeKey(action)
 	}
 	if err := validateInterviewBankOpsAction(action); err != nil {
 		return domain.InterviewBankOpsAction{}, err
@@ -289,19 +289,6 @@ func validateInterviewBankOpsAction(action domain.InterviewBankOpsAction) error 
 		return errors.New("dedupe_key is required")
 	}
 	return nil
-}
-
-func interviewBankOpsActionDedupeKey(action domain.InterviewBankOpsAction) string {
-	if action.AtomID != "" && action.Domain != "" && action.Category != "" && action.Difficulty != "" {
-		return strings.Join([]string{action.ActionType, "atom", action.AtomID, action.Domain, action.Category, action.Difficulty}, "|")
-	}
-	if action.AtomID != "" {
-		return strings.Join([]string{action.ActionType, "atom", action.AtomID}, "|")
-	}
-	if action.Domain != "" && action.Category != "" && action.Difficulty != "" {
-		return strings.Join([]string{action.ActionType, "combo", action.Domain, action.Category, action.Difficulty}, "|")
-	}
-	return strings.Join([]string{action.ActionType, "manual", action.ID}, "|")
 }
 
 func cloneInterviewBankOpsAction(action *domain.InterviewBankOpsAction) *domain.InterviewBankOpsAction {

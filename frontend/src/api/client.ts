@@ -7,6 +7,8 @@ import type {
   Asset,
   CommunityPost,
   InterviewBankOpsAction,
+  InterviewBankOpsActionCandidateRequest,
+  InterviewBankOpsActionCandidateResponse,
   InterviewBankOpsActionCreateRequest,
   InterviewBankOpsActionFilters,
   InterviewKnowledgeAtom,
@@ -929,6 +931,13 @@ export const api = {
   createInterviewBankOpsAction: (token: string, payload: InterviewBankOpsActionCreateRequest) =>
     request<{ action: InterviewBankOpsAction }>(
       '/admin/interview-bank/ops-actions',
+      { method: 'POST', body: JSON.stringify(payload) },
+      token,
+    ),
+
+  generateInterviewBankOpsActionCandidates: (token: string, payload: InterviewBankOpsActionCandidateRequest = {}) =>
+    request<InterviewBankOpsActionCandidateResponse>(
+      '/admin/interview-bank/ops-actions/candidates',
       { method: 'POST', body: JSON.stringify(payload) },
       token,
     ),

@@ -763,6 +763,39 @@ export interface InterviewBankOpsActionFilters {
   limit?: number
 }
 
+export interface InterviewBankOpsActionCandidate {
+  candidate_key: string
+  action_type: string
+  priority: string
+  source: string
+  dedupe_key: string
+  title: string
+  reason: string
+  domain?: string
+  category?: string
+  difficulty?: string
+  atom_id?: string
+  evidence: Record<string, unknown>
+}
+
+export interface InterviewBankOpsActionCandidateRequest {
+  sources?: Array<'health_diagnostic' | 'index_status'>
+  domain?: string
+  category?: string
+  difficulty?: string
+  limit?: number
+}
+
+export interface InterviewBankOpsActionCandidateResponse {
+  list: InterviewBankOpsActionCandidate[]
+  total: number
+  skipped_existing: number
+  policy: {
+    sources: string[]
+    limit: number
+  }
+}
+
 export interface InterviewKnowledgeAtomFilters {
   status?: string
   domain?: string

@@ -210,6 +210,54 @@ type InterviewBankOpsActionFilter struct {
 	Limit      int
 }
 
+type InterviewBankOpsActionCandidate struct {
+	CandidateKey string                 `json:"candidate_key"`
+	ActionType   string                 `json:"action_type"`
+	Priority     string                 `json:"priority"`
+	Source       string                 `json:"source"`
+	DedupeKey    string                 `json:"dedupe_key"`
+	Title        string                 `json:"title"`
+	Reason       string                 `json:"reason"`
+	Domain       string                 `json:"domain,omitempty"`
+	Category     string                 `json:"category,omitempty"`
+	Difficulty   string                 `json:"difficulty,omitempty"`
+	AtomID       string                 `json:"atom_id,omitempty"`
+	Evidence     map[string]interface{} `json:"evidence"`
+}
+
+type InterviewBankOpsActionCandidateRequest struct {
+	Sources    []string `json:"sources"`
+	Domain     string   `json:"domain"`
+	Category   string   `json:"category"`
+	Difficulty string   `json:"difficulty"`
+	Limit      int      `json:"limit"`
+}
+
+type InterviewBankOpsActionCandidatePolicy struct {
+	Sources []string `json:"sources"`
+	Limit   int      `json:"limit"`
+}
+
+type InterviewBankOpsActionCandidateResponse struct {
+	List            []InterviewBankOpsActionCandidate     `json:"list"`
+	Total           int                                   `json:"total"`
+	SkippedExisting int                                   `json:"skipped_existing"`
+	Policy          InterviewBankOpsActionCandidatePolicy `json:"policy"`
+}
+
+func InterviewBankOpsActionDedupeKey(action InterviewBankOpsAction) string {
+	if action.AtomID != "" && action.Domain != "" && action.Category != "" && action.Difficulty != "" {
+		return action.ActionType + "|atom|" + action.AtomID + "|" + action.Domain + "|" + action.Category + "|" + action.Difficulty
+	}
+	if action.AtomID != "" {
+		return action.ActionType + "|atom|" + action.AtomID
+	}
+	if action.Domain != "" && action.Category != "" && action.Difficulty != "" {
+		return action.ActionType + "|combo|" + action.Domain + "|" + action.Category + "|" + action.Difficulty
+	}
+	return action.ActionType + "|manual|" + action.ID
+}
+
 type InterviewKnowledgeAtomLightSnapshot struct {
 	AtomID   string `json:"atom_id"`
 	Version  int    `json:"version"`

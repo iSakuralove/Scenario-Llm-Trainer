@@ -192,6 +192,309 @@ func TestAdminInterviewBankOpsActionsValidateCreateRequest(t *testing.T) {
 	}
 }
 
+func TestAdminInterviewBankOpsActionCandidatesFromHealthDiagnostic(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	blocked := validInterviewBankAtomForRebuild("atom-candidate-blocked-opening", "published", "indexed")
+	blocked.Category = "database"
+	blocked.Difficulty = "L2"
+	blocked.QuestionRole = "opening"
+	if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(blocked, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "候选生成样例"); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates", adminToken, map[string]interface{}{
+		"sources":    []string{"health_diagnostic"},
+		"domain":     "backend",
+		"category":   "database",
+		"difficulty": "L2",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("candidate generation status=%d message=%s", status, env.Message)
+	}
+	var response struct {
+		List []struct {
+			CandidateKey string                 `json:"candidate_key"`
+			ActionType   string                 `json:"action_type"`
+			Priority     string                 `json:"priority"`
+			Source       string                 `json:"source"`
+			DedupeKey    string                 `json:"dedupe_key"`
+			Title        string                 `json:"title"`
+			Reason       string                 `json:"reason"`
+			Domain       string                 `json:"domain"`
+			Category     string                 `json:"category"`
+			Difficulty   string                 `json:"difficulty"`
+			Evidence     map[string]interface{} `json:"evidence"`
+		} `json:"list"`
+		Total           int `json:"total"`
+		SkippedExisting int `json:"skipped_existing"`
+	}
+	mustDecodeData(t, env, &response)
+	if response.Total != 1 || len(response.List) != 1 {
+		t.Fatalf("expected one candidate, got %+v", response)
+	}
+	candidate := response.List[0]
+	if candidate.ActionType != domain.InterviewBankOpsActionTypeFillGap || candidate.Priority != "P0" || candidate.Source != domain.InterviewBankOpsActionSourceHealthDiagnostic {
+		t.Fatalf("unexpected candidate classification: %+v", candidate)
+	}
+	if candidate.Domain != "backend" || candidate.Category != "database" || candidate.Difficulty != "L2" {
+		t.Fatalf("unexpected candidate target: %+v", candidate)
+	}
+	if candidate.DedupeKey != "fill_gap|combo|backend|database|L2" || candidate.CandidateKey == "" {
+		t.Fatalf("unexpected candidate keys: %+v", candidate)
+	}
+	if !strings.Contains(candidate.Reason, "追问题不足") || candidate.Title == "" {
+		t.Fatalf("expected health reason/title, got %+v", candidate)
+	}
+	if candidate.Evidence["status"] != "blocked" {
+		t.Fatalf("expected compact health evidence, got %+v", candidate.Evidence)
+	}
+
+	status, env = requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/ops-actions?status=open", adminToken, nil)
+	if status != http.StatusOK {
+		t.Fatalf("list ops actions after candidates status=%d message=%s", status, env.Message)
+	}
+	var listed struct {
+		Total int `json:"total"`
+	}
+	mustDecodeData(t, env, &listed)
+	if listed.Total != 0 {
+		t.Fatalf("candidate generation must not persist actions, got %+v", listed)
+	}
+}
+
+func TestAdminInterviewBankOpsActionCandidatesFromHealthWarning(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	opening := validInterviewBankAtomForRebuild("atom-candidate-warning-opening", "published", "indexed")
+	opening.QuestionRole = "opening"
+	indexedFollowup := validInterviewBankAtomForRebuild("atom-candidate-warning-indexed", "published", "indexed")
+	indexedFollowup.QuestionRole = "followup"
+	failedFollowup := validInterviewBankAtomForRebuild("atom-candidate-warning-failed", "published", "failed")
+	failedFollowup.QuestionRole = "followup"
+	for _, atom := range []domain.InterviewKnowledgeAtom{opening, indexedFollowup, failedFollowup} {
+		if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "健康 warning 候选样例"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates", adminToken, map[string]interface{}{
+		"sources":    []string{"health_diagnostic"},
+		"domain":     "backend",
+		"category":   "cache",
+		"difficulty": "L3",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("candidate generation status=%d message=%s", status, env.Message)
+	}
+	var response domain.InterviewBankOpsActionCandidateResponse
+	mustDecodeData(t, env, &response)
+	if response.Total != 1 || len(response.List) != 1 {
+		t.Fatalf("expected one warning candidate, got %+v", response)
+	}
+	candidate := response.List[0]
+	if candidate.ActionType != domain.InterviewBankOpsActionTypeRebuildIndex || candidate.Priority != "P1" {
+		t.Fatalf("unexpected warning candidate classification: %+v", candidate)
+	}
+	if candidate.Source != domain.InterviewBankOpsActionSourceHealthDiagnostic || candidate.DedupeKey != "rebuild_index|combo|backend|cache|L3" {
+		t.Fatalf("unexpected warning candidate source/key: %+v", candidate)
+	}
+	if !strings.Contains(candidate.Reason, "索引失败") || candidate.Evidence["status"] != "warning" {
+		t.Fatalf("expected warning evidence and reason, got %+v", candidate)
+	}
+}
+
+func TestAdminInterviewBankOpsActionCandidatesFromIndexStatus(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	failed := validInterviewBankAtomForRebuild("atom-candidate-failed", "published", "failed")
+	pending := validInterviewBankAtomForRebuild("atom-candidate-pending", "published", "pending")
+	draft := validInterviewBankAtomForRebuild("atom-candidate-draft", "draft", "failed")
+	archived := validInterviewBankAtomForRebuild("atom-candidate-archived", "archived", "failed")
+	for _, atom := range []domain.InterviewKnowledgeAtom{failed, pending, draft, archived} {
+		if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "索引候选样例"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates", adminToken, map[string]interface{}{
+		"sources": []string{"index_status"},
+		"limit":   10,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("index candidate generation status=%d message=%s", status, env.Message)
+	}
+	var response domain.InterviewBankOpsActionCandidateResponse
+	mustDecodeData(t, env, &response)
+	if response.Total != 2 || len(response.List) != 2 {
+		t.Fatalf("expected failed and pending candidates only, got %+v", response)
+	}
+	candidates := map[string]domain.InterviewBankOpsActionCandidate{}
+	for _, candidate := range response.List {
+		candidates[candidate.AtomID] = candidate
+		if candidate.ActionType != domain.InterviewBankOpsActionTypeRebuildIndex || candidate.Source != domain.InterviewBankOpsActionSourceIndexStatus {
+			t.Fatalf("unexpected index candidate: %+v", candidate)
+		}
+		if candidate.DedupeKey != "rebuild_index|atom|"+candidate.AtomID {
+			t.Fatalf("unexpected atom dedupe key: %+v", candidate)
+		}
+		if _, ok := candidate.Evidence["principles"]; ok {
+			t.Fatalf("candidate evidence must not include atom body content: %+v", candidate.Evidence)
+		}
+	}
+	if candidates[failed.ID].Priority != "P1" {
+		t.Fatalf("failed atom should be P1, got %+v", candidates[failed.ID])
+	}
+	if candidates[pending.ID].Priority != "P2" {
+		t.Fatalf("pending atom should be P2, got %+v", candidates[pending.ID])
+	}
+	if _, ok := candidates[draft.ID]; ok {
+		t.Fatalf("draft atom must not create index candidate: %+v", response.List)
+	}
+	if _, ok := candidates[archived.ID]; ok {
+		t.Fatalf("archived atom must not create index candidate: %+v", response.List)
+	}
+}
+
+func TestAdminInterviewBankOpsActionCandidatesSkipActiveDedupeOnly(t *testing.T) {
+	t.Run("active action skips candidate", func(t *testing.T) {
+		dataStore := store.NewMemoryStore(auth.HashPassword)
+		blocked := validInterviewBankAtomForRebuild("atom-candidate-active-dedupe", "published", "indexed")
+		blocked.Category = "database"
+		blocked.Difficulty = "L2"
+		blocked.QuestionRole = "opening"
+		if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(blocked, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "active dedupe 样例"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := dataStore.CreateInterviewBankOpsAction(domain.InterviewBankOpsAction{
+			ActionType: domain.InterviewBankOpsActionTypeFillGap,
+			Status:     domain.InterviewBankOpsActionStatusOpen,
+			Priority:   "P0",
+			Source:     domain.InterviewBankOpsActionSourceManual,
+			Title:      "已有补题动作",
+			Reason:     "已经进入处理队列。",
+			Domain:     "backend",
+			Category:   "database",
+			Difficulty: "L2",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+		adminToken := loginToken(t, handler, "admin", "admin123")
+
+		status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates", adminToken, map[string]interface{}{
+			"sources":    []string{"health_diagnostic"},
+			"domain":     "backend",
+			"category":   "database",
+			"difficulty": "L2",
+		})
+		if status != http.StatusOK {
+			t.Fatalf("candidate generation status=%d message=%s", status, env.Message)
+		}
+		var response domain.InterviewBankOpsActionCandidateResponse
+		mustDecodeData(t, env, &response)
+		if response.Total != 0 || response.SkippedExisting != 1 {
+			t.Fatalf("expected active dedupe skip, got %+v", response)
+		}
+	})
+
+	t.Run("closed action does not skip candidate", func(t *testing.T) {
+		dataStore := store.NewMemoryStore(auth.HashPassword)
+		blocked := validInterviewBankAtomForRebuild("atom-candidate-closed-dedupe", "published", "indexed")
+		blocked.Category = "database"
+		blocked.Difficulty = "L2"
+		blocked.QuestionRole = "opening"
+		if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(blocked, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "closed dedupe 样例"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := dataStore.CreateInterviewBankOpsAction(domain.InterviewBankOpsAction{
+			ActionType: domain.InterviewBankOpsActionTypeFillGap,
+			Status:     domain.InterviewBankOpsActionStatusResolved,
+			Priority:   "P0",
+			Source:     domain.InterviewBankOpsActionSourceManual,
+			Title:      "已关闭补题动作",
+			Reason:     "历史问题已处理。",
+			Domain:     "backend",
+			Category:   "database",
+			Difficulty: "L2",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+		adminToken := loginToken(t, handler, "admin", "admin123")
+
+		status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates", adminToken, map[string]interface{}{
+			"sources":    []string{"health_diagnostic"},
+			"domain":     "backend",
+			"category":   "database",
+			"difficulty": "L2",
+		})
+		if status != http.StatusOK {
+			t.Fatalf("candidate generation status=%d message=%s", status, env.Message)
+		}
+		var response domain.InterviewBankOpsActionCandidateResponse
+		mustDecodeData(t, env, &response)
+		if response.Total != 1 || response.SkippedExisting != 0 {
+			t.Fatalf("expected closed action to allow candidate, got %+v", response)
+		}
+	})
+}
+
+func TestAdminInterviewBankOpsActionCandidatesRequireAdminAndValidatePolicy(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	for _, id := range []string{"atom-candidate-limit-1", "atom-candidate-limit-2"} {
+		atom := validInterviewBankAtomForRebuild(id, "published", "failed")
+		if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "策略校验样例"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	demoToken := loginToken(t, handler, "demo", "demo123")
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	_, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates", demoToken, map[string]interface{}{
+		"sources": []string{"index_status"},
+	})
+	if env.Code != http.StatusForbidden {
+		t.Fatalf("student candidate generation code=%d", env.Code)
+	}
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates", adminToken, map[string]interface{}{
+		"sources": []string{"retrieval_analytics"},
+	})
+	if status != http.StatusBadRequest || env.Message != "source is invalid" {
+		t.Fatalf("expected invalid source rejection, status=%d env=%+v", status, env)
+	}
+
+	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates", adminToken, map[string]interface{}{
+		"sources": []string{"index_status"},
+		"limit":   1,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("candidate policy status=%d message=%s", status, env.Message)
+	}
+	var response domain.InterviewBankOpsActionCandidateResponse
+	mustDecodeData(t, env, &response)
+	if response.Policy.Limit != 1 || response.Total != 1 || len(response.List) != 1 {
+		t.Fatalf("expected limit=1 to cap returned candidates, got %+v", response)
+	}
+
+	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates", adminToken, map[string]interface{}{
+		"sources": []string{"index_status", "index_status"},
+		"limit":   999,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("candidate max policy status=%d message=%s", status, env.Message)
+	}
+	mustDecodeData(t, env, &response)
+	if response.Policy.Limit != 200 || len(response.Policy.Sources) != 1 || response.Policy.Sources[0] != domain.InterviewBankOpsActionSourceIndexStatus {
+		t.Fatalf("expected normalized policy, got %+v", response.Policy)
+	}
+}
+
 func TestAdminInterviewBankPublishVersionsAndFailedVectorFilter(t *testing.T) {
 	dataStore := store.NewMemoryStore(auth.HashPassword)
 	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
