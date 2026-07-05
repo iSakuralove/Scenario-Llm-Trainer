@@ -509,3 +509,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 15: 面试题库运营动作健康索引候选
+
+**Date**: 2026-07-05
+**Task**: 面试题库运营动作健康索引候选
+**Branch**: `main`
+
+### Summary
+
+实现 admin-only 运营动作候选预览接口，从健康诊断和索引状态生成 fill_gap/rebuild_index 候选；补前端 API 类型、文档、后端规范和 TDD 覆盖。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `53ab32c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
