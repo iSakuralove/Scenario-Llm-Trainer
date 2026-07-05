@@ -1,0 +1,5 @@
+{"file":"CONTEXT.md","reason":"项目业务术语，新增并校验题库运营动作定义"}
+{"file":"docs/adr/0001-ai-interview-capability-migration.md","reason":"确认能力迁移接入，不做运行时并入"}
+{"file":"docs/architecture.md","reason":"确认当前面试题库治理、真实检索日志和 admin-only 边界"}
+{"file":"docs/ai-interview-integration-prd.md","reason":"读取已记录的面试题库治理决策，不覆盖未提交草稿"}
+{"file":"docs/ai-interview-integration-tech-design.md","reason":"读取既有技术边界、数据模型和分阶段落地说明"}
