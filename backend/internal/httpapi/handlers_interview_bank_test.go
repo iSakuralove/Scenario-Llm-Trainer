@@ -359,6 +359,155 @@ func TestAdminInterviewBankOpsActionCandidatesFromIndexStatus(t *testing.T) {
 	}
 }
 
+func TestAdminInterviewBankOpsActionCandidatesFromRetrievalFallbacks(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	dataStore.InterviewSessions["session-candidate-fallback-hot"] = &domain.InterviewSession{
+		ID: "session-candidate-fallback-hot",
+		QuestionSnapshot: domain.InterviewQuestionSnapshot{
+			Domain:     "backend",
+			Category:   "cache",
+			Difficulty: "L3",
+		},
+	}
+	dataStore.InterviewSessions["session-candidate-fallback-light"] = &domain.InterviewSession{
+		ID: "session-candidate-fallback-light",
+		QuestionSnapshot: domain.InterviewQuestionSnapshot{
+			Domain:     "backend",
+			Category:   "database",
+			Difficulty: "L2",
+		},
+	}
+	for i := 0; i < 3; i++ {
+		dataStore.SaveInterviewRetrievalLog(domain.InterviewRetrievalLog{
+			SessionID:    "session-candidate-fallback-hot",
+			Round:        i + 1,
+			QueryText:    "脱敏后的检索摘要，不应进入候选证据",
+			FallbackUsed: true,
+			ErrorMessage: "未命中可用题库追问原子，继续使用规则追问。",
+			CreatedAt:    time.Now().Add(time.Duration(i) * time.Minute),
+		})
+	}
+	dataStore.SaveInterviewRetrievalLog(domain.InterviewRetrievalLog{
+		SessionID:    "session-candidate-fallback-light",
+		Round:        1,
+		QueryText:    "另一个回退摘要",
+		FallbackUsed: true,
+		ErrorMessage: "embedding client is not configured",
+		CreatedAt:    time.Now().Add(5 * time.Minute),
+	})
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates", adminToken, map[string]interface{}{
+		"sources": []string{"retrieval_analytics"},
+		"limit":   10,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("retrieval candidate generation status=%d message=%s", status, env.Message)
+	}
+	var response domain.InterviewBankOpsActionCandidateResponse
+	mustDecodeData(t, env, &response)
+	if response.Total != 2 || len(response.List) != 2 {
+		t.Fatalf("expected two fallback candidates, got %+v", response)
+	}
+	candidates := map[string]domain.InterviewBankOpsActionCandidate{}
+	for _, candidate := range response.List {
+		candidates[candidate.Category] = candidate
+		if candidate.ActionType != domain.InterviewBankOpsActionTypeFillGap || candidate.Source != domain.InterviewBankOpsActionSourceRetrievalAnalytics {
+			t.Fatalf("unexpected retrieval fallback candidate: %+v", candidate)
+		}
+		if _, ok := candidate.Evidence["query_text"]; ok {
+			t.Fatalf("fallback evidence must not include full query text: %+v", candidate.Evidence)
+		}
+	}
+	if candidates["cache"].Priority != "P0" || candidates["cache"].DedupeKey != "fill_gap|combo|backend|cache|L3" {
+		t.Fatalf("expected hot fallback P0 candidate, got %+v", candidates["cache"])
+	}
+	if candidates["database"].Priority != "P1" || candidates["database"].DedupeKey != "fill_gap|combo|backend|database|L2" {
+		t.Fatalf("expected light fallback P1 candidate, got %+v", candidates["database"])
+	}
+	if count, _ := candidates["cache"].Evidence["fallback_count"].(float64); count != 3 {
+		t.Fatalf("expected fallback_count evidence, got %+v", candidates["cache"].Evidence)
+	}
+
+	status, env = requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/ops-actions?status=open", adminToken, nil)
+	if status != http.StatusOK {
+		t.Fatalf("list ops actions after retrieval candidates status=%d message=%s", status, env.Message)
+	}
+	var listed struct {
+		Total int `json:"total"`
+	}
+	mustDecodeData(t, env, &listed)
+	if listed.Total != 0 {
+		t.Fatalf("retrieval candidate generation must not persist actions, got %+v", listed)
+	}
+}
+
+func TestAdminInterviewBankOpsActionCandidatesFromRetrievalLowHits(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	hitAtom := validInterviewBankAtomForRebuild("atom-candidate-retrieval-hit", "published", "indexed")
+	hitAtom.QuestionRole = "followup"
+	zeroHitAtom := validInterviewBankAtomForRebuild("atom-candidate-retrieval-zero-hit", "published", "indexed")
+	zeroHitAtom.QuestionRole = "mixed"
+	for _, atom := range []domain.InterviewKnowledgeAtom{hitAtom, zeroHitAtom} {
+		if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "真实命中候选样例"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dataStore.InterviewSessions["session-candidate-hit"] = &domain.InterviewSession{
+		ID: "session-candidate-hit",
+		QuestionSnapshot: domain.InterviewQuestionSnapshot{
+			Domain:     "backend",
+			Category:   "cache",
+			Difficulty: "L3",
+		},
+	}
+	dataStore.SaveInterviewRetrievalLog(domain.InterviewRetrievalLog{
+		SessionID: "session-candidate-hit",
+		Round:     1,
+		QueryText: "singleflight",
+		MatchedAtoms: []domain.InterviewKnowledgeAtomLightSnapshot{{
+			AtomID:   hitAtom.ID,
+			Version:  1,
+			Title:    hitAtom.Title,
+			Subject:  hitAtom.Subject,
+			Domain:   hitAtom.Domain,
+			Category: hitAtom.Category,
+		}},
+		CreatedAt: time.Now(),
+	})
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates", adminToken, map[string]interface{}{
+		"sources":    []string{"retrieval_analytics"},
+		"domain":     "backend",
+		"category":   "cache",
+		"difficulty": "L3",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("retrieval low-hit candidate status=%d message=%s", status, env.Message)
+	}
+	var response domain.InterviewBankOpsActionCandidateResponse
+	mustDecodeData(t, env, &response)
+	if response.Total != 1 || len(response.List) != 1 {
+		t.Fatalf("expected one zero-hit observe candidate, got %+v", response)
+	}
+	candidate := response.List[0]
+	if candidate.AtomID != zeroHitAtom.ID || candidate.ActionType != domain.InterviewBankOpsActionTypeObserve || candidate.Priority != "P3" {
+		t.Fatalf("unexpected low-hit candidate: %+v", candidate)
+	}
+	if candidate.DedupeKey != "observe|atom|"+zeroHitAtom.ID {
+		t.Fatalf("unexpected low-hit dedupe key: %+v", candidate)
+	}
+	if candidate.Evidence["hit_count"] != float64(0) {
+		t.Fatalf("expected hit_count=0 evidence, got %+v", candidate.Evidence)
+	}
+	if _, ok := candidate.Evidence["principles"]; ok {
+		t.Fatalf("low-hit evidence must not include atom body content: %+v", candidate.Evidence)
+	}
+}
+
 func TestAdminInterviewBankOpsActionCandidatesSkipActiveDedupeOnly(t *testing.T) {
 	t.Run("active action skips candidate", func(t *testing.T) {
 		dataStore := store.NewMemoryStore(auth.HashPassword)
@@ -398,6 +547,56 @@ func TestAdminInterviewBankOpsActionCandidatesSkipActiveDedupeOnly(t *testing.T)
 		mustDecodeData(t, env, &response)
 		if response.Total != 0 || response.SkippedExisting != 1 {
 			t.Fatalf("expected active dedupe skip, got %+v", response)
+		}
+	})
+
+	t.Run("active action skips retrieval candidate", func(t *testing.T) {
+		dataStore := store.NewMemoryStore(auth.HashPassword)
+		dataStore.InterviewSessions["session-candidate-retrieval-active"] = &domain.InterviewSession{
+			ID: "session-candidate-retrieval-active",
+			QuestionSnapshot: domain.InterviewQuestionSnapshot{
+				Domain:     "backend",
+				Category:   "cache",
+				Difficulty: "L3",
+			},
+		}
+		dataStore.SaveInterviewRetrievalLog(domain.InterviewRetrievalLog{
+			SessionID:    "session-candidate-retrieval-active",
+			Round:        1,
+			QueryText:    "脱敏后的回退摘要",
+			FallbackUsed: true,
+			ErrorMessage: "未命中可用题库追问原子。",
+			CreatedAt:    time.Now(),
+		})
+		if _, err := dataStore.CreateInterviewBankOpsAction(domain.InterviewBankOpsAction{
+			ActionType: domain.InterviewBankOpsActionTypeFillGap,
+			Status:     domain.InterviewBankOpsActionStatusOpen,
+			Priority:   "P1",
+			Source:     domain.InterviewBankOpsActionSourceManual,
+			Title:      "已有真实回退补题动作",
+			Reason:     "已经进入处理队列。",
+			Domain:     "backend",
+			Category:   "cache",
+			Difficulty: "L3",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+		adminToken := loginToken(t, handler, "admin", "admin123")
+
+		status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates", adminToken, map[string]interface{}{
+			"sources":    []string{"retrieval_analytics"},
+			"domain":     "backend",
+			"category":   "cache",
+			"difficulty": "L3",
+		})
+		if status != http.StatusOK {
+			t.Fatalf("retrieval candidate generation status=%d message=%s", status, env.Message)
+		}
+		var response domain.InterviewBankOpsActionCandidateResponse
+		mustDecodeData(t, env, &response)
+		if response.Total != 0 || response.SkippedExisting != 1 {
+			t.Fatalf("expected active retrieval dedupe skip, got %+v", response)
 		}
 	})
 
@@ -463,7 +662,7 @@ func TestAdminInterviewBankOpsActionCandidatesRequireAdminAndValidatePolicy(t *t
 	}
 
 	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates", adminToken, map[string]interface{}{
-		"sources": []string{"retrieval_analytics"},
+		"sources": []string{"retrieval_log"},
 	})
 	if status != http.StatusBadRequest || env.Message != "source is invalid" {
 		t.Fatalf("expected invalid source rejection, status=%d env=%+v", status, env)

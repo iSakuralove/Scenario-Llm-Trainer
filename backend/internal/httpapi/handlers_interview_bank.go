@@ -693,6 +693,93 @@ func (s *Server) generateInterviewBankOpsActionCandidates(req domain.InterviewBa
 					},
 				})
 			}
+		case domain.InterviewBankOpsActionSourceRetrievalAnalytics:
+			analytics := s.store.InterviewRetrievalAnalytics(domain.InterviewRetrievalLogFilter{
+				Domain:     strings.TrimSpace(req.Domain),
+				Category:   strings.TrimSpace(req.Category),
+				Difficulty: strings.ToUpper(strings.TrimSpace(req.Difficulty)),
+				Limit:      policy.Limit,
+			})
+			for _, combo := range analytics.FallbackCombinations {
+				domainName := strings.TrimSpace(combo.Domain)
+				category := strings.TrimSpace(combo.Category)
+				difficulty := strings.ToUpper(strings.TrimSpace(combo.Difficulty))
+				if domainName == "" || category == "" || difficulty == "" {
+					continue
+				}
+				priority := "P1"
+				if combo.Count >= 3 {
+					priority = "P0"
+				}
+				reason := fmt.Sprintf("真实面试检索在该组合回退 %d 次，需要补齐可命中的追问资源。", combo.Count)
+				if recentReason := truncateText(combo.RecentReason, 160); recentReason != "" {
+					reason += " 最近原因：" + recentReason
+				}
+				action := domain.InterviewBankOpsAction{
+					ActionType: domain.InterviewBankOpsActionTypeFillGap,
+					Domain:     domainName,
+					Category:   category,
+					Difficulty: difficulty,
+				}
+				add(domain.InterviewBankOpsActionCandidate{
+					ActionType: domain.InterviewBankOpsActionTypeFillGap,
+					Priority:   priority,
+					Source:     domain.InterviewBankOpsActionSourceRetrievalAnalytics,
+					DedupeKey:  domain.InterviewBankOpsActionDedupeKey(action),
+					Title:      fmt.Sprintf("补齐真实回退组合 %s/%s/%s 题库资源", domainName, category, difficulty),
+					Reason:     reason,
+					Domain:     domainName,
+					Category:   category,
+					Difficulty: difficulty,
+					Evidence: map[string]interface{}{
+						"fallback_count":              combo.Count,
+						"recent_reason":               truncateText(combo.RecentReason, 160),
+						"last_seen_at":                combo.LastSeenAt,
+						"analytics_window_total_logs": analytics.TotalLogs,
+						"fallback_rate":               analytics.FallbackRate,
+					},
+				})
+			}
+			for _, hit := range analytics.LowHitAtoms {
+				if hit.HitCount != 0 {
+					continue
+				}
+				atomID := strings.TrimSpace(hit.AtomID)
+				if atomID == "" {
+					continue
+				}
+				action := domain.InterviewBankOpsAction{
+					ActionType: domain.InterviewBankOpsActionTypeObserve,
+					AtomID:     atomID,
+				}
+				domainName := strings.TrimSpace(hit.Domain)
+				category := strings.TrimSpace(hit.Category)
+				difficulty := strings.ToUpper(strings.TrimSpace(hit.Difficulty))
+				add(domain.InterviewBankOpsActionCandidate{
+					ActionType: domain.InterviewBankOpsActionTypeObserve,
+					Priority:   "P3",
+					Source:     domain.InterviewBankOpsActionSourceRetrievalAnalytics,
+					DedupeKey:  domain.InterviewBankOpsActionDedupeKey(action),
+					Title:      "观察真实检索零命中题目：" + strings.TrimSpace(hit.Title),
+					Reason:     "真实检索窗口内该已发布追问资源暂无命中，先记录观察，不自动归档或改题。",
+					Domain:     domainName,
+					Category:   category,
+					Difficulty: difficulty,
+					AtomID:     atomID,
+					Evidence: map[string]interface{}{
+						"atom_id":                     atomID,
+						"title":                       strings.TrimSpace(hit.Title),
+						"subject":                     strings.TrimSpace(hit.Subject),
+						"domain":                      domainName,
+						"category":                    category,
+						"difficulty":                  difficulty,
+						"question_role":               strings.TrimSpace(hit.QuestionRole),
+						"hit_count":                   hit.HitCount,
+						"last_hit_at":                 hit.LastHitAt,
+						"analytics_window_total_logs": analytics.TotalLogs,
+					},
+				})
+			}
 		}
 	}
 	if len(response.List) > policy.Limit {
@@ -712,7 +799,7 @@ func normalizeInterviewBankOpsActionCandidatePolicy(req domain.InterviewBankOpsA
 	}
 	sources := []string{}
 	if len(req.Sources) == 0 {
-		sources = []string{domain.InterviewBankOpsActionSourceHealthDiagnostic, domain.InterviewBankOpsActionSourceIndexStatus}
+		sources = []string{domain.InterviewBankOpsActionSourceHealthDiagnostic, domain.InterviewBankOpsActionSourceIndexStatus, domain.InterviewBankOpsActionSourceRetrievalAnalytics}
 	} else {
 		seen := map[string]bool{}
 		for _, source := range req.Sources {
@@ -720,7 +807,7 @@ func normalizeInterviewBankOpsActionCandidatePolicy(req domain.InterviewBankOpsA
 			if source == "" || seen[source] {
 				continue
 			}
-			if source != domain.InterviewBankOpsActionSourceHealthDiagnostic && source != domain.InterviewBankOpsActionSourceIndexStatus {
+			if source != domain.InterviewBankOpsActionSourceHealthDiagnostic && source != domain.InterviewBankOpsActionSourceIndexStatus && source != domain.InterviewBankOpsActionSourceRetrievalAnalytics {
 				return domain.InterviewBankOpsActionCandidatePolicy{}, fmt.Errorf("source is invalid")
 			}
 			seen[source] = true

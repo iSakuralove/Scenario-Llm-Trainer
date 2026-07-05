@@ -779,7 +779,7 @@ export interface InterviewBankOpsActionCandidate {
 }
 
 export interface InterviewBankOpsActionCandidateRequest {
-  sources?: Array<'health_diagnostic' | 'index_status'>
+  sources?: Array<'health_diagnostic' | 'index_status' | 'retrieval_analytics'>
   domain?: string
   category?: string
   difficulty?: string

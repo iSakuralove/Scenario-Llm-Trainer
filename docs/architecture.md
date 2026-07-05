@@ -85,7 +85,7 @@
 - `interview_retrieval_logs`
   保存真实面试追问检索的轻量运营日志，只记录 `session_id`、轮次、脱敏截断 query、命中原子快照、回退状态、错误摘要和创建时间，用于管理员运营看板聚合命中率、回退率和低效资源。
 - `interview_bank_ops_actions`
-  保存管理员需要跟进的题库运营动作，记录动作类型、状态、优先级、来源、去重键、标题、原因、关联组合、关联原子、轻量证据和创建人；已支持管理员手工创建与 open 队列读取，并可从健康诊断和索引状态生成只读候选预览。候选生成不落库，也不自动修题、归档或重建索引。
+  保存管理员需要跟进的题库运营动作，记录动作类型、状态、优先级、来源、去重键、标题、原因、关联组合、关联原子、轻量证据和创建人；已支持管理员手工创建与 open 队列读取，并可从健康诊断、索引状态和真实检索运营聚合生成只读候选预览。候选生成不落库，也不自动修题、归档或重建索引。
 
 版本快照只包含稳定内容字段：`id`、`title`、`subject`、`domain`、`difficulty`、`category`、`question_role`、`sourceRef`、`tags`、`principles`、`pitfalls`、`followUpPaths`、`status`。`vector_status` 和 `last_indexed_at` 属于运行时索引状态，不进入版本快照。
 
@@ -128,7 +128,7 @@
 - `GET /api/v1/admin/interview-bank/ops-actions`
   返回题库运营动作列表，支持按 `status`、`action_type`、`priority`、`source`、`domain`、`category`、`difficulty`、`atom_id` 和 `limit` 过滤；前端首期默认展示 open 队列。
 - `POST /api/v1/admin/interview-bank/ops-actions/candidates`
-  从题库健康诊断和 atom 索引状态生成运营动作候选预览；`blocked` 组合生成 `fill_gap` 候选，`warning` 组合和 `published + pending/failed` atom 生成 `rebuild_index` 候选，并按 active 动作 `dedupe_key` 去重。该接口只读，不写动作表、不调用 LLM/embedding、不修改题库或索引状态。
+  从题库健康诊断、atom 索引状态和真实检索运营聚合生成运营动作候选预览；`blocked` 组合生成 `fill_gap` 候选，`warning` 组合和 `published + pending/failed` atom 生成 `rebuild_index` 候选，真实回退组合生成 `retrieval_analytics + fill_gap/P0/P1` 候选，真实检索窗口内零命中的 published followup/mixed atom 生成 `observe/P3` 候选，并按 active 动作 `dedupe_key` 去重。该接口只读，不写动作表、不调用 LLM/embedding、不修改题库或索引状态。
 - `POST /api/v1/admin/interview-bank/ops-actions`
   支持管理员手工创建题库运营动作；后端固定写入 `source=manual`、默认 `status=open`，并保存非空 `dedupe_key` 和轻量证据，不隐式修改题库内容或索引状态。
 
