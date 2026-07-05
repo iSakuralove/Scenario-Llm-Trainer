@@ -796,6 +796,17 @@ export interface InterviewBankOpsActionCandidateResponse {
   }
 }
 
+export interface InterviewBankOpsActionCandidateSaveRequest {
+  candidates: InterviewBankOpsActionCandidate[]
+}
+
+export interface InterviewBankOpsActionCandidateSaveResponse {
+  list: InterviewBankOpsAction[]
+  saved: number
+  total: number
+  skipped_existing: number
+}
+
 export interface InterviewKnowledgeAtomFilters {
   status?: string
   domain?: string

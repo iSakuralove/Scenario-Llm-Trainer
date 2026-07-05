@@ -382,6 +382,23 @@ func (s *Server) handleAdminInterviewBank(w http.ResponseWriter, r *http.Request
 		writeOK(w, map[string]interface{}{"list": items, "total": len(items), "filters": filter})
 		return
 	}
+	if len(parts) == 3 && parts[0] == "ops-actions" && parts[1] == "candidates" && parts[2] == "save" && r.Method == http.MethodPost {
+		var req domain.InterviewBankOpsActionCandidateSaveRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		response, err := s.saveInterviewBankOpsActionCandidates(req, user)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.audit(r, user, "admin.interview_bank_ops_action_candidate_save", "interview_bank_ops_action", "bulk", map[string]string{
+			"saved":            strconv.Itoa(response.Saved),
+			"skipped_existing": strconv.Itoa(response.SkippedExisting),
+		})
+		writeOK(w, response)
+		return
+	}
 	if len(parts) == 2 && parts[0] == "ops-actions" && parts[1] == "candidates" && r.Method == http.MethodPost {
 		var req domain.InterviewBankOpsActionCandidateRequest
 		if !decode(w, r, &req) {
@@ -787,6 +804,96 @@ func (s *Server) generateInterviewBankOpsActionCandidates(req domain.InterviewBa
 	}
 	response.Total = len(response.List)
 	return response, nil
+}
+
+func (s *Server) saveInterviewBankOpsActionCandidates(req domain.InterviewBankOpsActionCandidateSaveRequest, user *domain.User) (domain.InterviewBankOpsActionCandidateSaveResponse, error) {
+	if len(req.Candidates) == 0 {
+		return domain.InterviewBankOpsActionCandidateSaveResponse{}, fmt.Errorf("candidates is required")
+	}
+	if len(req.Candidates) > 50 {
+		return domain.InterviewBankOpsActionCandidateSaveResponse{}, fmt.Errorf("candidates limit exceeded")
+	}
+	response := domain.InterviewBankOpsActionCandidateSaveResponse{
+		List: []domain.InterviewBankOpsAction{},
+	}
+	active := s.activeInterviewBankOpsActionKeys()
+	seen := map[string]bool{}
+	actions := []domain.InterviewBankOpsAction{}
+	for _, candidate := range req.Candidates {
+		action, err := interviewBankOpsActionFromCandidate(candidate, user.ID)
+		if err != nil {
+			return domain.InterviewBankOpsActionCandidateSaveResponse{}, err
+		}
+		if active[action.DedupeKey] || seen[action.DedupeKey] {
+			response.SkippedExisting++
+			continue
+		}
+		seen[action.DedupeKey] = true
+		actions = append(actions, action)
+	}
+	for _, action := range actions {
+		saved, err := s.store.CreateInterviewBankOpsAction(action)
+		if err != nil {
+			return domain.InterviewBankOpsActionCandidateSaveResponse{}, err
+		}
+		response.List = append(response.List, saved)
+	}
+	response.Saved = len(response.List)
+	response.Total = len(response.List)
+	return response, nil
+}
+
+func interviewBankOpsActionFromCandidate(candidate domain.InterviewBankOpsActionCandidate, adminID string) (domain.InterviewBankOpsAction, error) {
+	source := strings.TrimSpace(candidate.Source)
+	switch source {
+	case domain.InterviewBankOpsActionSourceHealthDiagnostic,
+		domain.InterviewBankOpsActionSourceIndexStatus,
+		domain.InterviewBankOpsActionSourceRetrievalAnalytics:
+	default:
+		return domain.InterviewBankOpsAction{}, fmt.Errorf("candidate source is invalid")
+	}
+	dedupeKey := strings.TrimSpace(candidate.DedupeKey)
+	if dedupeKey == "" {
+		return domain.InterviewBankOpsAction{}, fmt.Errorf("candidate dedupe_key is required")
+	}
+	actionType := strings.TrimSpace(candidate.ActionType)
+	if !domain.ValidInterviewBankOpsActionType(actionType) {
+		return domain.InterviewBankOpsAction{}, fmt.Errorf("invalid action_type")
+	}
+	priority := strings.ToUpper(strings.TrimSpace(candidate.Priority))
+	if !domain.ValidInterviewBankOpsActionPriority(priority) {
+		return domain.InterviewBankOpsAction{}, fmt.Errorf("invalid priority")
+	}
+	title := strings.TrimSpace(candidate.Title)
+	if title == "" {
+		return domain.InterviewBankOpsAction{}, fmt.Errorf("title is required")
+	}
+	reason := strings.TrimSpace(candidate.Reason)
+	if reason == "" {
+		return domain.InterviewBankOpsAction{}, fmt.Errorf("reason is required")
+	}
+	action := domain.InterviewBankOpsAction{
+		ActionType: actionType,
+		Status:     domain.InterviewBankOpsActionStatusOpen,
+		Priority:   priority,
+		Source:     source,
+		DedupeKey:  dedupeKey,
+		Title:      title,
+		Reason:     reason,
+		Domain:     strings.TrimSpace(candidate.Domain),
+		Category:   strings.TrimSpace(candidate.Category),
+		Difficulty: strings.ToUpper(strings.TrimSpace(candidate.Difficulty)),
+		AtomID:     strings.TrimSpace(candidate.AtomID),
+		Evidence:   candidate.Evidence,
+		CreatedBy:  strings.TrimSpace(adminID),
+	}
+	if action.AtomID == "" && (action.Domain == "" || action.Category == "" || action.Difficulty == "") {
+		return domain.InterviewBankOpsAction{}, fmt.Errorf("target scope is required")
+	}
+	if action.Evidence == nil {
+		action.Evidence = map[string]interface{}{}
+	}
+	return action, nil
 }
 
 func normalizeInterviewBankOpsActionCandidatePolicy(req domain.InterviewBankOpsActionCandidateRequest) (domain.InterviewBankOpsActionCandidatePolicy, error) {

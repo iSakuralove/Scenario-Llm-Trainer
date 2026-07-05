@@ -245,6 +245,17 @@ type InterviewBankOpsActionCandidateResponse struct {
 	Policy          InterviewBankOpsActionCandidatePolicy `json:"policy"`
 }
 
+type InterviewBankOpsActionCandidateSaveRequest struct {
+	Candidates []InterviewBankOpsActionCandidate `json:"candidates"`
+}
+
+type InterviewBankOpsActionCandidateSaveResponse struct {
+	List            []InterviewBankOpsAction `json:"list"`
+	Saved           int                      `json:"saved"`
+	Total           int                      `json:"total"`
+	SkippedExisting int                      `json:"skipped_existing"`
+}
+
 func InterviewBankOpsActionDedupeKey(action InterviewBankOpsAction) string {
 	if action.AtomID != "" && action.Domain != "" && action.Category != "" && action.Difficulty != "" {
 		return action.ActionType + "|atom|" + action.AtomID + "|" + action.Domain + "|" + action.Category + "|" + action.Difficulty

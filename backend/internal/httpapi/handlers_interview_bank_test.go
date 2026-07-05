@@ -694,6 +694,255 @@ func TestAdminInterviewBankOpsActionCandidatesRequireAdminAndValidatePolicy(t *t
 	}
 }
 
+func TestAdminInterviewBankOpsActionSaveCandidatesPersistsGeneratedActions(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	candidate := domain.InterviewBankOpsActionCandidate{
+		CandidateKey: "health_diagnostic|fill_gap|combo|backend|cache|L3",
+		ActionType:   domain.InterviewBankOpsActionTypeFillGap,
+		Priority:     "P0",
+		Source:       domain.InterviewBankOpsActionSourceHealthDiagnostic,
+		DedupeKey:    "fill_gap|combo|backend|cache|L3",
+		Title:        "补齐 backend/cache/L3 题库资源",
+		Reason:       "健康诊断显示该组合 blocked。",
+		Domain:       "backend",
+		Category:     "cache",
+		Difficulty:   "L3",
+		Evidence: map[string]interface{}{
+			"status": "blocked",
+		},
+	}
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates/save", adminToken, map[string]interface{}{
+		"candidates": []domain.InterviewBankOpsActionCandidate{candidate},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("save candidates status=%d message=%s", status, env.Message)
+	}
+	var response struct {
+		List            []domain.InterviewBankOpsAction `json:"list"`
+		Saved           int                             `json:"saved"`
+		Total           int                             `json:"total"`
+		SkippedExisting int                             `json:"skipped_existing"`
+	}
+	mustDecodeData(t, env, &response)
+	if response.Saved != 1 || response.Total != 1 || response.SkippedExisting != 0 || len(response.List) != 1 {
+		t.Fatalf("unexpected save response: %+v", response)
+	}
+	saved := response.List[0]
+	if saved.Source != domain.InterviewBankOpsActionSourceHealthDiagnostic || saved.Status != domain.InterviewBankOpsActionStatusOpen {
+		t.Fatalf("candidate save should preserve generated source and force open status, got %+v", saved)
+	}
+	if saved.DedupeKey != candidate.DedupeKey || saved.CreatedBy == "" {
+		t.Fatalf("candidate save should preserve dedupe and created_by, got %+v", saved)
+	}
+	if saved.Evidence["status"] != "blocked" {
+		t.Fatalf("candidate evidence should be persisted compactly, got %+v", saved.Evidence)
+	}
+
+	status, env = requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/ops-actions?status=open", adminToken, nil)
+	if status != http.StatusOK {
+		t.Fatalf("list saved candidates status=%d message=%s", status, env.Message)
+	}
+	var listed struct {
+		List  []domain.InterviewBankOpsAction `json:"list"`
+		Total int                             `json:"total"`
+	}
+	mustDecodeData(t, env, &listed)
+	if listed.Total != 1 || len(listed.List) != 1 || listed.List[0].Source != domain.InterviewBankOpsActionSourceHealthDiagnostic {
+		t.Fatalf("expected saved candidate in open queue, got %+v", listed)
+	}
+}
+
+func TestAdminInterviewBankOpsActionSaveCandidatesDedupePolicy(t *testing.T) {
+	t.Run("active action skips candidate save", func(t *testing.T) {
+		dataStore := store.NewMemoryStore(auth.HashPassword)
+		if _, err := dataStore.CreateInterviewBankOpsAction(domain.InterviewBankOpsAction{
+			ActionType: domain.InterviewBankOpsActionTypeFillGap,
+			Status:     domain.InterviewBankOpsActionStatusOpen,
+			Priority:   "P0",
+			Source:     domain.InterviewBankOpsActionSourceManual,
+			Title:      "已有补题动作",
+			Reason:     "已经进入处理队列。",
+			Domain:     "backend",
+			Category:   "cache",
+			Difficulty: "L3",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+		adminToken := loginToken(t, handler, "admin", "admin123")
+
+		status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates/save", adminToken, map[string]interface{}{
+			"candidates": []domain.InterviewBankOpsActionCandidate{{
+				ActionType: domain.InterviewBankOpsActionTypeFillGap,
+				Priority:   "P0",
+				Source:     domain.InterviewBankOpsActionSourceRetrievalAnalytics,
+				DedupeKey:  "fill_gap|combo|backend|cache|L3",
+				Title:      "补齐真实回退组合 backend/cache/L3 题库资源",
+				Reason:     "真实回退组合需要补题。",
+				Domain:     "backend",
+				Category:   "cache",
+				Difficulty: "L3",
+				Evidence:   map[string]interface{}{"fallback_count": 3},
+			}},
+		})
+		if status != http.StatusOK {
+			t.Fatalf("save active duplicate status=%d message=%s", status, env.Message)
+		}
+		var response struct {
+			Saved           int `json:"saved"`
+			Total           int `json:"total"`
+			SkippedExisting int `json:"skipped_existing"`
+		}
+		mustDecodeData(t, env, &response)
+		if response.Saved != 0 || response.Total != 0 || response.SkippedExisting != 1 {
+			t.Fatalf("expected active duplicate skip, got %+v", response)
+		}
+	})
+
+	t.Run("resolved action allows candidate save", func(t *testing.T) {
+		dataStore := store.NewMemoryStore(auth.HashPassword)
+		if _, err := dataStore.CreateInterviewBankOpsAction(domain.InterviewBankOpsAction{
+			ActionType: domain.InterviewBankOpsActionTypeFillGap,
+			Status:     domain.InterviewBankOpsActionStatusResolved,
+			Priority:   "P0",
+			Source:     domain.InterviewBankOpsActionSourceManual,
+			Title:      "已解决补题动作",
+			Reason:     "历史问题已解决。",
+			Domain:     "backend",
+			Category:   "cache",
+			Difficulty: "L3",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+		adminToken := loginToken(t, handler, "admin", "admin123")
+
+		status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates/save", adminToken, map[string]interface{}{
+			"candidates": []domain.InterviewBankOpsActionCandidate{{
+				ActionType: domain.InterviewBankOpsActionTypeFillGap,
+				Priority:   "P1",
+				Source:     domain.InterviewBankOpsActionSourceRetrievalAnalytics,
+				DedupeKey:  "fill_gap|combo|backend|cache|L3",
+				Title:      "重新补齐真实回退组合 backend/cache/L3 题库资源",
+				Reason:     "近期又出现真实回退。",
+				Domain:     "backend",
+				Category:   "cache",
+				Difficulty: "L3",
+				Evidence:   map[string]interface{}{"fallback_count": 1},
+			}},
+		})
+		if status != http.StatusOK {
+			t.Fatalf("save after resolved status=%d message=%s", status, env.Message)
+		}
+		var response struct {
+			Saved           int `json:"saved"`
+			SkippedExisting int `json:"skipped_existing"`
+		}
+		mustDecodeData(t, env, &response)
+		if response.Saved != 1 || response.SkippedExisting != 0 {
+			t.Fatalf("expected resolved dedupe to allow save, got %+v", response)
+		}
+	})
+
+	t.Run("same request duplicate key saves once", func(t *testing.T) {
+		dataStore := store.NewMemoryStore(auth.HashPassword)
+		handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+		adminToken := loginToken(t, handler, "admin", "admin123")
+		candidate := domain.InterviewBankOpsActionCandidate{
+			ActionType: domain.InterviewBankOpsActionTypeFillGap,
+			Priority:   "P1",
+			Source:     domain.InterviewBankOpsActionSourceRetrievalAnalytics,
+			DedupeKey:  "fill_gap|combo|frontend|frontend|L2",
+			Title:      "补齐真实回退组合 frontend/frontend/L2 题库资源",
+			Reason:     "真实回退组合需要补题。",
+			Domain:     "frontend",
+			Category:   "frontend",
+			Difficulty: "L2",
+			Evidence:   map[string]interface{}{"fallback_count": 2},
+		}
+
+		status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates/save", adminToken, map[string]interface{}{
+			"candidates": []domain.InterviewBankOpsActionCandidate{candidate, candidate},
+		})
+		if status != http.StatusOK {
+			t.Fatalf("save same request duplicate status=%d message=%s", status, env.Message)
+		}
+		var response struct {
+			Saved           int `json:"saved"`
+			Total           int `json:"total"`
+			SkippedExisting int `json:"skipped_existing"`
+		}
+		mustDecodeData(t, env, &response)
+		if response.Saved != 1 || response.Total != 1 || response.SkippedExisting != 1 {
+			t.Fatalf("expected same request duplicate save once, got %+v", response)
+		}
+	})
+}
+
+func TestAdminInterviewBankOpsActionSaveCandidatesRequireAdminAndValidate(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	demoToken := loginToken(t, handler, "demo", "demo123")
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	validCandidate := domain.InterviewBankOpsActionCandidate{
+		ActionType: domain.InterviewBankOpsActionTypeRebuildIndex,
+		Priority:   "P1",
+		Source:     domain.InterviewBankOpsActionSourceIndexStatus,
+		DedupeKey:  "rebuild_index|atom|atom-save-candidate-invalid",
+		Title:      "重建题库索引：候选保存校验",
+		Reason:     "索引状态 failed。",
+		AtomID:     "atom-save-candidate-invalid",
+		Evidence:   map[string]interface{}{"vector_status": "failed"},
+	}
+	_, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates/save", demoToken, map[string]interface{}{
+		"candidates": []domain.InterviewBankOpsActionCandidate{validCandidate},
+	})
+	if env.Code != http.StatusForbidden {
+		t.Fatalf("student candidate save code=%d", env.Code)
+	}
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates/save", adminToken, map[string]interface{}{
+		"candidates": []domain.InterviewBankOpsActionCandidate{},
+	})
+	if status != http.StatusBadRequest || env.Message != "candidates is required" {
+		t.Fatalf("expected empty candidate rejection, status=%d env=%+v", status, env)
+	}
+
+	invalidSource := validCandidate
+	invalidSource.Source = domain.InterviewBankOpsActionSourceManual
+	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates/save", adminToken, map[string]interface{}{
+		"candidates": []domain.InterviewBankOpsActionCandidate{invalidSource},
+	})
+	if status != http.StatusBadRequest || env.Message != "candidate source is invalid" {
+		t.Fatalf("expected invalid source rejection, status=%d env=%+v", status, env)
+	}
+
+	missingDedupe := validCandidate
+	missingDedupe.DedupeKey = ""
+	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates/save", adminToken, map[string]interface{}{
+		"candidates": []domain.InterviewBankOpsActionCandidate{missingDedupe},
+	})
+	if status != http.StatusBadRequest || env.Message != "candidate dedupe_key is required" {
+		t.Fatalf("expected missing dedupe rejection, status=%d env=%+v", status, env)
+	}
+
+	missingTarget := validCandidate
+	missingTarget.AtomID = ""
+	missingTarget.Domain = ""
+	missingTarget.Category = ""
+	missingTarget.Difficulty = ""
+	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions/candidates/save", adminToken, map[string]interface{}{
+		"candidates": []domain.InterviewBankOpsActionCandidate{missingTarget},
+	})
+	if status != http.StatusBadRequest || env.Message != "target scope is required" {
+		t.Fatalf("expected missing target rejection, status=%d env=%+v", status, env)
+	}
+}
+
 func TestAdminInterviewBankPublishVersionsAndFailedVectorFilter(t *testing.T) {
 	dataStore := store.NewMemoryStore(auth.HashPassword)
 	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()

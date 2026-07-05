@@ -152,9 +152,12 @@ The runtime stores only a bounded, sanitized retrieval query and treats logging 
 - Store list: `ListInterviewBankOpsActions(filter domain.InterviewBankOpsActionFilter) []domain.InterviewBankOpsAction`。
 - API list: `GET /api/v1/admin/interview-bank/ops-actions`。
 - API candidates: `POST /api/v1/admin/interview-bank/ops-actions/candidates`。
+- API candidate save: `POST /api/v1/admin/interview-bank/ops-actions/candidates/save`。
 - API manual create: `POST /api/v1/admin/interview-bank/ops-actions`。
 - Candidate request: `{ sources?: ["health_diagnostic"|"index_status"|"retrieval_analytics"], domain?: string, category?: string, difficulty?: "L1"|"L2"|"L3"|"L4"|"L5", limit?: number }`。
 - Candidate response: `{ list: InterviewBankOpsActionCandidate[], total: number, skipped_existing: number, policy: { sources: string[], limit: number } }`。
+- Candidate save request: `{ candidates: InterviewBankOpsActionCandidate[] }`。
+- Candidate save response: `{ list: InterviewBankOpsAction[], saved: number, total: number, skipped_existing: number }`。
 - DB table: `interview_bank_ops_actions(id TEXT PRIMARY KEY, action_type TEXT, status TEXT, priority TEXT, source TEXT, dedupe_key TEXT, title TEXT, reason TEXT, domain TEXT, category TEXT, difficulty TEXT, atom_id TEXT, evidence JSONB, created_by TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ)`。
 
 ### 3. Contracts
@@ -169,6 +172,7 @@ The runtime stores only a bounded, sanitized retrieval query and treats logging 
 - `evidence` must be compact JSON metadata. It must not contain full user answers, full resume text, project background, full atom body content, secrets, tokens, or raw provider payloads.
 - Creating or listing an action must not edit atoms, change atom status, rebuild vectors, write retrieval logs, or create LLM/embedding calls.
 - Candidate generation is read-only. It must not call `CreateInterviewBankOpsAction`, edit atoms, change atom status, rebuild vectors, write retrieval logs, or create LLM/embedding calls.
+- Candidate save is an explicit admin write path. It may call `CreateInterviewBankOpsAction` for selected generated candidates, but must not edit atoms, change atom status, rebuild vectors, write retrieval logs, or create LLM/embedding calls.
 - Candidate generation accepts `health_diagnostic`, `index_status`, and `retrieval_analytics` sources; omitting `sources` includes all three.
 - Health diagnostic candidate rules:
   - `blocked` combination -> `fill_gap/P0`, combo dedupe key.
@@ -182,6 +186,7 @@ The runtime stores only a bounded, sanitized retrieval query and treats logging 
   - low-hit atom from real retrieval analytics with `hit_count=0` -> `observe/P3`, atom-only dedupe key.
   - low-hit atom with `hit_count>0` must not create `observe` or `review_archive` candidates in this slice.
 - Candidate generation must skip candidates whose `dedupe_key` already belongs to an active action (`open`, `in_progress`, `watching`, `reopened`). `resolved` and `dismissed` do not block future candidates.
+- Candidate save accepts only generated sources (`health_diagnostic`, `index_status`, `retrieval_analytics`), preserves the candidate `dedupe_key`, forces `status=open`, records `created_by`, and skips active `dedupe_key` matches instead of creating duplicate open work.
 - Candidate evidence must remain compact metadata: status/counts/reasons/actions for health candidates; atom id/title/subject/domain/category/difficulty/question_role/vector_status/current_version for index candidates; fallback count/reason/rate/window metadata and light atom hit metadata for retrieval candidates. It must not include `query_text`, `principles`, `pitfalls`, `follow_up_paths`, full answers, resume text, project background, or provider payloads.
 - MemoryStore and PostgresStore must keep the same filtering, defaulting, sorting, limit cap, and clone-safety semantics.
 
@@ -195,6 +200,8 @@ The runtime stores only a bounded, sanitized retrieval query and treats logging 
 - Candidate source outside `health_diagnostic|index_status|retrieval_analytics` -> HTTP `400`, no Store write.
 - Candidate `limit <= 0` -> default `50`; `limit > 200` -> clamp to `200`.
 - Candidate request with duplicate sources -> dedupe sources in response policy.
+- Candidate save with empty `candidates`, more than 50 candidates, invalid generated source, empty `dedupe_key`, or missing target scope -> HTTP `400`.
+- Candidate save with active duplicate `dedupe_key` -> HTTP `200`, increments `skipped_existing`, and does not create a new action.
 - Store evidence marshal error -> return create error before persisting a partial action.
 - Empty list result -> return `list: []` and `total: 0`, not an error.
 
@@ -206,6 +213,8 @@ The runtime stores only a bounded, sanitized retrieval query and treats logging 
 - Good: Admin generates candidates for a published failed atom and receives one `rebuild_index/P1` atom candidate without full atom body content in evidence.
 - Good: Admin generates candidates from real fallback combinations and receives `retrieval_analytics + fill_gap` candidates without full query text in evidence.
 - Good: Admin generates candidates from real low-hit analytics and receives only `hit_count=0` `observe/P3` atom candidates; hit atoms are ignored.
+- Good: Admin saves a selected generated candidate and then sees it in the open queue with the generated source and compact evidence preserved.
+- Good: Saving a candidate whose `dedupe_key` matches an open action skips it; saving one whose previous matching action is resolved creates a new open action.
 - Good: Existing open action with the same `dedupe_key` increments `skipped_existing` and suppresses the duplicate candidate; existing resolved action does not suppress it.
 - Base: No saved actions returns an empty open queue and lets the existing analytics/health panels continue rendering.
 - Base: Candidate generation with no matching health/index signals returns `list: []`, `total: 0`, and the normalized policy.
@@ -217,6 +226,7 @@ The runtime stores only a bounded, sanitized retrieval query and treats logging 
 
 - HTTP API: admin create/list success, non-admin forbidden, invalid enum and missing required fields rejected.
 - HTTP API: candidate generation is admin-only, rejects invalid source, clamps limit, returns blocked health `fill_gap`, warning health `rebuild_index`, failed/pending published atom `rebuild_index`, real retrieval fallback `fill_gap/P0/P1`, zero-hit retrieval atom `observe/P3`, skips draft/archived atoms, skips active dedupe keys, and does not persist actions.
+- HTTP API: candidate save is admin-only, persists selected generated candidates, preserves source/dedupe/evidence, skips active duplicates, allows resolved duplicates, rejects invalid candidate payloads, and refreshes the open action list.
 - Store unit: MemoryStore create/list filters, default values, sorting, clone safety, and evidence round-trip.
 - Schema text: `SchemaSQL`, `LegacyCompatibilitySQL`, and `backend/migrations/001_schema.sql` all contain the action table and indexes.
 - Postgres behavior: create/list query must use the same filters and limit cap as MemoryStore.

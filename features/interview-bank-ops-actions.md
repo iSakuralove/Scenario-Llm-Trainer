@@ -1,8 +1,8 @@
-# 面试题库运营动作手工队列与候选预览
+# 面试题库运营动作手工队列、候选预览与选择保存
 
 ## 目标
 
-让管理员把真实检索运营、健康诊断、索引状态或人工判断中发现的问题，沉淀为可跟进的题库运营动作，并从健康诊断、索引状态和真实检索运营聚合生成只读候选预览。
+让管理员把真实检索运营、健康诊断、索引状态或人工判断中发现的问题，沉淀为可跟进的题库运营动作；系统可从健康诊断、索引状态和真实检索运营聚合生成候选预览，管理员显式勾选后保存为正式 open 动作。
 
 ## 修改范围
 
@@ -12,8 +12,9 @@
 - 数据库 schema 与初始化 migration 新增 `interview_bank_ops_actions` 主表和必要索引。
 - 管理员 API 新增手工创建动作与动作列表接口。
 - 管理员 API 新增健康诊断/索引状态/真实检索运营候选生成接口。
+- 管理员 API 新增候选保存接口，将选中 generated 候选落库为 open 运营动作。
 - 前端面试题库管理页新增“运营动作”面板，支持 open 队列展示、手工创建、套用组合筛选和打开关联原子。
-- 前端 API client/type 新增候选生成契约，并允许请求 `retrieval_analytics` 候选来源；完整候选保存 UI 留到后续切片。
+- 前端 API client/type 新增候选生成与候选保存契约；运营动作面板支持生成候选、默认全选、取消/全选和保存选中候选。
 
 ## 核心实现
 
@@ -26,14 +27,19 @@
 - 真实检索回退组合生成 `retrieval_analytics + fill_gap` 候选，回退次数 `>=3` 为 `P0`，低于 3 次为 `P1`，证据只保留回退次数、最近原因摘要、窗口总量和回退率。
 - 真实检索低命中聚合仅对 `hit_count=0` 的 published followup/mixed atom 生成 `observe/P3` 候选，已命中 atom 不生成候选，也不自动生成归档建议。
 - 候选生成按 active 动作状态的 `dedupe_key` 去重，`resolved/dismissed` 不阻止后续重新生成。
+- `POST /api/v1/admin/interview-bank/ops-actions/candidates/save` 只允许管理员调用，候选数量必须在 1 到 50 之间。
+- 候选保存只接受 `health_diagnostic`、`index_status`、`retrieval_analytics` 三类 generated source；拒绝 `manual`、`retrieval_log` 和非法枚举。
+- 保存时固定 `status=open`、`created_by=adminID`，保留候选 `dedupe_key`、目标范围与 compact evidence。
+- 保存前读取 active 动作 key，已存在 active key 或同请求重复 `dedupe_key` 的候选会跳过并计入 `skipped_existing`；`resolved/dismissed` 不阻止未来保存同 key 候选。
 - PostgresStore 将 `evidence` 作为 JSON 保存；MemoryStore 返回 clone，避免调用方修改内部状态。
-- 前端面板复用现有题库筛选和题目详情能力，不新增自动修题、自动归档或自动重建索引。
+- 前端面板复用现有题库筛选和题目详情能力，候选保存成功后刷新 open 队列并清空本次候选，不新增自动修题、自动归档或自动重建索引。
 
 ## 影响范围
 
 - 新增能力只在管理员面试题库页面可见，普通用户、讲师和学生侧流程不受影响。
 - 本切片不改变真实面试运行时、报告接口、题库编辑接口或索引重建行为。
 - 候选生成是 admin-only 只读能力，不调用 LLM、embedding 或向量检索，也不修改 atom、版本、索引状态或检索日志。
+- 候选保存是 admin-only 显式写路径，只创建治理动作，不修改 atom、版本、索引状态或检索日志。
 - 新增表为空时不会影响既有题库导入、健康诊断、检索预览和真实检索运营面板。
 
 ## 验证方式
@@ -43,9 +49,11 @@
 - `npm --prefix frontend run lint`
 - `npm --prefix frontend run build`
 - Chrome 真实页面验证：管理员进入 `http://localhost:5173/interview-bank`，创建手工运营动作后 open 队列显示 `1 个 open` 并回显标题、类型、优先级、组合和原因。
+- Chrome 真实页面验证：管理员点击“生成候选”，勾选候选并“保存选中”，成功提示显示 saved/skipped existing，open 队列刷新后出现保存的 generated source 动作。
 
 ## 已知限制
 
-- 当前支持手工创建、列表读取、健康诊断候选、索引状态候选和真实检索运营候选；仍不做候选保存、动作详情、状态流转或历史记录。
+- 当前支持手工创建、列表读取、健康诊断候选、索引状态候选、真实检索运营候选和候选选择保存；仍不做动作详情、状态流转或历史记录。
 - 动作不会自动修改题库内容、归档资源或触发索引重建。
+- active dedupe 暂在管理员 HTTP 保存路径执行；跨请求并发竞态可在后续状态流转或 Store 约束切片中下沉处理。
 - 本地 Docker Hub 不可达时，需要使用本机 Go 构建后的本地 API 镜像启动容器；源码级 Dockerfile 仍依赖远端基础镜像。

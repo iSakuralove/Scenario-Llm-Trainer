@@ -21,6 +21,7 @@ import { Loading, Metric } from '../../components/common'
 import { useToken } from '../../lib/auth'
 import type {
   InterviewBankOpsAction,
+  InterviewBankOpsActionCandidate,
   InterviewBankOpsActionCreateRequest,
   InterviewKnowledgeAtom,
   InterviewKnowledgeAtomFilters,
@@ -156,6 +157,10 @@ export function InterviewBankAdminPage() {
   const [opsActions, setOpsActions] = useState<InterviewBankOpsAction[]>([])
   const [opsActionForm, setOpsActionForm] = useState<OpsActionForm>(emptyOpsActionForm)
   const [isCreatingOpsAction, setIsCreatingOpsAction] = useState(false)
+  const [opsActionCandidates, setOpsActionCandidates] = useState<InterviewBankOpsActionCandidate[]>([])
+  const [selectedOpsCandidateKeys, setSelectedOpsCandidateKeys] = useState<Set<string>>(() => new Set())
+  const [isGeneratingOpsCandidates, setIsGeneratingOpsCandidates] = useState(false)
+  const [isSavingOpsCandidates, setIsSavingOpsCandidates] = useState(false)
 
   const loadData = useCallback(async () => {
     setIsLoading(true)
@@ -317,6 +322,76 @@ export function InterviewBankAdminPage() {
       setError(err instanceof Error ? err.message : '运营动作创建失败')
     } finally {
       setIsCreatingOpsAction(false)
+    }
+  }
+
+  async function handleGenerateOpsActionCandidates() {
+    setError('')
+    setMessage('')
+    try {
+      setIsGeneratingOpsCandidates(true)
+      const result = await api.generateInterviewBankOpsActionCandidates(token, {
+        domain: filters.domain?.trim() || undefined,
+        category: filters.category?.trim() || undefined,
+        difficulty: filters.difficulty?.trim() || undefined,
+        limit: 50,
+      })
+      const nextCandidates = result.list ?? []
+      setOpsActionCandidates(nextCandidates)
+      setSelectedOpsCandidateKeys(new Set(nextCandidates.map(opsActionCandidateKey)))
+      if (nextCandidates.length > 0) {
+        setMessage(`已生成 ${nextCandidates.length} 个候选${result.skipped_existing ? `，跳过 ${result.skipped_existing} 个已有动作` : ''}`)
+      } else {
+        setMessage(result.skipped_existing ? `暂无新候选，已跳过 ${result.skipped_existing} 个已有动作` : '暂无可保存候选')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '运营动作候选生成失败')
+    } finally {
+      setIsGeneratingOpsCandidates(false)
+    }
+  }
+
+  function toggleOpsActionCandidate(candidate: InterviewBankOpsActionCandidate) {
+    const key = opsActionCandidateKey(candidate)
+    setSelectedOpsCandidateKeys((current) => {
+      const next = new Set(current)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
+      return next
+    })
+  }
+
+  function toggleAllOpsActionCandidates() {
+    setSelectedOpsCandidateKeys((current) => {
+      if (current.size === opsActionCandidates.length) {
+        return new Set()
+      }
+      return new Set(opsActionCandidates.map(opsActionCandidateKey))
+    })
+  }
+
+  async function handleSaveSelectedOpsActionCandidates() {
+    setError('')
+    setMessage('')
+    const selected = opsActionCandidates.filter((candidate) => selectedOpsCandidateKeys.has(opsActionCandidateKey(candidate)))
+    if (selected.length === 0) {
+      setError('请选择要保存的候选动作')
+      return
+    }
+    try {
+      setIsSavingOpsCandidates(true)
+      const result = await api.saveInterviewBankOpsActionCandidates(token, { candidates: selected })
+      setMessage(`已保存 ${result.saved} 个候选${result.skipped_existing ? `，跳过 ${result.skipped_existing} 个已有动作` : ''}`)
+      setOpsActionCandidates([])
+      setSelectedOpsCandidateKeys(new Set())
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '运营动作候选保存失败')
+    } finally {
+      setIsSavingOpsCandidates(false)
     }
   }
 
@@ -671,10 +746,18 @@ export function InterviewBankAdminPage() {
         />
         <OpsActionPanel
           actions={opsActions}
+          candidates={opsActionCandidates}
+          selectedCandidateKeys={selectedOpsCandidateKeys}
           form={opsActionForm}
           isCreating={isCreatingOpsAction}
+          isGeneratingCandidates={isGeneratingOpsCandidates}
+          isSavingCandidates={isSavingOpsCandidates}
           onChange={updateOpsActionForm}
           onCreate={() => void handleCreateOpsAction()}
+          onGenerateCandidates={() => void handleGenerateOpsActionCandidates()}
+          onToggleCandidate={toggleOpsActionCandidate}
+          onToggleAllCandidates={toggleAllOpsActionCandidates}
+          onSaveCandidates={() => void handleSaveSelectedOpsActionCandidates()}
           onOpenAtom={(atomID) => void handleOpenAtom(atomID)}
           onApplyTarget={applyOpsActionTarget}
         />
@@ -1015,21 +1098,40 @@ function RetrievalPreviewPanel({
 
 function OpsActionPanel({
   actions,
+  candidates,
+  selectedCandidateKeys,
   form,
   isCreating,
+  isGeneratingCandidates,
+  isSavingCandidates,
   onChange,
   onCreate,
+  onGenerateCandidates,
+  onToggleCandidate,
+  onToggleAllCandidates,
+  onSaveCandidates,
   onOpenAtom,
   onApplyTarget,
 }: {
   actions: InterviewBankOpsAction[]
+  candidates: InterviewBankOpsActionCandidate[]
+  selectedCandidateKeys: Set<string>
   form: OpsActionForm
   isCreating: boolean
+  isGeneratingCandidates: boolean
+  isSavingCandidates: boolean
   onChange: <K extends keyof OpsActionForm>(key: K, value: OpsActionForm[K]) => void
   onCreate: () => void
+  onGenerateCandidates: () => void
+  onToggleCandidate: (candidate: InterviewBankOpsActionCandidate) => void
+  onToggleAllCandidates: () => void
+  onSaveCandidates: () => void
   onOpenAtom: (atomID: string) => void
   onApplyTarget: (action: InterviewBankOpsAction) => void
 }) {
+  const selectedCount = candidates.filter((candidate) => selectedCandidateKeys.has(opsActionCandidateKey(candidate))).length
+  const allCandidatesSelected = candidates.length > 0 && selectedCount === candidates.length
+
   return (
     <section className="panel interview-bank-ops-action-panel">
       <div className="interview-bank-list-title">
@@ -1089,6 +1191,56 @@ function OpsActionPanel({
           </button>
         </div>
       </div>
+
+      <div className="interview-bank-ops-candidate-toolbar">
+        <div>
+          <strong>候选动作</strong>
+          <span>从健康诊断、索引状态和真实检索运营生成，保存后进入 open 队列。</span>
+        </div>
+        <div className="interview-bank-ops-action-row-actions">
+          <button className="ghost-button compact" type="button" onClick={onGenerateCandidates} disabled={isGeneratingCandidates || isSavingCandidates}>
+            <RefreshCw size={15} />{isGeneratingCandidates ? '生成中' : '生成候选'}
+          </button>
+          {candidates.length > 0 ? (
+            <>
+              <button className="ghost-button compact" type="button" onClick={onToggleAllCandidates} disabled={isSavingCandidates}>
+                {allCandidatesSelected ? '取消全选' : '全选'}
+              </button>
+              <button className="primary-button compact" type="button" onClick={onSaveCandidates} disabled={selectedCount === 0 || isSavingCandidates}>
+                <Save size={15} />{isSavingCandidates ? '保存中' : `保存选中 ${selectedCount}`}
+              </button>
+            </>
+          ) : null}
+        </div>
+      </div>
+
+      {candidates.length > 0 ? (
+        <div className="interview-bank-ops-action-list">
+          {candidates.map((candidate) => {
+            const key = opsActionCandidateKey(candidate)
+            return (
+              <label className="interview-bank-ops-candidate-row" key={key}>
+                <input
+                  type="checkbox"
+                  checked={selectedCandidateKeys.has(key)}
+                  onChange={() => onToggleCandidate(candidate)}
+                  disabled={isSavingCandidates}
+                />
+                <div>
+                  <strong>{candidate.title}</strong>
+                  <span>{opsActionTypeLabel(candidate.action_type)} · {candidate.priority} · {opsActionSourceLabel(candidate.source)} · {opsActionTargetLabel(candidate)}</span>
+                  <small>{candidate.reason}</small>
+                </div>
+              </label>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="interview-bank-empty-row">
+          <strong>暂无候选动作</strong>
+          <span>点击生成候选后，可选择要进入 open 队列的动作。</span>
+        </div>
+      )}
 
       {actions.length > 0 ? (
         <div className="interview-bank-ops-action-list">
@@ -1736,7 +1888,26 @@ function opsActionStatusLabel(value: string) {
   }
 }
 
-function opsActionTargetLabel(action: InterviewBankOpsAction) {
+function opsActionSourceLabel(value: string) {
+  switch (value) {
+    case 'health_diagnostic':
+      return '健康诊断'
+    case 'index_status':
+      return '索引状态'
+    case 'retrieval_analytics':
+      return '真实检索'
+    case 'manual':
+      return '手工'
+    default:
+      return value
+  }
+}
+
+function opsActionCandidateKey(candidate: InterviewBankOpsActionCandidate) {
+  return candidate.candidate_key || `${candidate.source}|${candidate.dedupe_key}`
+}
+
+function opsActionTargetLabel(action: { domain?: string; category?: string; difficulty?: string; atom_id?: string }) {
   const combo = [
     action.domain || '',
     action.category ? compactCategoryLabel(action.category) : '',

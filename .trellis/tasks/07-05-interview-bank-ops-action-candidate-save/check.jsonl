@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "检查后端 API/Store 复用和测试要求。"}
+{"file": ".trellis/spec/backend/store-schema-contracts.md", "reason": "检查 ops action candidate save 契约、去重和 evidence 安全边界。"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "检查前端类型、lint/build 和页面状态。"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "检查候选保存请求/响应在前后端一致。"}

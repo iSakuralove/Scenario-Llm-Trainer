@@ -9,6 +9,8 @@ import type {
   InterviewBankOpsAction,
   InterviewBankOpsActionCandidateRequest,
   InterviewBankOpsActionCandidateResponse,
+  InterviewBankOpsActionCandidateSaveRequest,
+  InterviewBankOpsActionCandidateSaveResponse,
   InterviewBankOpsActionCreateRequest,
   InterviewBankOpsActionFilters,
   InterviewKnowledgeAtom,
@@ -938,6 +940,13 @@ export const api = {
   generateInterviewBankOpsActionCandidates: (token: string, payload: InterviewBankOpsActionCandidateRequest = {}) =>
     request<InterviewBankOpsActionCandidateResponse>(
       '/admin/interview-bank/ops-actions/candidates',
+      { method: 'POST', body: JSON.stringify(payload) },
+      token,
+    ),
+
+  saveInterviewBankOpsActionCandidates: (token: string, payload: InterviewBankOpsActionCandidateSaveRequest) =>
+    request<InterviewBankOpsActionCandidateSaveResponse>(
+      '/admin/interview-bank/ops-actions/candidates/save',
       { method: 'POST', body: JSON.stringify(payload) },
       token,
     ),

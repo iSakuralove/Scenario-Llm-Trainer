@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "候选保存涉及 admin API、Store 复用和动作队列契约。"}
+{"file": ".trellis/spec/backend/store-schema-contracts.md", "reason": "题库运营动作、候选生成/保存、active dedupe 和 evidence 边界的可执行契约。"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端管理页类型、API client 和面板交互变更。"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "本切片跨后端 API、前端类型和管理页交互，需要检查跨层数据契约。"}
