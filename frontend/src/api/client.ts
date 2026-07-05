@@ -6,6 +6,9 @@ import type {
   AuditEvent,
   Asset,
   CommunityPost,
+  InterviewBankOpsAction,
+  InterviewBankOpsActionCreateRequest,
+  InterviewBankOpsActionFilters,
   InterviewKnowledgeAtom,
   InterviewKnowledgeAtomArchiveRequest,
   InterviewKnowledgeAtomFilters,
@@ -915,6 +918,20 @@ export const api = {
 
   adminInterviewBankHealth: (token: string) =>
     request<InterviewKnowledgeHealthResponse>('/admin/interview-bank/health', {}, token),
+
+  adminInterviewBankOpsActions: (token: string, filters: InterviewBankOpsActionFilters = {}) =>
+    request<{ list: InterviewBankOpsAction[]; total: number; filters: InterviewBankOpsActionFilters }>(
+      `/admin/interview-bank/ops-actions${queryString(filters as Record<string, string | number | undefined>)}`,
+      {},
+      token,
+    ),
+
+  createInterviewBankOpsAction: (token: string, payload: InterviewBankOpsActionCreateRequest) =>
+    request<{ action: InterviewBankOpsAction }>(
+      '/admin/interview-bank/ops-actions',
+      { method: 'POST', body: JSON.stringify(payload) },
+      token,
+    ),
 
   adminInterviewBankAtoms: (token: string, filters: InterviewKnowledgeAtomFilters = {}) =>
     request<{ list: InterviewKnowledgeAtom[]; total: number; filters: InterviewKnowledgeAtomFilters }>(

@@ -31,6 +31,7 @@ type MemoryStore struct {
 	InterviewKnowledgeAtomVersions map[string][]domain.InterviewKnowledgeAtomVersion
 	InterviewKnowledgeBatches      map[string]*domain.InterviewKnowledgeBatch
 	InterviewRetrievalLogs         []domain.InterviewRetrievalLog
+	InterviewBankOpsActions        map[string]*domain.InterviewBankOpsAction
 	CommunityPosts                 map[string]*domain.CommunityPost
 	Assets                         map[string]*domain.Asset
 	AIJobs                         map[string]*domain.AIJob
@@ -54,6 +55,7 @@ func NewMemoryStore(hashPassword func(string) string) *MemoryStore {
 		InterviewKnowledgeAtomVersions: map[string][]domain.InterviewKnowledgeAtomVersion{},
 		InterviewKnowledgeBatches:      map[string]*domain.InterviewKnowledgeBatch{},
 		InterviewRetrievalLogs:         []domain.InterviewRetrievalLog{},
+		InterviewBankOpsActions:        map[string]*domain.InterviewBankOpsAction{},
 		CommunityPosts:                 map[string]*domain.CommunityPost{},
 		Assets:                         map[string]*domain.Asset{},
 		AIJobs:                         map[string]*domain.AIJob{},
@@ -661,6 +663,43 @@ func (s *MemoryStore) InterviewRetrievalAnalytics(filter domain.InterviewRetriev
 		}
 	}
 	return interviewRetrievalAnalytics(logs, atoms, filter, s.interviewRetrievalAtomByIDLocked, s.interviewRetrievalSessionSnapshotByIDLocked)
+}
+
+func (s *MemoryStore) CreateInterviewBankOpsAction(action domain.InterviewBankOpsAction) (domain.InterviewBankOpsAction, error) {
+	prepared, err := prepareInterviewBankOpsActionForCreate(action, time.Now())
+	if err != nil {
+		return domain.InterviewBankOpsAction{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.InterviewBankOpsActions == nil {
+		s.InterviewBankOpsActions = map[string]*domain.InterviewBankOpsAction{}
+	}
+	s.InterviewBankOpsActions[prepared.ID] = cloneInterviewBankOpsAction(&prepared)
+	return *cloneInterviewBankOpsAction(&prepared), nil
+}
+
+func (s *MemoryStore) ListInterviewBankOpsActions(filter domain.InterviewBankOpsActionFilter) []domain.InterviewBankOpsAction {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]domain.InterviewBankOpsAction, 0, len(s.InterviewBankOpsActions))
+	for _, action := range s.InterviewBankOpsActions {
+		copy := cloneInterviewBankOpsAction(action)
+		if copy == nil || !interviewBankOpsActionMatchesFilter(*copy, filter) {
+			continue
+		}
+		items = append(items, *copy)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].UpdatedAt.Equal(items[j].UpdatedAt) {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].UpdatedAt.After(items[j].UpdatedAt)
+	})
+	if filter.Limit > 0 && len(items) > filter.Limit {
+		return items[:filter.Limit]
+	}
+	return items
 }
 
 func (s *MemoryStore) filteredInterviewRetrievalLogsLocked(filter domain.InterviewRetrievalLogFilter, limit int) []domain.InterviewRetrievalLog {

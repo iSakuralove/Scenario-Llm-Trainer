@@ -57,6 +57,141 @@ func TestAdminInterviewBankRequiresAdminAndValidateHasNoSideEffect(t *testing.T)
 	}
 }
 
+func TestAdminInterviewBankOpsActionsCreateAndList(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions", adminToken, map[string]interface{}{
+		"action_type": "fill_gap",
+		"priority":    "P1",
+		"title":       "补齐后端缓存 L3 追问题",
+		"reason":      "真实面试检索多次回退，需要补充追问资源。",
+		"domain":      "backend",
+		"category":    "cache",
+		"difficulty":  "L3",
+		"evidence": map[string]interface{}{
+			"fallback_count": float64(3),
+		},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("create ops action status=%d message=%s", status, env.Message)
+	}
+	var created struct {
+		Action domain.InterviewBankOpsAction `json:"action"`
+	}
+	mustDecodeData(t, env, &created)
+	if created.Action.ID == "" || created.Action.Status != domain.InterviewBankOpsActionStatusOpen {
+		t.Fatalf("expected created open action, got %+v", created.Action)
+	}
+	if created.Action.Source != domain.InterviewBankOpsActionSourceManual || created.Action.CreatedBy != "user-admin" {
+		t.Fatalf("expected manual admin action, got %+v", created.Action)
+	}
+
+	status, env = requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/ops-actions?status=open&type=fill_gap&domain=backend&category=cache&difficulty=L3", adminToken, nil)
+	if status != http.StatusOK {
+		t.Fatalf("list ops actions status=%d message=%s", status, env.Message)
+	}
+	var listed struct {
+		List  []domain.InterviewBankOpsAction `json:"list"`
+		Total int                             `json:"total"`
+	}
+	mustDecodeData(t, env, &listed)
+	if listed.Total != 1 || len(listed.List) != 1 {
+		t.Fatalf("expected one ops action, got %+v", listed)
+	}
+	if listed.List[0].ID != created.Action.ID || listed.List[0].Title != "补齐后端缓存 L3 追问题" {
+		t.Fatalf("unexpected listed action: %+v", listed.List[0])
+	}
+}
+
+func TestAdminInterviewBankOpsActionsRequireAdmin(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	demoToken := loginToken(t, handler, "demo", "demo123")
+
+	_, env := requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/ops-actions", demoToken, nil)
+	if env.Code != http.StatusForbidden {
+		t.Fatalf("student ops action list code=%d", env.Code)
+	}
+	_, env = requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions", demoToken, map[string]interface{}{
+		"action_type": "fill_gap",
+		"priority":    "P1",
+		"title":       "补题动作",
+		"reason":      "回退次数过高。",
+		"domain":      "backend",
+		"category":    "cache",
+		"difficulty":  "L3",
+	})
+	if env.Code != http.StatusForbidden {
+		t.Fatalf("student ops action create code=%d", env.Code)
+	}
+}
+
+func TestAdminInterviewBankOpsActionsValidateCreateRequest(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	adminToken := loginToken(t, handler, "admin", "admin123")
+	validPayload := map[string]interface{}{
+		"action_type": "fill_gap",
+		"priority":    "P1",
+		"title":       "补齐后端缓存 L3 追问题",
+		"reason":      "真实面试检索多次回退。",
+		"domain":      "backend",
+		"category":    "cache",
+		"difficulty":  "L3",
+	}
+
+	cases := []struct {
+		name    string
+		mutate  func(map[string]interface{})
+		message string
+	}{
+		{
+			name:    "missing title",
+			mutate:  func(payload map[string]interface{}) { payload["title"] = "" },
+			message: "title is required",
+		},
+		{
+			name:    "missing reason",
+			mutate:  func(payload map[string]interface{}) { payload["reason"] = " " },
+			message: "reason is required",
+		},
+		{
+			name:    "invalid type",
+			mutate:  func(payload map[string]interface{}) { payload["action_type"] = "repair_everything" },
+			message: "invalid action_type",
+		},
+		{
+			name:    "invalid priority",
+			mutate:  func(payload map[string]interface{}) { payload["priority"] = "urgent" },
+			message: "invalid priority",
+		},
+		{
+			name: "missing target",
+			mutate: func(payload map[string]interface{}) {
+				delete(payload, "domain")
+				delete(payload, "category")
+				delete(payload, "difficulty")
+			},
+			message: "target scope is required",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := map[string]interface{}{}
+			for key, value := range validPayload {
+				payload[key] = value
+			}
+			tc.mutate(payload)
+			status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/admin/interview-bank/ops-actions", adminToken, payload)
+			if status != http.StatusBadRequest || !strings.Contains(env.Message, tc.message) {
+				t.Fatalf("expected %q bad request, got status=%d message=%s", tc.message, status, env.Message)
+			}
+		})
+	}
+}
+
 func TestAdminInterviewBankPublishVersionsAndFailedVectorFilter(t *testing.T) {
 	dataStore := store.NewMemoryStore(auth.HashPassword)
 	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()

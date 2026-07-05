@@ -222,6 +222,122 @@ func cloneInterviewKnowledgeBatch(batch *domain.InterviewKnowledgeBatch) *domain
 	return &copy
 }
 
+func prepareInterviewBankOpsActionForCreate(action domain.InterviewBankOpsAction, now time.Time) (domain.InterviewBankOpsAction, error) {
+	action.ID = strings.TrimSpace(action.ID)
+	if action.ID == "" {
+		action.ID = NewID()
+	}
+	action.ActionType = strings.TrimSpace(action.ActionType)
+	action.Status = strings.TrimSpace(action.Status)
+	action.Priority = strings.ToUpper(strings.TrimSpace(action.Priority))
+	action.Source = strings.TrimSpace(action.Source)
+	action.DedupeKey = strings.TrimSpace(action.DedupeKey)
+	action.Title = strings.TrimSpace(action.Title)
+	action.Reason = strings.TrimSpace(action.Reason)
+	action.Domain = strings.TrimSpace(action.Domain)
+	action.Category = strings.TrimSpace(action.Category)
+	action.Difficulty = strings.ToUpper(strings.TrimSpace(action.Difficulty))
+	action.AtomID = strings.TrimSpace(action.AtomID)
+	action.CreatedBy = strings.TrimSpace(action.CreatedBy)
+	if action.Status == "" {
+		action.Status = domain.InterviewBankOpsActionStatusOpen
+	}
+	if action.Source == "" {
+		action.Source = domain.InterviewBankOpsActionSourceManual
+	}
+	if action.Evidence == nil {
+		action.Evidence = map[string]interface{}{}
+	} else {
+		action.Evidence = cloneJSONMap(action.Evidence)
+	}
+	if action.CreatedAt.IsZero() {
+		action.CreatedAt = now
+	}
+	action.UpdatedAt = now
+	if action.DedupeKey == "" {
+		action.DedupeKey = interviewBankOpsActionDedupeKey(action)
+	}
+	if err := validateInterviewBankOpsAction(action); err != nil {
+		return domain.InterviewBankOpsAction{}, err
+	}
+	return action, nil
+}
+
+func validateInterviewBankOpsAction(action domain.InterviewBankOpsAction) error {
+	if action.Title == "" {
+		return errors.New("title is required")
+	}
+	if action.Reason == "" {
+		return errors.New("reason is required")
+	}
+	if !domain.ValidInterviewBankOpsActionType(action.ActionType) {
+		return errors.New("invalid action_type")
+	}
+	if !domain.ValidInterviewBankOpsActionSource(action.Source) {
+		return errors.New("invalid source")
+	}
+	if !domain.ValidInterviewBankOpsActionStatus(action.Status) {
+		return errors.New("invalid status")
+	}
+	if !domain.ValidInterviewBankOpsActionPriority(action.Priority) {
+		return errors.New("invalid priority")
+	}
+	if action.AtomID == "" && (action.Domain == "" || action.Category == "" || action.Difficulty == "") {
+		return errors.New("target scope is required")
+	}
+	if action.DedupeKey == "" {
+		return errors.New("dedupe_key is required")
+	}
+	return nil
+}
+
+func interviewBankOpsActionDedupeKey(action domain.InterviewBankOpsAction) string {
+	if action.AtomID != "" && action.Domain != "" && action.Category != "" && action.Difficulty != "" {
+		return strings.Join([]string{action.ActionType, "atom", action.AtomID, action.Domain, action.Category, action.Difficulty}, "|")
+	}
+	if action.AtomID != "" {
+		return strings.Join([]string{action.ActionType, "atom", action.AtomID}, "|")
+	}
+	if action.Domain != "" && action.Category != "" && action.Difficulty != "" {
+		return strings.Join([]string{action.ActionType, "combo", action.Domain, action.Category, action.Difficulty}, "|")
+	}
+	return strings.Join([]string{action.ActionType, "manual", action.ID}, "|")
+}
+
+func cloneInterviewBankOpsAction(action *domain.InterviewBankOpsAction) *domain.InterviewBankOpsAction {
+	if action == nil {
+		return nil
+	}
+	copy := *action
+	copy.Evidence = cloneJSONMap(action.Evidence)
+	return &copy
+}
+
+func interviewBankOpsActionMatchesFilter(action domain.InterviewBankOpsAction, filter domain.InterviewBankOpsActionFilter) bool {
+	if !matchesTrimmedFilter(action.Status, filter.Status) {
+		return false
+	}
+	if !matchesTrimmedFilter(action.ActionType, filter.ActionType) {
+		return false
+	}
+	if !matchesTrimmedFilter(action.Priority, filter.Priority) {
+		return false
+	}
+	if !matchesTrimmedFilter(action.Source, filter.Source) {
+		return false
+	}
+	if !matchesTrimmedFilter(action.Domain, filter.Domain) {
+		return false
+	}
+	if !matchesTrimmedFilter(action.Category, filter.Category) {
+		return false
+	}
+	if !matchesTrimmedFilter(action.Difficulty, filter.Difficulty) {
+		return false
+	}
+	return matchesTrimmedFilter(action.AtomID, filter.AtomID)
+}
+
 func cloneInterviewKnowledgeAtomLightSnapshots(items []domain.InterviewKnowledgeAtomLightSnapshot) []domain.InterviewKnowledgeAtomLightSnapshot {
 	if items == nil {
 		return []domain.InterviewKnowledgeAtomLightSnapshot{}

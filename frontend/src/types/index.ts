@@ -719,6 +719,50 @@ export interface InterviewRetrievalAnalyticsResponse {
   recent_fallbacks: InterviewRetrievalLog[]
 }
 
+export interface InterviewBankOpsAction {
+  id: string
+  action_type: string
+  status: string
+  priority: string
+  source: string
+  dedupe_key: string
+  title: string
+  reason: string
+  domain?: string
+  category?: string
+  difficulty?: string
+  atom_id?: string
+  evidence: Record<string, unknown>
+  created_by?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface InterviewBankOpsActionCreateRequest {
+  action_type: string
+  priority: string
+  title: string
+  reason: string
+  domain?: string
+  category?: string
+  difficulty?: string
+  atom_id?: string
+  evidence?: Record<string, unknown>
+}
+
+export interface InterviewBankOpsActionFilters {
+  status?: string
+  type?: string
+  action_type?: string
+  priority?: string
+  source?: string
+  domain?: string
+  category?: string
+  difficulty?: string
+  atom_id?: string
+  limit?: number
+}
+
 export interface InterviewKnowledgeAtomFilters {
   status?: string
   domain?: string

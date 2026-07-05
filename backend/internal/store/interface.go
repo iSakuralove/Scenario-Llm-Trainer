@@ -45,6 +45,8 @@ type Store interface {
 	SaveInterviewRetrievalLog(log domain.InterviewRetrievalLog) domain.InterviewRetrievalLog
 	ListInterviewRetrievalLogs(filter domain.InterviewRetrievalLogFilter) []domain.InterviewRetrievalLog
 	InterviewRetrievalAnalytics(filter domain.InterviewRetrievalLogFilter) domain.InterviewRetrievalAnalytics
+	CreateInterviewBankOpsAction(action domain.InterviewBankOpsAction) (domain.InterviewBankOpsAction, error)
+	ListInterviewBankOpsActions(filter domain.InterviewBankOpsActionFilter) []domain.InterviewBankOpsAction
 
 	AddCommunityPost(post domain.CommunityPost) domain.CommunityPost
 	GetCommunityPost(id string) (*domain.CommunityPost, bool)

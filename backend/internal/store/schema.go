@@ -169,6 +169,34 @@ CREATE INDEX IF NOT EXISTS interview_retrieval_logs_fallback_created_idx
 CREATE INDEX IF NOT EXISTS interview_retrieval_logs_session_round_idx
     ON interview_retrieval_logs(session_id, round);
 
+CREATE TABLE IF NOT EXISTS interview_bank_ops_actions (
+    id TEXT PRIMARY KEY,
+    action_type VARCHAR(32) NOT NULL CHECK (action_type IN ('fill_gap','fix_atom','rebuild_index','review_archive','observe')),
+    status VARCHAR(32) NOT NULL DEFAULT 'open' CHECK (status IN ('open','in_progress','watching','resolved','dismissed','reopened')),
+    priority VARCHAR(2) NOT NULL CHECK (priority IN ('P0','P1','P2','P3')),
+    source VARCHAR(32) NOT NULL CHECK (source IN ('retrieval_analytics','retrieval_log','health_diagnostic','index_status','manual')),
+    dedupe_key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    domain VARCHAR(50),
+    category VARCHAR(64),
+    difficulty VARCHAR(16),
+    atom_id TEXT,
+    evidence JSONB DEFAULT '{}',
+    created_by TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS interview_bank_ops_actions_status_updated_idx
+    ON interview_bank_ops_actions(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS interview_bank_ops_actions_type_priority_idx
+    ON interview_bank_ops_actions(action_type, priority);
+CREATE INDEX IF NOT EXISTS interview_bank_ops_actions_combo_idx
+    ON interview_bank_ops_actions(domain, category, difficulty);
+CREATE INDEX IF NOT EXISTS interview_bank_ops_actions_atom_idx
+    ON interview_bank_ops_actions(atom_id);
+
 CREATE TABLE IF NOT EXISTS community_posts (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id),
@@ -479,5 +507,33 @@ CREATE INDEX IF NOT EXISTS interview_retrieval_logs_fallback_created_idx
     ON interview_retrieval_logs(fallback_used, created_at DESC);
 CREATE INDEX IF NOT EXISTS interview_retrieval_logs_session_round_idx
     ON interview_retrieval_logs(session_id, round);
+
+CREATE TABLE IF NOT EXISTS interview_bank_ops_actions (
+    id TEXT PRIMARY KEY,
+    action_type VARCHAR(32) NOT NULL CHECK (action_type IN ('fill_gap','fix_atom','rebuild_index','review_archive','observe')),
+    status VARCHAR(32) NOT NULL DEFAULT 'open' CHECK (status IN ('open','in_progress','watching','resolved','dismissed','reopened')),
+    priority VARCHAR(2) NOT NULL CHECK (priority IN ('P0','P1','P2','P3')),
+    source VARCHAR(32) NOT NULL CHECK (source IN ('retrieval_analytics','retrieval_log','health_diagnostic','index_status','manual')),
+    dedupe_key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    domain VARCHAR(50),
+    category VARCHAR(64),
+    difficulty VARCHAR(16),
+    atom_id TEXT,
+    evidence JSONB DEFAULT '{}',
+    created_by TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS interview_bank_ops_actions_status_updated_idx
+    ON interview_bank_ops_actions(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS interview_bank_ops_actions_type_priority_idx
+    ON interview_bank_ops_actions(action_type, priority);
+CREATE INDEX IF NOT EXISTS interview_bank_ops_actions_combo_idx
+    ON interview_bank_ops_actions(domain, category, difficulty);
+CREATE INDEX IF NOT EXISTS interview_bank_ops_actions_atom_idx
+    ON interview_bank_ops_actions(atom_id);
 
 `

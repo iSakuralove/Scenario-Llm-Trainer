@@ -297,6 +297,68 @@ func TestMemoryInterviewRetrievalLogsFilterAnalyticsAndClone(t *testing.T) {
 	}
 }
 
+func TestMemoryInterviewBankOpsActionsFilterDefaultsAndClone(t *testing.T) {
+	store := NewMemoryStore(func(password string) string { return "hash:" + password })
+
+	saved, err := store.CreateInterviewBankOpsAction(domain.InterviewBankOpsAction{
+		ActionType: domain.InterviewBankOpsActionTypeFillGap,
+		Priority:   "p1",
+		Title:      "补齐后端缓存 L3 追问题",
+		Reason:     "真实面试检索多次回退。",
+		Domain:     "backend",
+		Category:   "cache",
+		Difficulty: "l3",
+		Evidence:   map[string]interface{}{"fallback_count": float64(4)},
+		CreatedBy:  "admin-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.ID == "" || saved.Status != domain.InterviewBankOpsActionStatusOpen || saved.Source != domain.InterviewBankOpsActionSourceManual {
+		t.Fatalf("expected default open manual action, got %+v", saved)
+	}
+	if saved.Priority != "P1" || saved.Difficulty != "L3" || saved.DedupeKey == "" {
+		t.Fatalf("expected normalized priority/difficulty/dedupe, got %+v", saved)
+	}
+	saved.Evidence["fallback_count"] = float64(99)
+
+	if _, err := store.CreateInterviewBankOpsAction(domain.InterviewBankOpsAction{
+		ActionType: domain.InterviewBankOpsActionTypeFixAtom,
+		Priority:   "P2",
+		Title:      "观察低命中原子",
+		Reason:     "长期未命中，先人工检查。",
+		AtomID:     "atom-low-hit",
+		CreatedBy:  "admin-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	items := store.ListInterviewBankOpsActions(domain.InterviewBankOpsActionFilter{
+		Status:     domain.InterviewBankOpsActionStatusOpen,
+		ActionType: domain.InterviewBankOpsActionTypeFillGap,
+		Priority:   "P1",
+		Domain:     "backend",
+		Category:   "cache",
+		Difficulty: "L3",
+		Limit:      10,
+	})
+	if len(items) != 1 || items[0].ID != saved.ID {
+		t.Fatalf("expected one filtered fill_gap action, got %+v", items)
+	}
+	if items[0].Evidence["fallback_count"] != float64(4) {
+		t.Fatalf("expected saved evidence to be clone-safe, got %+v", items[0].Evidence)
+	}
+	items[0].Evidence["fallback_count"] = float64(88)
+	again := store.ListInterviewBankOpsActions(domain.InterviewBankOpsActionFilter{AtomID: "atom-low-hit", Limit: 10})
+	if len(again) != 1 || again[0].ActionType != domain.InterviewBankOpsActionTypeFixAtom {
+		t.Fatalf("expected atom filter to return fix_atom action, got %+v", again)
+	}
+	all := store.ListInterviewBankOpsActions(domain.InterviewBankOpsActionFilter{ActionType: domain.InterviewBankOpsActionTypeFillGap, Limit: 10})
+	if len(all) != 1 || all[0].Evidence["fallback_count"] != float64(4) {
+		t.Fatalf("list results must not mutate stored evidence, got %+v", all)
+	}
+}
+
 func sampleInterviewKnowledgeAtom(id string) domain.InterviewKnowledgeAtom {
 	return domain.InterviewKnowledgeAtom{
 		ID:            id,

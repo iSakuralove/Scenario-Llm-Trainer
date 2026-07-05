@@ -142,6 +142,18 @@ type interviewKnowledgeAtomArchiveRequest struct {
 	Reason string `json:"reason"`
 }
 
+type interviewBankOpsActionCreateRequest struct {
+	ActionType string                 `json:"action_type"`
+	Priority   string                 `json:"priority"`
+	Title      string                 `json:"title"`
+	Reason     string                 `json:"reason"`
+	Domain     string                 `json:"domain"`
+	Category   string                 `json:"category"`
+	Difficulty string                 `json:"difficulty"`
+	AtomID     string                 `json:"atom_id"`
+	Evidence   map[string]interface{} `json:"evidence"`
+}
+
 type interviewKnowledgeHealthSummary struct {
 	TotalAtoms          int `json:"total_atoms"`
 	PublishedAtoms      int `json:"published_atoms"`
@@ -364,6 +376,43 @@ func (s *Server) handleAdminInterviewBank(w http.ResponseWriter, r *http.Request
 		writeOK(w, response)
 		return
 	}
+	if len(parts) == 1 && parts[0] == "ops-actions" && r.Method == http.MethodGet {
+		filter := parseInterviewBankOpsActionFilter(r)
+		items := s.store.ListInterviewBankOpsActions(filter)
+		writeOK(w, map[string]interface{}{"list": items, "total": len(items), "filters": filter})
+		return
+	}
+	if len(parts) == 1 && parts[0] == "ops-actions" && r.Method == http.MethodPost {
+		var req interviewBankOpsActionCreateRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		action, err := s.store.CreateInterviewBankOpsAction(domain.InterviewBankOpsAction{
+			ActionType: req.ActionType,
+			Priority:   req.Priority,
+			Source:     domain.InterviewBankOpsActionSourceManual,
+			Status:     domain.InterviewBankOpsActionStatusOpen,
+			Title:      req.Title,
+			Reason:     req.Reason,
+			Domain:     req.Domain,
+			Category:   req.Category,
+			Difficulty: req.Difficulty,
+			AtomID:     req.AtomID,
+			Evidence:   req.Evidence,
+			CreatedBy:  user.ID,
+		})
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.audit(r, user, "admin.interview_bank_ops_action_create", "interview_bank_ops_action", action.ID, map[string]string{
+			"action_type": action.ActionType,
+			"priority":    action.Priority,
+			"source":      action.Source,
+		})
+		writeOK(w, map[string]interface{}{"action": action})
+		return
+	}
 	if len(parts) == 1 && parts[0] == "retrieval-logs" && r.Method == http.MethodGet {
 		filter, err := parseInterviewRetrievalLogFilter(r, 50, 200)
 		if err != nil {
@@ -477,6 +526,31 @@ func parseInterviewRetrievalLogFilter(r *http.Request, defaultLimit, maxLimit in
 		filter.FallbackUsed = &parsed
 	}
 	return filter, nil
+}
+
+func parseInterviewBankOpsActionFilter(r *http.Request) domain.InterviewBankOpsActionFilter {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	actionType := r.URL.Query().Get("type")
+	if actionType == "" {
+		actionType = r.URL.Query().Get("action_type")
+	}
+	return domain.InterviewBankOpsActionFilter{
+		Status:     r.URL.Query().Get("status"),
+		ActionType: actionType,
+		Priority:   r.URL.Query().Get("priority"),
+		Source:     r.URL.Query().Get("source"),
+		Domain:     r.URL.Query().Get("domain"),
+		Category:   r.URL.Query().Get("category"),
+		Difficulty: r.URL.Query().Get("difficulty"),
+		AtomID:     r.URL.Query().Get("atom_id"),
+		Limit:      limit,
+	}
 }
 
 func (s *Server) updateInterviewKnowledgeAtom(atomID string, req interviewKnowledgeAtomUpdateRequest, user *domain.User) (domain.InterviewKnowledgeAtom, domain.InterviewKnowledgeAtomVersion, error) {

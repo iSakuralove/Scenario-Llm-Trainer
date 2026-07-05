@@ -45,10 +45,18 @@ const interviewKnowledgeBatchSelectSQL = `
 `
 
 const interviewRetrievalLogSelectSQL = `
-	SELECT id, COALESCE(session_id, ''), round, COALESCE(query_text, ''),
-	       COALESCE(matched_atoms, '[]'::jsonb), fallback_used, COALESCE(error_message, ''), created_at
-	FROM interview_retrieval_logs
-`
+		SELECT id, COALESCE(session_id, ''), round, COALESCE(query_text, ''),
+		       COALESCE(matched_atoms, '[]'::jsonb), fallback_used, COALESCE(error_message, ''), created_at
+		FROM interview_retrieval_logs
+	`
+
+const interviewBankOpsActionSelectSQL = `
+		SELECT id, action_type, status, priority, source, dedupe_key, title, reason,
+		       COALESCE(domain, ''), COALESCE(category, ''), COALESCE(difficulty, ''),
+		       COALESCE(atom_id, ''), COALESCE(evidence, '{}'::jsonb), COALESCE(created_by, ''),
+		       created_at, updated_at
+		FROM interview_bank_ops_actions
+	`
 
 func NewPostgresStore(ctx context.Context, databaseURL string, hashPassword func(string) string) (*PostgresStore, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -877,6 +885,92 @@ func (s *PostgresStore) InterviewRetrievalAnalytics(filter domain.InterviewRetri
 	logs := s.listInterviewRetrievalLogsWindow(filter, limit)
 	atoms := s.ListInterviewKnowledgeAtoms(domain.InterviewKnowledgeAtomFilter{})
 	return interviewRetrievalAnalytics(logs, atoms, filter, s.interviewRetrievalAtomByID, s.interviewRetrievalSessionSnapshotByID)
+}
+
+func (s *PostgresStore) CreateInterviewBankOpsAction(action domain.InterviewBankOpsAction) (domain.InterviewBankOpsAction, error) {
+	prepared, err := prepareInterviewBankOpsActionForCreate(action, time.Now())
+	if err != nil {
+		return domain.InterviewBankOpsAction{}, err
+	}
+	evidenceJSON, err := marshal(prepared.Evidence)
+	if err != nil {
+		return domain.InterviewBankOpsAction{}, err
+	}
+	_, err = s.pool.Exec(context.Background(), `
+		INSERT INTO interview_bank_ops_actions
+		    (id, action_type, status, priority, source, dedupe_key, title, reason, domain, category,
+		     difficulty, atom_id, evidence, created_by, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+		ON CONFLICT (id) DO UPDATE SET
+		    action_type = EXCLUDED.action_type,
+		    status = EXCLUDED.status,
+		    priority = EXCLUDED.priority,
+		    source = EXCLUDED.source,
+		    dedupe_key = EXCLUDED.dedupe_key,
+		    title = EXCLUDED.title,
+		    reason = EXCLUDED.reason,
+		    domain = EXCLUDED.domain,
+		    category = EXCLUDED.category,
+		    difficulty = EXCLUDED.difficulty,
+		    atom_id = EXCLUDED.atom_id,
+		    evidence = EXCLUDED.evidence,
+		    created_by = EXCLUDED.created_by,
+		    updated_at = EXCLUDED.updated_at
+	`, prepared.ID, prepared.ActionType, prepared.Status, prepared.Priority, prepared.Source, prepared.DedupeKey,
+		prepared.Title, prepared.Reason, emptyToNil(prepared.Domain), emptyToNil(prepared.Category),
+		emptyToNil(prepared.Difficulty), emptyToNil(prepared.AtomID), evidenceJSON, emptyToNil(prepared.CreatedBy),
+		prepared.CreatedAt, prepared.UpdatedAt)
+	if err != nil {
+		return domain.InterviewBankOpsAction{}, err
+	}
+	return *cloneInterviewBankOpsAction(&prepared), nil
+}
+
+func (s *PostgresStore) ListInterviewBankOpsActions(filter domain.InterviewBankOpsActionFilter) []domain.InterviewBankOpsAction {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	query := interviewBankOpsActionSelectSQL
+	clauses := []string{}
+	args := []interface{}{}
+	addFilter := func(column, value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		args = append(args, value)
+		clauses = append(clauses, fmt.Sprintf("%s = $%d", column, len(args)))
+	}
+	addFilter("status", filter.Status)
+	addFilter("action_type", filter.ActionType)
+	addFilter("priority", strings.ToUpper(strings.TrimSpace(filter.Priority)))
+	addFilter("source", filter.Source)
+	addFilter("domain", filter.Domain)
+	addFilter("category", filter.Category)
+	addFilter("difficulty", strings.ToUpper(strings.TrimSpace(filter.Difficulty)))
+	addFilter("atom_id", filter.AtomID)
+	if len(clauses) > 0 {
+		query += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	args = append(args, limit)
+	query += fmt.Sprintf(" ORDER BY updated_at DESC, id ASC LIMIT $%d", len(args))
+	rows, err := s.pool.Query(context.Background(), query, args...)
+	if err != nil {
+		return []domain.InterviewBankOpsAction{}
+	}
+	defer rows.Close()
+	items := []domain.InterviewBankOpsAction{}
+	for rows.Next() {
+		item, err := scanInterviewBankOpsActionRows(rows)
+		if err == nil {
+			items = append(items, item)
+		}
+	}
+	return items
 }
 
 func (s *PostgresStore) listInterviewRetrievalLogsWindow(filter domain.InterviewRetrievalLogFilter, limit int) []domain.InterviewRetrievalLog {
@@ -1893,6 +1987,22 @@ func scanInterviewRetrievalLogRows(rows pgx.Rows) (domain.InterviewRetrievalLog,
 		item.MatchedAtoms = []domain.InterviewKnowledgeAtomLightSnapshot{}
 	}
 	return cloneInterviewRetrievalLog(item), nil
+}
+
+func scanInterviewBankOpsActionRows(rows pgx.Rows) (domain.InterviewBankOpsAction, error) {
+	var item domain.InterviewBankOpsAction
+	var evidenceJSON []byte
+	err := rows.Scan(&item.ID, &item.ActionType, &item.Status, &item.Priority, &item.Source,
+		&item.DedupeKey, &item.Title, &item.Reason, &item.Domain, &item.Category, &item.Difficulty,
+		&item.AtomID, &evidenceJSON, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
+	if err != nil {
+		return item, err
+	}
+	_ = unmarshal(evidenceJSON, &item.Evidence)
+	if item.Evidence == nil {
+		item.Evidence = map[string]interface{}{}
+	}
+	return *cloneInterviewBankOpsAction(&item), nil
 }
 
 func scanInterviewSession(row scanner) (*domain.InterviewSession, bool) {

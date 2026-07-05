@@ -153,3 +153,35 @@ func TestLegacyCompatibilitySQLBackfillsInterviewSessionSnapshots(t *testing.T) 
 		}
 	}
 }
+
+func TestInterviewBankOpsActionSchemaIsRuntimeAndDockerAligned(t *testing.T) {
+	root := filepath.Join("..", "..", "migrations", "001_schema.sql")
+	content, err := os.ReadFile(root)
+	if err != nil {
+		t.Fatalf("read docker init schema: %v", err)
+	}
+	dockerSchema := string(content)
+	for _, required := range []string{
+		"CREATE TABLE IF NOT EXISTS interview_bank_ops_actions",
+		"action_type VARCHAR(32) NOT NULL CHECK",
+		"'fill_gap'",
+		"'rebuild_index'",
+		"status VARCHAR(32) NOT NULL DEFAULT 'open'",
+		"priority VARCHAR(2) NOT NULL CHECK",
+		"source VARCHAR(32) NOT NULL CHECK",
+		"dedupe_key TEXT NOT NULL",
+		"evidence JSONB DEFAULT '{}'",
+		"interview_bank_ops_actions_status_updated_idx",
+		"interview_bank_ops_actions_combo_idx",
+	} {
+		if !strings.Contains(SchemaSQL, required) {
+			t.Fatalf("runtime schema must include ops action fragment %q", required)
+		}
+		if !strings.Contains(LegacyCompatibilitySQL, required) {
+			t.Fatalf("legacy migration must include ops action fragment %q", required)
+		}
+		if !strings.Contains(dockerSchema, required) {
+			t.Fatalf("docker init schema must include ops action fragment %q", required)
+		}
+	}
+}

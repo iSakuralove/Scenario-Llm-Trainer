@@ -109,6 +109,107 @@ type InterviewKnowledgeSummary struct {
 	LastEditedAt         *time.Time `json:"last_edited_at,omitempty"`
 }
 
+const (
+	InterviewBankOpsActionTypeFillGap       = "fill_gap"
+	InterviewBankOpsActionTypeFixAtom       = "fix_atom"
+	InterviewBankOpsActionTypeRebuildIndex  = "rebuild_index"
+	InterviewBankOpsActionTypeReviewArchive = "review_archive"
+	InterviewBankOpsActionTypeObserve       = "observe"
+
+	InterviewBankOpsActionSourceRetrievalAnalytics = "retrieval_analytics"
+	InterviewBankOpsActionSourceRetrievalLog       = "retrieval_log"
+	InterviewBankOpsActionSourceHealthDiagnostic   = "health_diagnostic"
+	InterviewBankOpsActionSourceIndexStatus        = "index_status"
+	InterviewBankOpsActionSourceManual             = "manual"
+
+	InterviewBankOpsActionStatusOpen       = "open"
+	InterviewBankOpsActionStatusInProgress = "in_progress"
+	InterviewBankOpsActionStatusWatching   = "watching"
+	InterviewBankOpsActionStatusResolved   = "resolved"
+	InterviewBankOpsActionStatusDismissed  = "dismissed"
+	InterviewBankOpsActionStatusReopened   = "reopened"
+)
+
+func ValidInterviewBankOpsActionType(value string) bool {
+	switch value {
+	case InterviewBankOpsActionTypeFillGap,
+		InterviewBankOpsActionTypeFixAtom,
+		InterviewBankOpsActionTypeRebuildIndex,
+		InterviewBankOpsActionTypeReviewArchive,
+		InterviewBankOpsActionTypeObserve:
+		return true
+	default:
+		return false
+	}
+}
+
+func ValidInterviewBankOpsActionSource(value string) bool {
+	switch value {
+	case InterviewBankOpsActionSourceRetrievalAnalytics,
+		InterviewBankOpsActionSourceRetrievalLog,
+		InterviewBankOpsActionSourceHealthDiagnostic,
+		InterviewBankOpsActionSourceIndexStatus,
+		InterviewBankOpsActionSourceManual:
+		return true
+	default:
+		return false
+	}
+}
+
+func ValidInterviewBankOpsActionStatus(value string) bool {
+	switch value {
+	case InterviewBankOpsActionStatusOpen,
+		InterviewBankOpsActionStatusInProgress,
+		InterviewBankOpsActionStatusWatching,
+		InterviewBankOpsActionStatusResolved,
+		InterviewBankOpsActionStatusDismissed,
+		InterviewBankOpsActionStatusReopened:
+		return true
+	default:
+		return false
+	}
+}
+
+func ValidInterviewBankOpsActionPriority(value string) bool {
+	switch value {
+	case "P0", "P1", "P2", "P3":
+		return true
+	default:
+		return false
+	}
+}
+
+type InterviewBankOpsAction struct {
+	ID         string                 `json:"id"`
+	ActionType string                 `json:"action_type"`
+	Status     string                 `json:"status"`
+	Priority   string                 `json:"priority"`
+	Source     string                 `json:"source"`
+	DedupeKey  string                 `json:"dedupe_key"`
+	Title      string                 `json:"title"`
+	Reason     string                 `json:"reason"`
+	Domain     string                 `json:"domain,omitempty"`
+	Category   string                 `json:"category,omitempty"`
+	Difficulty string                 `json:"difficulty,omitempty"`
+	AtomID     string                 `json:"atom_id,omitempty"`
+	Evidence   map[string]interface{} `json:"evidence"`
+	CreatedBy  string                 `json:"created_by,omitempty"`
+	CreatedAt  time.Time              `json:"created_at"`
+	UpdatedAt  time.Time              `json:"updated_at"`
+}
+
+type InterviewBankOpsActionFilter struct {
+	Status     string
+	ActionType string
+	Priority   string
+	Source     string
+	Domain     string
+	Category   string
+	Difficulty string
+	AtomID     string
+	Limit      int
+}
+
 type InterviewKnowledgeAtomLightSnapshot struct {
 	AtomID   string `json:"atom_id"`
 	Version  int    `json:"version"`

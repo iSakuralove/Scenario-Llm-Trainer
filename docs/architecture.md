@@ -71,7 +71,7 @@
 面试题库治理采用“主表保存当前生效内容，版本表保存历史快照”的数据边界：
 
 - `backend/internal/domain/interview_bank.go`
-  定义 `InterviewKnowledgeAtom`、`InterviewKnowledgeAtomVersion`、`InterviewKnowledgeBatch`、`InterviewRetrievalLog` 等题库治理领域对象。
+  定义 `InterviewKnowledgeAtom`、`InterviewKnowledgeAtomVersion`、`InterviewKnowledgeBatch`、`InterviewRetrievalLog`、`InterviewBankOpsAction` 等题库治理领域对象。
 - `backend/internal/store`
   通过 `SaveInterviewKnowledgeAtomVersioned` 统一写入导入、重复导入、在线编辑、归档和恢复归档产生的版本事件；MemoryStore 与 PostgresStore 必须保持同一版本推进口径。
 - `interview_knowledge_atoms`
@@ -84,6 +84,8 @@
   保存追问命中的轻量知识原子快照，只保留元数据，不保存大段正文。
 - `interview_retrieval_logs`
   保存真实面试追问检索的轻量运营日志，只记录 `session_id`、轮次、脱敏截断 query、命中原子快照、回退状态、错误摘要和创建时间，用于管理员运营看板聚合命中率、回退率和低效资源。
+- `interview_bank_ops_actions`
+  保存管理员需要跟进的题库运营动作，记录动作类型、状态、优先级、来源、去重键、标题、原因、关联组合、关联原子、轻量证据和创建人；首期只支持管理员手工创建与 open 队列读取，不自动修题、归档或重建索引。
 
 版本快照只包含稳定内容字段：`id`、`title`、`subject`、`domain`、`difficulty`、`category`、`question_role`、`sourceRef`、`tags`、`principles`、`pitfalls`、`followUpPaths`、`status`。`vector_status` 和 `last_indexed_at` 属于运行时索引状态，不进入版本快照。
 
@@ -123,6 +125,10 @@
   返回最近真实追问检索日志，支持 `domain`、`category`、`difficulty`、`fallback_used` 和 `limit` 过滤；响应只包含脱敏截断后的 query、轻量命中原子和回退摘要。
 - `GET /api/v1/admin/interview-bank/retrieval-analytics`
   从有限窗口内聚合真实检索次数、命中率、回退率、热门命中原子、低/未命中原子、回退组合排行和最近回退原因，供管理端题库运营面板使用。
+- `GET /api/v1/admin/interview-bank/ops-actions`
+  返回题库运营动作列表，支持按 `status`、`action_type`、`priority`、`source`、`domain`、`category`、`difficulty`、`atom_id` 和 `limit` 过滤；前端首期默认展示 open 队列。
+- `POST /api/v1/admin/interview-bank/ops-actions`
+  支持管理员手工创建题库运营动作；后端固定写入 `source=manual`、默认 `status=open`，并保存非空 `dedupe_key` 和轻量证据，不隐式修改题库内容或索引状态。
 
 题库向量索引采用独立的 `interview_knowledge_vector_documents` 表，不复用场景题的 `scenario_vector_documents`，避免 `question_id` / `source_version` 语义混用。重建接口只对 `status=published` 的 atom 调用 embedding 并写入向量文档；`draft` / `archived` 被请求重建时会删除旧向量文档并返回 skipped，不进入可检索索引。成功重建会将 `vector_status` 更新为 `indexed` 并写入 `last_indexed_at`；失败只将 `vector_status` 更新为 `failed`，不覆盖上一次成功索引时间，也不新增内容版本。导入发布链路仍不自动触发 embedding，避免发布接口受外部 provider 可用性影响。
 

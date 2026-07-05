@@ -9,6 +9,7 @@ import {
   History,
   ListFilter,
   PackageCheck,
+  Plus,
   RefreshCw,
   RotateCcw,
   Save,
@@ -19,6 +20,8 @@ import { api } from '../../api/client'
 import { Loading, Metric } from '../../components/common'
 import { useToken } from '../../lib/auth'
 import type {
+  InterviewBankOpsAction,
+  InterviewBankOpsActionCreateRequest,
   InterviewKnowledgeAtom,
   InterviewKnowledgeAtomFilters,
   InterviewKnowledgeAtomUpdateRequest,
@@ -90,6 +93,28 @@ interface RetrievalPreviewForm {
   limit: number
 }
 
+interface OpsActionForm {
+  action_type: string
+  priority: string
+  title: string
+  reason: string
+  domain: string
+  category: string
+  difficulty: string
+  atom_id: string
+}
+
+const emptyOpsActionForm: OpsActionForm = {
+  action_type: 'fill_gap',
+  priority: 'P1',
+  title: '',
+  reason: '',
+  domain: 'backend',
+  category: 'cache',
+  difficulty: 'L3',
+  atom_id: '',
+}
+
 export function InterviewBankAdminPage() {
   const token = useToken()
   const [summary, setSummary] = useState<InterviewKnowledgeSummary | null>(null)
@@ -128,18 +153,22 @@ export function InterviewBankAdminPage() {
   const [retrievalPreview, setRetrievalPreview] = useState<InterviewKnowledgeRetrievalPreviewResponse | null>(null)
   const [retrievalAnalytics, setRetrievalAnalytics] = useState<InterviewRetrievalAnalyticsResponse | null>(null)
   const [retrievalLogs, setRetrievalLogs] = useState<InterviewRetrievalLog[]>([])
+  const [opsActions, setOpsActions] = useState<InterviewBankOpsAction[]>([])
+  const [opsActionForm, setOpsActionForm] = useState<OpsActionForm>(emptyOpsActionForm)
+  const [isCreatingOpsAction, setIsCreatingOpsAction] = useState(false)
 
   const loadData = useCallback(async () => {
     setIsLoading(true)
     setError('')
     try {
-      const [nextSummary, nextHealth, atomData, batchData, nextRetrievalAnalytics, nextRetrievalLogs] = await Promise.all([
+      const [nextSummary, nextHealth, atomData, batchData, nextRetrievalAnalytics, nextRetrievalLogs, nextOpsActions] = await Promise.all([
         api.adminInterviewBankSummary(token),
         api.adminInterviewBankHealth(token),
         api.adminInterviewBankAtoms(token, filters),
         api.adminInterviewBankBatches(token, 20),
         api.adminInterviewBankRetrievalAnalytics(token, { limit: 500 }),
         api.adminInterviewBankRetrievalLogs(token, { limit: 20 }),
+        api.adminInterviewBankOpsActions(token, { status: 'open', limit: 20 }),
       ])
       setSummary(nextSummary)
       setHealth(nextHealth)
@@ -148,6 +177,7 @@ export function InterviewBankAdminPage() {
       setBatches(batchData.list ?? [])
       setRetrievalAnalytics(nextRetrievalAnalytics)
       setRetrievalLogs(nextRetrievalLogs.list ?? [])
+      setOpsActions(nextOpsActions.list ?? [])
       setSelectedAtomIds((current) => {
         const visibleIDs = new Set((atomData.list ?? []).map((atom) => atom.id))
         return new Set([...current].filter((id) => visibleIDs.has(id)))
@@ -221,6 +251,73 @@ export function InterviewBankAdminPage() {
       difficulty: combo.difficulty,
     }))
     setMessage('已套用回退组合到题库筛选和检索预览')
+  }
+
+  function updateOpsActionForm<K extends keyof OpsActionForm>(key: K, value: OpsActionForm[K]) {
+    setOpsActionForm((current) => ({ ...current, [key]: value }))
+  }
+
+  function applyOpsActionTarget(action: InterviewBankOpsAction) {
+    if (action.domain || action.category || action.difficulty) {
+      setFilters({
+        status: '',
+        domain: action.domain ?? '',
+        category: action.category ?? '',
+        difficulty: action.difficulty ?? '',
+        question_role: '',
+        vector_status: '',
+        page_size: 20,
+      })
+      setRetrievalPreviewForm((current) => ({
+        ...current,
+        domain: action.domain ?? current.domain,
+        category: action.category ?? current.category,
+        difficulty: action.difficulty ?? current.difficulty,
+      }))
+      setMessage('已套用运营动作目标到题库筛选和检索预览')
+    }
+    if (action.atom_id) {
+      void handleOpenAtom(action.atom_id)
+    }
+  }
+
+  async function handleCreateOpsAction() {
+    setError('')
+    setMessage('')
+    const title = opsActionForm.title.trim()
+    const reason = opsActionForm.reason.trim()
+    const atomID = opsActionForm.atom_id.trim()
+    const hasCombination = Boolean(opsActionForm.domain.trim() && opsActionForm.category.trim() && opsActionForm.difficulty.trim())
+    if (!title || !reason) {
+      setError('请填写动作标题和原因')
+      return
+    }
+    if (!atomID && !hasCombination) {
+      setError('请填写组合目标或关联原子 ID')
+      return
+    }
+    const payload: InterviewBankOpsActionCreateRequest = {
+      action_type: opsActionForm.action_type,
+      priority: opsActionForm.priority,
+      title,
+      reason,
+      domain: opsActionForm.domain.trim() || undefined,
+      category: opsActionForm.category.trim() || undefined,
+      difficulty: opsActionForm.difficulty.trim() || undefined,
+      atom_id: atomID || undefined,
+      evidence: { source: 'manual_admin_form' },
+    }
+    try {
+      setIsCreatingOpsAction(true)
+      const result = await api.createInterviewBankOpsAction(token, payload)
+      setOpsActionForm(emptyOpsActionForm)
+      setMessage(`已创建运营动作：${result.action.title}`)
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '运营动作创建失败')
+    } finally {
+      setIsCreatingOpsAction(false)
+    }
   }
 
   function updateRetrievalPreviewForm<K extends keyof RetrievalPreviewForm>(key: K, value: RetrievalPreviewForm[K]) {
@@ -572,6 +669,15 @@ export function InterviewBankAdminPage() {
           onOpenAtom={(atomID) => void handleOpenAtom(atomID)}
           onApplyCombination={applyRetrievalCombination}
         />
+        <OpsActionPanel
+          actions={opsActions}
+          form={opsActionForm}
+          isCreating={isCreatingOpsAction}
+          onChange={updateOpsActionForm}
+          onCreate={() => void handleCreateOpsAction()}
+          onOpenAtom={(atomID) => void handleOpenAtom(atomID)}
+          onApplyTarget={applyOpsActionTarget}
+        />
       </div>
 
       <div className="interview-bank-main-grid">
@@ -903,6 +1009,117 @@ function RetrievalPreviewPanel({
           )}
         </div>
       ) : null}
+    </section>
+  )
+}
+
+function OpsActionPanel({
+  actions,
+  form,
+  isCreating,
+  onChange,
+  onCreate,
+  onOpenAtom,
+  onApplyTarget,
+}: {
+  actions: InterviewBankOpsAction[]
+  form: OpsActionForm
+  isCreating: boolean
+  onChange: <K extends keyof OpsActionForm>(key: K, value: OpsActionForm[K]) => void
+  onCreate: () => void
+  onOpenAtom: (atomID: string) => void
+  onApplyTarget: (action: InterviewBankOpsAction) => void
+}) {
+  return (
+    <section className="panel interview-bank-ops-action-panel">
+      <div className="interview-bank-list-title">
+        <div>
+          <div className="panel-title"><CheckCircle2 size={18} /> 运营动作</div>
+          <p className="interview-bank-panel-subtitle">保存管理员要跟进的题库建设动作，当前仅展示 open 队列。</p>
+        </div>
+        <span className="interview-bank-retrieval-window">{actions.length} 个 open</span>
+      </div>
+
+      <div className="interview-bank-ops-action-form">
+        <label className="span-2">
+          标题
+          <input value={form.title} onChange={(event) => onChange('title', event.target.value)} placeholder="补齐后端缓存 L3 追问题" />
+        </label>
+        <label>
+          类型
+          <select value={form.action_type} onChange={(event) => onChange('action_type', event.target.value)}>
+            {['fill_gap', 'fix_atom', 'rebuild_index', 'review_archive', 'observe'].map((value) => (
+              <option value={value} key={value}>{opsActionTypeLabel(value)}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          优先级
+          <select value={form.priority} onChange={(event) => onChange('priority', event.target.value)}>
+            {['P0', 'P1', 'P2', 'P3'].map((value) => <option value={value} key={value}>{value}</option>)}
+          </select>
+        </label>
+        <label>
+          领域
+          <input value={form.domain} onChange={(event) => onChange('domain', event.target.value)} placeholder="backend" />
+        </label>
+        <label>
+          分类
+          <select value={form.category} onChange={(event) => onChange('category', event.target.value)}>
+            {categoryOptions.map((option) => <option key={option.value || 'empty'} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>
+        <label>
+          难度
+          <select value={form.difficulty} onChange={(event) => onChange('difficulty', event.target.value)}>
+            {difficultyOptions.map((value) => <option key={value || 'empty'} value={value}>{value || '全部难度'}</option>)}
+          </select>
+        </label>
+        <label>
+          原子 ID
+          <input value={form.atom_id} onChange={(event) => onChange('atom_id', event.target.value)} placeholder="可选" />
+        </label>
+        <label className="span-4">
+          原因
+          <textarea value={form.reason} onChange={(event) => onChange('reason', event.target.value)} rows={3} placeholder="说明触发该动作的真实信号或人工判断" />
+        </label>
+        <div className="interview-bank-ops-action-submit">
+          <button className="primary-button compact" type="button" onClick={onCreate} disabled={isCreating}>
+            <Plus size={16} />{isCreating ? '创建中' : '创建动作'}
+          </button>
+        </div>
+      </div>
+
+      {actions.length > 0 ? (
+        <div className="interview-bank-ops-action-list">
+          {actions.map((action) => (
+            <div className="interview-bank-ops-action-row" key={action.id}>
+              <div>
+                <strong>{action.title}</strong>
+                <span>{opsActionTypeLabel(action.action_type)} · {opsActionStatusLabel(action.status)} · {action.priority} · {opsActionTargetLabel(action)}</span>
+                <small>{action.reason} · {formatOptionalDate(action.updated_at)}</small>
+              </div>
+              <div className="interview-bank-ops-action-row-actions">
+                {(action.domain || action.category || action.difficulty) ? (
+                  <button className="ghost-button compact" type="button" onClick={() => onApplyTarget(action)}>
+                    <Search size={15} />套用
+                  </button>
+                ) : null}
+                {action.atom_id ? (
+                  <button className="ghost-button compact" type="button" onClick={() => onOpenAtom(action.atom_id || '')}>
+                    <Eye size={15} />查看
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="interview-bank-empty-row">
+          <strong>暂无运营动作</strong>
+          <span>手工创建动作后会进入 open 队列。</span>
+        </div>
+      )}
     </section>
   )
 }
@@ -1481,6 +1698,54 @@ function compactCategoryLabel(value?: string) {
 
 function retrievalCombinationLabel(combo: InterviewRetrievalFallbackCombination) {
   return `${combo.domain || '未填领域'} · ${compactCategoryLabel(combo.category)} · ${combo.difficulty || '未填难度'}`
+}
+
+function opsActionTypeLabel(value: string) {
+  switch (value) {
+    case 'fill_gap':
+      return '补题'
+    case 'fix_atom':
+      return '修题'
+    case 'rebuild_index':
+      return '重建索引'
+    case 'review_archive':
+      return '归档观察'
+    case 'observe':
+      return '观察'
+    default:
+      return value
+  }
+}
+
+function opsActionStatusLabel(value: string) {
+  switch (value) {
+    case 'open':
+      return '待处理'
+    case 'in_progress':
+      return '处理中'
+    case 'watching':
+      return '观察中'
+    case 'resolved':
+      return '已解决'
+    case 'dismissed':
+      return '已忽略'
+    case 'reopened':
+      return '已重开'
+    default:
+      return value
+  }
+}
+
+function opsActionTargetLabel(action: InterviewBankOpsAction) {
+  const combo = [
+    action.domain || '',
+    action.category ? compactCategoryLabel(action.category) : '',
+    action.difficulty || '',
+  ].filter(Boolean).join(' · ')
+  if (action.atom_id && combo) {
+    return `${combo} · ${action.atom_id}`
+  }
+  return combo || action.atom_id || '未填目标'
 }
 
 function docTypeLabel(value: string) {

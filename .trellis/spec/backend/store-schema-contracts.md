@@ -139,6 +139,84 @@ _ = store.SaveInterviewRetrievalLog(log)
 
 The runtime stores only a bounded, sanitized retrieval query and treats logging as non-blocking telemetry.
 
+## Scenario: Interview Bank Ops Action Queue
+
+### 1. Scope / Trigger
+
+- Trigger: 新增或修改题库运营动作、动作列表、动作候选、动作状态流转、`interview_bank_ops_actions` schema 或管理端运营动作面板。
+- Applies to: `backend/internal/domain/interview_bank.go`, `backend/internal/httpapi/handlers_interview_bank.go`, `backend/internal/store`, `backend/internal/store/schema.go`, `backend/migrations/001_schema.sql`, `frontend/src/api/client.ts`, `frontend/src/types/index.ts`, `frontend/src/features/interviewBank`。
+
+### 2. Signatures
+
+- Store create: `CreateInterviewBankOpsAction(action domain.InterviewBankOpsAction) (domain.InterviewBankOpsAction, error)`。
+- Store list: `ListInterviewBankOpsActions(filter domain.InterviewBankOpsActionFilter) []domain.InterviewBankOpsAction`。
+- API list: `GET /api/v1/admin/interview-bank/ops-actions`。
+- API manual create: `POST /api/v1/admin/interview-bank/ops-actions`。
+- DB table: `interview_bank_ops_actions(id TEXT PRIMARY KEY, action_type TEXT, status TEXT, priority TEXT, source TEXT, dedupe_key TEXT, title TEXT, reason TEXT, domain TEXT, category TEXT, difficulty TEXT, atom_id TEXT, evidence JSONB, created_by TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ)`。
+
+### 3. Contracts
+
+- All operations action APIs are admin-only; non-admin users receive the existing forbidden response.
+- Manual create must normalize `source=manual`, default `status=open`, and record `created_by` from the authenticated admin.
+- `action_type` is limited to `fill_gap`, `fix_atom`, `rebuild_index`, `review_archive`, `observe`。
+- `status` is limited to `open`, `in_progress`, `watching`, `resolved`, `dismissed`, `reopened`。
+- `priority` is limited to `P0`, `P1`, `P2`, `P3` and should be stored uppercase.
+- `source` is limited to `retrieval_analytics`, `retrieval_log`, `health_diagnostic`, `index_status`, `manual`。
+- `dedupe_key` must never be empty. Manual actions may derive it from action type plus target scope; if target scope is insufficient, use an ID-scoped manual key.
+- `evidence` must be compact JSON metadata. It must not contain full user answers, full resume text, project background, full atom body content, secrets, tokens, or raw provider payloads.
+- Creating or listing an action must not edit atoms, change atom status, rebuild vectors, write retrieval logs, or create LLM/embedding calls.
+- MemoryStore and PostgresStore must keep the same filtering, defaulting, sorting, limit cap, and clone-safety semantics.
+
+### 4. Validation & Error Matrix
+
+- Missing title or reason -> HTTP `400`, no Store write.
+- Unknown `action_type`, `priority`, `source`, or `status` -> HTTP `400`, no Store write.
+- Missing auth -> existing unauthorized response.
+- Authenticated non-admin -> existing forbidden response.
+- Invalid or missing `limit` -> clamp to the documented default/max instead of scanning unbounded history.
+- Store evidence marshal error -> return create error before persisting a partial action.
+- Empty list result -> return `list: []` and `total: 0`, not an error.
+
+### 5. Good/Base/Bad Cases
+
+- Good: Admin manually creates a `fill_gap` action for `backend/cache/L3`; listing `status=open` returns the created action with `source=manual` and `created_by` set.
+- Good: Listing by `priority=P1` and `difficulty=L3` returns only matching actions ordered by `updated_at DESC` with a stable ID tie-breaker.
+- Base: No saved actions returns an empty open queue and lets the existing analytics/health panels continue rendering.
+- Bad: Creating an action from the frontend also edits the related atom or starts index rebuild; action creation is governance bookkeeping only.
+- Bad: Storing full candidate answers in `evidence` leaks user content into an admin operations record.
+
+### 6. Tests Required
+
+- HTTP API: admin create/list success, non-admin forbidden, invalid enum and missing required fields rejected.
+- Store unit: MemoryStore create/list filters, default values, sorting, clone safety, and evidence round-trip.
+- Schema text: `SchemaSQL`, `LegacyCompatibilitySQL`, and `backend/migrations/001_schema.sql` all contain the action table and indexes.
+- Postgres behavior: create/list query must use the same filters and limit cap as MemoryStore.
+- Frontend: `npm --prefix frontend run lint` and `npm --prefix frontend run build` after adding API/types/page contracts.
+- Browser smoke: logged-in admin can create a manual action and see it in the open queue.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```go
+action.Source = r.URL.Query().Get("source")
+action.Status = r.URL.Query().Get("status")
+store.CreateInterviewBankOpsAction(action)
+```
+
+This lets a manual create spoof generated sources or closed statuses and weakens audit meaning.
+
+#### Correct
+
+```go
+action.Source = domain.InterviewBankOpsActionSourceManual
+action.Status = domain.InterviewBankOpsActionStatusOpen
+action.CreatedBy = user.ID
+created, err := store.CreateInterviewBankOpsAction(action)
+```
+
+Manual actions have a fixed source/status boundary, and future generated actions can use a separate candidate/save path with its own validation.
+
 ## Scenario: Interview Bank Admin Import MVP
 
 ### 1. Scope / Trigger
