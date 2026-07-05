@@ -575,3 +575,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 17: 面试题库运营动作候选选择保存
+
+**Date**: 2026-07-05
+**Task**: 面试题库运营动作候选选择保存
+**Branch**: `main`
+
+### Summary
+
+实现管理员将运营动作候选保存为 open 队列动作，补齐后端保存接口、去重校验、前端候选生成/保存交互、文档与验证。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cbf7c9b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
