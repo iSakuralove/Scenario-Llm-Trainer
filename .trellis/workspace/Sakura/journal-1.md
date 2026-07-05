@@ -542,3 +542,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 16: 面试题库运营动作真实检索候选
+
+**Date**: 2026-07-05
+**Task**: 面试题库运营动作真实检索候选
+**Branch**: `main`
+
+### Summary
+
+扩展运营动作候选 API 支持 retrieval_analytics 来源，从真实回退组合生成 fill_gap/P0/P1，从零命中题库原子生成 observe/P3，并同步前后端类型、规范和功能文档。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6b960ce` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
