@@ -218,6 +218,24 @@
   background: linear-gradient(90deg, #ff6942 0%, #ff8860 100%);
 }
 
+.profile-import-row {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.profile-import-row small {
+  color: rgba(220, 228, 238, 0.62);
+  line-height: 1.5;
+}
+
+.profile-import-row input[type='file'] {
+  display: none;
+}
+
 .profile-page .success-line {
   color: #8ef0db;
 }

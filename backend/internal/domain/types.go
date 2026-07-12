@@ -40,6 +40,7 @@ type User struct {
 
 type UserProfile struct {
 	TargetLevel      string         `json:"target_level"`
+	TargetRole       string         `json:"target_role,omitempty"`
 	PreferredDomains []string       `json:"preferred_domains"`
 	ResumeSummary    string         `json:"resume_summary,omitempty"`
 	ProjectSummary   string         `json:"project_summary,omitempty"`

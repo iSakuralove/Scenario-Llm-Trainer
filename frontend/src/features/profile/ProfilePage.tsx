@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { BookOpenCheck, CheckCircle2, Radar, Settings, Sparkles, UserRound } from 'lucide-react'
 import { api } from '../../api/client'
 import { useAuthStore } from '../../stores/authStore'
@@ -13,16 +13,20 @@ export function ProfilePage() {
   const user = useAuthStore((state) => state.user)
   const setSession = useAuthStore((state) => state.setSession)
   const savedTargetLevel = user?.profile.target_level ?? 'intermediate'
+  const savedTargetRole = user?.profile.target_role ?? ''
   const savedPreferredDomains = user?.profile.preferred_domains ?? ['database', 'network', 'os']
   const savedResumeSummary = user?.profile.resume_summary ?? ''
   const savedProjectSummary = user?.profile.project_summary ?? ''
   const [targetLevelDraft, setTargetLevelDraft] = useState(savedTargetLevel)
+  const [targetRoleDraft, setTargetRoleDraft] = useState(savedTargetRole)
   const [domainTextDraft, setDomainTextDraft] = useState(savedPreferredDomains.join(','))
   const [resumeSummaryDraft, setResumeSummaryDraft] = useState(savedResumeSummary)
   const [projectSummaryDraft, setProjectSummaryDraft] = useState(savedProjectSummary)
+  const [isImportingResume, setImportingResume] = useState(false)
   const [communityPosts, setCommunityPosts] = useState<CommunityPost[]>([])
   const [message, setMessage] = useState('')
   const [historyError, setHistoryError] = useState('')
+  const resumeFileInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     let ignore = false
@@ -44,6 +48,7 @@ export function ProfilePage() {
   async function save() {
     const updated = await api.updateProfile(token, {
       target_level: targetLevelDraft,
+      target_role: targetRoleDraft,
       preferred_domains: domainTextDraft.split(',').map((item) => item.trim()).filter(Boolean),
       resume_summary: resumeSummaryDraft,
       project_summary: projectSummaryDraft,
@@ -51,6 +56,25 @@ export function ProfilePage() {
     const latestAuth = useAuthStore.getState()
     setSession(updated, latestAuth.token, latestAuth.refreshToken)
     setMessage('已保存个人档案')
+  }
+
+  async function importResume(file: File) {
+    setImportingResume(true)
+    setMessage('')
+    try {
+      const updated = await api.importProfileResume(token, file)
+      const latestAuth = useAuthStore.getState()
+      setSession(updated, latestAuth.token, latestAuth.refreshToken)
+      setResumeSummaryDraft(updated.profile.resume_summary ?? '')
+      setMessage('已导入简历文本')
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : '导入简历失败')
+    } finally {
+      setImportingResume(false)
+      if (resumeFileInputRef.current) {
+        resumeFileInputRef.current.value = ''
+      }
+    }
   }
 
   const preferredDomains = savedPreferredDomains
@@ -62,9 +86,9 @@ export function ProfilePage() {
   }
   const profileHighlights = [
     { label: '目标职级', value: targetLevelLabel(savedTargetLevel), detail: '训练难度与画像基线' },
+    { label: '目标岗位', value: savedTargetRole || '待补充', detail: '用于对齐面试准备方向' },
     { label: '偏好专业域', value: preferredDomains.length, detail: preferredDomains.length > 0 ? preferredDomains.map(domainLabel).join(' / ') : '待补充' },
     { label: '案例投稿', value: communityPosts.length, detail: communityPosts.length > 0 ? '已沉淀真实故障样本' : '尚未形成投稿记录' },
-    { label: '平均得分', value: stats.average_score || '--', detail: '来自排查与面试训练' },
   ]
 
   return (
@@ -107,7 +131,26 @@ export function ProfilePage() {
               { value: 'senior', label: '高级' },
               { value: 'architect', label: '架构师' },
             ]} /></label>
+            <label>目标岗位<input value={targetRoleDraft} onChange={(event) => setTargetRoleDraft(event.target.value)} placeholder="例如：后端开发工程师 / 数据库工程师" /></label>
             <label>偏好专业域<input value={domainTextDraft} onChange={(event) => setDomainTextDraft(event.target.value)} placeholder="database,network,os" /></label>
+            <div className="profile-import-row" data-testid="profile-resume-import">
+              <span>简历导入</span>
+              <small>支持 TXT / MD / DOCX / PDF，导入后会覆盖“简历摘要”。</small>
+              <input
+                ref={resumeFileInputRef}
+                type="file"
+                accept=".txt,.md,.docx,.pdf"
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  if (file) {
+                    void importResume(file)
+                  }
+                }}
+              />
+              <button className="ghost-button compact" type="button" disabled={isImportingResume} onClick={() => resumeFileInputRef.current?.click()}>
+                {isImportingResume ? '导入中' : '导入简历文本'}
+              </button>
+            </div>
             <label>
               简历摘要
               <textarea

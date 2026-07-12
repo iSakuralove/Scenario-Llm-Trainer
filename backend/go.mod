@@ -4,6 +4,7 @@ go 1.22
 
 require (
 	github.com/jackc/pgx/v5 v5.7.2
+	github.com/ledongthuc/pdf v0.0.0-20220302134840-0c2507a12d80
 	github.com/redis/go-redis/v9 v9.7.0
 	golang.org/x/crypto v0.31.0
 )

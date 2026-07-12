@@ -625,6 +625,7 @@ export const api = {
     token: string,
     payload: {
       target_level: string
+      target_role?: string
       preferred_domains: string[]
       resume_summary?: string
       project_summary?: string
@@ -638,6 +639,12 @@ export const api = {
       },
       token,
     ),
+
+  importProfileResume: (token: string, file: File) => {
+    const body = new FormData()
+    body.set('file', file)
+    return request<User>('/users/me/profile/import', { method: 'POST', body }, token)
+  },
 
   updatePassword: (token: string, newPassword: string) =>
     request<{ user: User }>(

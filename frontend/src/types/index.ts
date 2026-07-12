@@ -17,6 +17,7 @@ export type UserRole = 'student' | 'instructor' | 'admin'
 
 export interface UserProfile {
   target_level: string
+  target_role?: string
   preferred_domains: string[]
   resume_summary?: string
   project_summary?: string
