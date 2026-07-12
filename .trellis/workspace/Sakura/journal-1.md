@@ -608,3 +608,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 18: 简历导入与结构化提取收口
+
+**Date**: 2026-07-12
+**Task**: 简历导入与结构化提取收口
+**Branch**: `main`
+
+### Summary
+
+完成 TXT/MD/DOCX/PDF 简历导入、目标岗位与项目经历启发式提取，补齐中英文章节边界测试、后端规格与功能文档；后端全量、前端 lint/build/smoke 均通过，并清理构建与测试缓存。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a604fc4` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
