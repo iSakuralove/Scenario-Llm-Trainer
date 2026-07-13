@@ -1,6 +1,8 @@
 .interview-bank-page {
   gap: 18px;
   color: #e6edf5;
+  min-width: 0;
+  overflow-x: hidden;
 }
 
 .interview-bank-page .panel,
@@ -169,6 +171,15 @@
   font-weight: 750;
 }
 
+.interview-bank-ops-filter-grid,
+.interview-bank-ops-status-box label {
+  display: grid;
+  gap: 7px;
+  color: rgba(220, 228, 238, 0.82);
+  font-size: 13px;
+  font-weight: 750;
+}
+
 .interview-bank-filter-grid input,
 .interview-bank-filter-grid select,
 .interview-bank-import-panel textarea,
@@ -178,6 +189,8 @@
 .interview-bank-ops-action-form input,
 .interview-bank-ops-action-form select,
 .interview-bank-ops-action-form textarea,
+.interview-bank-ops-filter-grid select,
+.interview-bank-ops-status-box textarea,
 .interview-bank-edit-grid input,
 .interview-bank-edit-grid select,
 .interview-bank-edit-grid textarea,
@@ -196,6 +209,7 @@
 .interview-bank-preview-form select,
 .interview-bank-ops-action-form input,
 .interview-bank-ops-action-form select,
+.interview-bank-ops-filter-grid select,
 .interview-bank-edit-grid input,
 .interview-bank-edit-grid select,
 .interview-bank-archive-box input {
@@ -206,6 +220,7 @@
 .interview-bank-filter-grid select,
 .interview-bank-preview-form select,
 .interview-bank-ops-action-form select,
+.interview-bank-ops-filter-grid select,
 .interview-bank-edit-grid select {
   color-scheme: dark;
 }
@@ -213,6 +228,7 @@
 .interview-bank-filter-grid option,
 .interview-bank-preview-form option,
 .interview-bank-ops-action-form option,
+.interview-bank-ops-filter-grid option,
 .interview-bank-edit-grid option {
   background: #0c121b;
   color: #f6fafe;
@@ -224,6 +240,7 @@
 .interview-bank-preview-form textarea::placeholder,
 .interview-bank-ops-action-form input::placeholder,
 .interview-bank-ops-action-form textarea::placeholder,
+.interview-bank-ops-status-box textarea::placeholder,
 .interview-bank-edit-grid input::placeholder,
 .interview-bank-edit-grid textarea::placeholder,
 .interview-bank-archive-box input::placeholder {
@@ -239,6 +256,8 @@
 .interview-bank-ops-action-form input:focus,
 .interview-bank-ops-action-form select:focus,
 .interview-bank-ops-action-form textarea:focus,
+.interview-bank-ops-filter-grid select:focus,
+.interview-bank-ops-status-box textarea:focus,
 .interview-bank-edit-grid input:focus,
 .interview-bank-edit-grid select:focus,
 .interview-bank-edit-grid textarea:focus,
@@ -576,6 +595,7 @@
 
 .interview-bank-health-table-wrap {
   min-width: 0;
+  max-width: 100%;
   overflow: auto;
 }
 
@@ -634,6 +654,12 @@
   align-items: end;
 }
 
+.interview-bank-ops-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .interview-bank-ops-action-form textarea {
   min-height: 108px;
   padding: 12px;
@@ -653,6 +679,18 @@
   display: flex;
   justify-content: flex-end;
   grid-column: 1 / -1;
+}
+
+.interview-bank-ops-status-box {
+  display: grid;
+  gap: 12px;
+}
+
+.interview-bank-ops-status-box textarea {
+  min-height: 92px;
+  padding: 12px;
+  resize: vertical;
+  line-height: 1.6;
 }
 
 .interview-bank-ops-candidate-toolbar {
@@ -806,6 +844,126 @@
   gap: 8px;
 }
 
+.interview-bank-ops-action-row.is-selected {
+  border-color: rgba(255, 190, 92, 0.38);
+  box-shadow: inset 0 0 0 1px rgba(255, 190, 92, 0.12);
+}
+
+.interview-bank-ops-action-detail-panel {
+  display: grid;
+  gap: 16px;
+  grid-column: 1 / -1;
+}
+
+.interview-bank-ops-detail-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.interview-bank-ops-detail-card,
+.interview-bank-ops-stale-box,
+.interview-bank-ops-atom-card,
+.interview-bank-ops-evidence-row {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: rgba(12, 20, 32, 0.88);
+}
+
+.interview-bank-ops-detail-card,
+.interview-bank-ops-stale-box,
+.interview-bank-ops-atom-card {
+  padding: 14px 16px;
+}
+
+.interview-bank-ops-detail-card,
+.interview-bank-ops-stale-box {
+  display: grid;
+  gap: 6px;
+}
+
+.interview-bank-ops-detail-card span,
+.interview-bank-ops-stale-box span {
+  color: rgba(220, 228, 238, 0.72);
+  line-height: 1.55;
+}
+
+.interview-bank-ops-detail-card strong,
+.interview-bank-ops-stale-box strong {
+  color: #f5f8fc;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.interview-bank-ops-stale-box {
+  border-color: rgba(255, 90, 54, 0.22);
+  background: rgba(74, 20, 12, 0.28);
+}
+
+.interview-bank-ops-detail-block {
+  display: grid;
+  gap: 12px;
+}
+
+.interview-bank-ops-atom-card {
+  display: grid;
+  gap: 10px;
+}
+
+.interview-bank-ops-atom-card strong,
+.interview-bank-ops-atom-card span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.interview-bank-ops-atom-card strong {
+  color: #f5f8fc;
+}
+
+.interview-bank-ops-atom-card span {
+  color: rgba(220, 228, 238, 0.72);
+}
+
+.interview-bank-ops-atom-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.interview-bank-ops-evidence-list {
+  display: grid;
+  gap: 10px;
+}
+
+.interview-bank-ops-evidence-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.9fr) minmax(0, 1.1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 12px 14px;
+}
+
+.interview-bank-ops-evidence-row span,
+.interview-bank-ops-evidence-row strong {
+  overflow-wrap: anywhere;
+}
+
+.interview-bank-ops-evidence-row span {
+  color: rgba(220, 228, 238, 0.72);
+}
+
+.interview-bank-ops-evidence-row strong {
+  color: #f5f8fc;
+  line-height: 1.6;
+}
+
+.interview-bank-pill.ops-stale {
+  gap: 6px;
+  border-color: rgba(255, 90, 54, 0.28);
+  background: rgba(74, 20, 12, 0.42);
+  color: #ffc7bc;
+}
+
 .interview-bank-list-title {
   display: flex;
   justify-content: space-between;
@@ -836,6 +994,7 @@
 
 .interview-bank-table-wrap {
   min-width: 0;
+  max-width: 100%;
   overflow: auto;
 }
 
@@ -1096,6 +1255,7 @@
   .interview-bank-retrieval-columns,
   .interview-bank-preview-form,
   .interview-bank-ops-action-form,
+  .interview-bank-ops-filter-grid,
   .interview-bank-report-metrics {
     grid-template-columns: 1fr;
   }
@@ -1151,6 +1311,15 @@
   .interview-bank-retrieval-log-row,
   .interview-bank-ops-action-row {
     grid-template-columns: 1fr;
+  }
+
+  .interview-bank-ops-detail-meta,
+  .interview-bank-ops-evidence-row {
+    grid-template-columns: 1fr;
+  }
+
+  .interview-bank-ops-atom-meta {
+    display: grid;
   }
 
   .interview-bank-retrieval-log-actions,

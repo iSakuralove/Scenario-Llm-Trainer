@@ -58,6 +58,11 @@ const interviewBankOpsActionSelectSQL = `
 		FROM interview_bank_ops_actions
 	`
 
+const interviewBankOpsActionHistorySelectSQL = `
+		SELECT id, action_id, entry_index, from_status, to_status, COALESCE(note, ''), COALESCE(created_by, ''), created_at
+		FROM interview_bank_ops_action_history
+	`
+
 func NewPostgresStore(ctx context.Context, databaseURL string, hashPassword func(string) string) (*PostgresStore, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
@@ -924,6 +929,105 @@ func (s *PostgresStore) CreateInterviewBankOpsAction(action domain.InterviewBank
 		return domain.InterviewBankOpsAction{}, err
 	}
 	return *cloneInterviewBankOpsAction(&prepared), nil
+}
+
+func (s *PostgresStore) GetInterviewBankOpsAction(id string) (*domain.InterviewBankOpsAction, bool) {
+	rows, err := s.pool.Query(context.Background(), interviewBankOpsActionSelectSQL+` WHERE id = $1 LIMIT 1`, strings.TrimSpace(id))
+	if err != nil {
+		return nil, false
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, false
+	}
+	item, err := scanInterviewBankOpsActionRows(rows)
+	if err != nil {
+		return nil, false
+	}
+	return &item, true
+}
+
+func (s *PostgresStore) UpdateInterviewBankOpsActionStatus(actionID, nextStatus, note, adminID string) (domain.InterviewBankOpsAction, domain.InterviewBankOpsActionHistoryEntry, error) {
+	tx, err := s.pool.Begin(context.Background())
+	if err != nil {
+		return domain.InterviewBankOpsAction{}, domain.InterviewBankOpsActionHistoryEntry{}, err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	rows, err := tx.Query(context.Background(), interviewBankOpsActionSelectSQL+` WHERE id = $1 LIMIT 1`, strings.TrimSpace(actionID))
+	if err != nil {
+		return domain.InterviewBankOpsAction{}, domain.InterviewBankOpsActionHistoryEntry{}, err
+	}
+	var current domain.InterviewBankOpsAction
+	if rows.Next() {
+		current, err = scanInterviewBankOpsActionRows(rows)
+	}
+	rows.Close()
+	if err != nil {
+		return domain.InterviewBankOpsAction{}, domain.InterviewBankOpsActionHistoryEntry{}, err
+	}
+	if strings.TrimSpace(current.ID) == "" {
+		return domain.InterviewBankOpsAction{}, domain.InterviewBankOpsActionHistoryEntry{}, errInterviewBankOpsActionNotFound
+	}
+	updated, historyEntry, err := prepareInterviewBankOpsActionStatusTransition(current, nextStatus, note, adminID, time.Now())
+	if err != nil {
+		return domain.InterviewBankOpsAction{}, domain.InterviewBankOpsActionHistoryEntry{}, err
+	}
+	if updated.Status == domain.InterviewBankOpsActionStatusReopened {
+		var conflictCount int
+		if err := tx.QueryRow(context.Background(), `
+			SELECT COUNT(*)
+			FROM interview_bank_ops_actions
+			WHERE dedupe_key = $1
+			  AND id <> $2
+			  AND status IN ('open','in_progress','watching','reopened')
+		`, updated.DedupeKey, updated.ID).Scan(&conflictCount); err != nil {
+			return domain.InterviewBankOpsAction{}, domain.InterviewBankOpsActionHistoryEntry{}, err
+		}
+		if conflictCount > 0 {
+			return domain.InterviewBankOpsAction{}, domain.InterviewBankOpsActionHistoryEntry{}, errors.New("another active action already uses this dedupe_key")
+		}
+	}
+	var nextEntryIndex int
+	if err := tx.QueryRow(context.Background(), `SELECT COALESCE(MAX(entry_index), 0) + 1 FROM interview_bank_ops_action_history WHERE action_id = $1`, updated.ID).Scan(&nextEntryIndex); err != nil {
+		return domain.InterviewBankOpsAction{}, domain.InterviewBankOpsActionHistoryEntry{}, err
+	}
+	historyEntry.EntryIndex = nextEntryIndex
+	_, err = tx.Exec(context.Background(), `
+		UPDATE interview_bank_ops_actions
+		SET status = $2, updated_at = $3
+		WHERE id = $1
+	`, updated.ID, updated.Status, updated.UpdatedAt)
+	if err != nil {
+		return domain.InterviewBankOpsAction{}, domain.InterviewBankOpsActionHistoryEntry{}, err
+	}
+	_, err = tx.Exec(context.Background(), `
+		INSERT INTO interview_bank_ops_action_history
+		    (id, action_id, entry_index, from_status, to_status, note, created_by, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+	`, historyEntry.ID, historyEntry.ActionID, historyEntry.EntryIndex, historyEntry.FromStatus, historyEntry.ToStatus, emptyToNil(historyEntry.Note), emptyToNil(historyEntry.CreatedBy), historyEntry.CreatedAt)
+	if err != nil {
+		return domain.InterviewBankOpsAction{}, domain.InterviewBankOpsActionHistoryEntry{}, err
+	}
+	if err := tx.Commit(context.Background()); err != nil {
+		return domain.InterviewBankOpsAction{}, domain.InterviewBankOpsActionHistoryEntry{}, err
+	}
+	return *cloneInterviewBankOpsAction(&updated), cloneInterviewBankOpsActionHistoryEntry(historyEntry), nil
+}
+
+func (s *PostgresStore) ListInterviewBankOpsActionHistory(actionID string) []domain.InterviewBankOpsActionHistoryEntry {
+	rows, err := s.pool.Query(context.Background(), interviewBankOpsActionHistorySelectSQL+` WHERE action_id = $1 ORDER BY entry_index DESC, created_at DESC, id ASC`, strings.TrimSpace(actionID))
+	if err != nil {
+		return []domain.InterviewBankOpsActionHistoryEntry{}
+	}
+	defer rows.Close()
+	items := make([]domain.InterviewBankOpsActionHistoryEntry, 0)
+	for rows.Next() {
+		item, err := scanInterviewBankOpsActionHistoryRows(rows)
+		if err == nil {
+			items = append(items, item)
+		}
+	}
+	return items
 }
 
 func (s *PostgresStore) ListInterviewBankOpsActions(filter domain.InterviewBankOpsActionFilter) []domain.InterviewBankOpsAction {
@@ -2003,6 +2107,15 @@ func scanInterviewBankOpsActionRows(rows pgx.Rows) (domain.InterviewBankOpsActio
 		item.Evidence = map[string]interface{}{}
 	}
 	return *cloneInterviewBankOpsAction(&item), nil
+}
+
+func scanInterviewBankOpsActionHistoryRows(rows pgx.Rows) (domain.InterviewBankOpsActionHistoryEntry, error) {
+	var item domain.InterviewBankOpsActionHistoryEntry
+	err := rows.Scan(&item.ID, &item.ActionID, &item.EntryIndex, &item.FromStatus, &item.ToStatus, &item.Note, &item.CreatedBy, &item.CreatedAt)
+	if err != nil {
+		return item, err
+	}
+	return cloneInterviewBankOpsActionHistoryEntry(item), nil
 }
 
 func scanInterviewSession(row scanner) (*domain.InterviewSession, bool) {

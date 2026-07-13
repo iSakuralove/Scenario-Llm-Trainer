@@ -198,6 +198,34 @@ type InterviewBankOpsAction struct {
 	UpdatedAt  time.Time              `json:"updated_at"`
 }
 
+type InterviewBankOpsActionAtomContext struct {
+	ID             string    `json:"id"`
+	Title          string    `json:"title"`
+	Status         string    `json:"status"`
+	VectorStatus   string    `json:"vector_status"`
+	CurrentVersion int       `json:"current_version"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+type InterviewBankOpsActionHistoryEntry struct {
+	ID         string    `json:"id"`
+	ActionID   string    `json:"action_id"`
+	EntryIndex int       `json:"entry_index"`
+	FromStatus string    `json:"from_status"`
+	ToStatus   string    `json:"to_status"`
+	Note       string    `json:"note"`
+	CreatedBy  string    `json:"created_by"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type InterviewBankOpsActionDetail struct {
+	Action      InterviewBankOpsAction               `json:"action"`
+	AtomContext *InterviewBankOpsActionAtomContext   `json:"atom_context"`
+	History     []InterviewBankOpsActionHistoryEntry `json:"history"`
+	Stale       bool                                 `json:"stale"`
+	StaleReason string                               `json:"stale_reason"`
+}
+
 type InterviewBankOpsActionFilter struct {
 	Status     string
 	ActionType string

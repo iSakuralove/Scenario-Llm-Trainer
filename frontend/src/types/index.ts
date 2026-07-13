@@ -739,6 +739,34 @@ export interface InterviewBankOpsAction {
   updated_at: string
 }
 
+export interface InterviewBankOpsActionAtomContext {
+  id: string
+  title: string
+  status: string
+  vector_status: string
+  current_version: number
+  updated_at: string
+}
+
+export interface InterviewBankOpsActionHistoryEntry {
+  id: string
+  action_id: string
+  entry_index: number
+  from_status: string
+  to_status: string
+  note: string
+  created_by: string
+  created_at: string
+}
+
+export interface InterviewBankOpsActionDetail {
+  action: InterviewBankOpsAction
+  atom_context: InterviewBankOpsActionAtomContext | null
+  history: InterviewBankOpsActionHistoryEntry[]
+  stale: boolean
+  stale_reason: string
+}
+
 export interface InterviewBankOpsActionCreateRequest {
   action_type: string
   priority: string
@@ -749,6 +777,11 @@ export interface InterviewBankOpsActionCreateRequest {
   difficulty?: string
   atom_id?: string
   evidence?: Record<string, unknown>
+}
+
+export interface InterviewBankOpsActionUpdateRequest {
+  status: string
+  note?: string
 }
 
 export interface InterviewBankOpsActionFilters {

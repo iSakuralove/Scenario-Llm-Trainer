@@ -32,6 +32,7 @@ type MemoryStore struct {
 	InterviewKnowledgeBatches      map[string]*domain.InterviewKnowledgeBatch
 	InterviewRetrievalLogs         []domain.InterviewRetrievalLog
 	InterviewBankOpsActions        map[string]*domain.InterviewBankOpsAction
+	InterviewBankOpsActionHistory  map[string][]domain.InterviewBankOpsActionHistoryEntry
 	CommunityPosts                 map[string]*domain.CommunityPost
 	Assets                         map[string]*domain.Asset
 	AIJobs                         map[string]*domain.AIJob
@@ -56,6 +57,7 @@ func NewMemoryStore(hashPassword func(string) string) *MemoryStore {
 		InterviewKnowledgeBatches:      map[string]*domain.InterviewKnowledgeBatch{},
 		InterviewRetrievalLogs:         []domain.InterviewRetrievalLog{},
 		InterviewBankOpsActions:        map[string]*domain.InterviewBankOpsAction{},
+		InterviewBankOpsActionHistory:  map[string][]domain.InterviewBankOpsActionHistoryEntry{},
 		CommunityPosts:                 map[string]*domain.CommunityPost{},
 		Assets:                         map[string]*domain.Asset{},
 		AIJobs:                         map[string]*domain.AIJob{},
@@ -679,6 +681,54 @@ func (s *MemoryStore) CreateInterviewBankOpsAction(action domain.InterviewBankOp
 	return *cloneInterviewBankOpsAction(&prepared), nil
 }
 
+func (s *MemoryStore) GetInterviewBankOpsAction(id string) (*domain.InterviewBankOpsAction, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	action, ok := s.InterviewBankOpsActions[strings.TrimSpace(id)]
+	if !ok || action == nil {
+		return nil, false
+	}
+	return cloneInterviewBankOpsAction(action), true
+}
+
+func (s *MemoryStore) UpdateInterviewBankOpsActionStatus(actionID, nextStatus, note, adminID string) (domain.InterviewBankOpsAction, domain.InterviewBankOpsActionHistoryEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	action, ok := s.InterviewBankOpsActions[strings.TrimSpace(actionID)]
+	if !ok || action == nil {
+		return domain.InterviewBankOpsAction{}, domain.InterviewBankOpsActionHistoryEntry{}, errInterviewBankOpsActionNotFound
+	}
+	updated, historyEntry, err := prepareInterviewBankOpsActionStatusTransition(*cloneInterviewBankOpsAction(action), nextStatus, note, adminID, time.Now())
+	if err != nil {
+		return domain.InterviewBankOpsAction{}, domain.InterviewBankOpsActionHistoryEntry{}, err
+	}
+	if updated.Status == domain.InterviewBankOpsActionStatusReopened {
+		for _, item := range s.InterviewBankOpsActions {
+			if item == nil || item.ID == updated.ID {
+				continue
+			}
+			if strings.TrimSpace(item.DedupeKey) == updated.DedupeKey && isActiveInterviewBankOpsActionStatus(item.Status) {
+				return domain.InterviewBankOpsAction{}, domain.InterviewBankOpsActionHistoryEntry{}, errors.New("another active action already uses this dedupe_key")
+			}
+		}
+	}
+	historyEntry.EntryIndex = len(s.InterviewBankOpsActionHistory[updated.ID]) + 1
+	s.InterviewBankOpsActions[updated.ID] = cloneInterviewBankOpsAction(&updated)
+	s.InterviewBankOpsActionHistory[updated.ID] = append(s.InterviewBankOpsActionHistory[updated.ID], cloneInterviewBankOpsActionHistoryEntry(historyEntry))
+	return *cloneInterviewBankOpsAction(&updated), cloneInterviewBankOpsActionHistoryEntry(historyEntry), nil
+}
+
+func (s *MemoryStore) ListInterviewBankOpsActionHistory(actionID string) []domain.InterviewBankOpsActionHistoryEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]domain.InterviewBankOpsActionHistoryEntry, 0, len(s.InterviewBankOpsActionHistory[strings.TrimSpace(actionID)]))
+	for _, item := range s.InterviewBankOpsActionHistory[strings.TrimSpace(actionID)] {
+		items = append(items, cloneInterviewBankOpsActionHistoryEntry(item))
+	}
+	sortInterviewBankOpsActionHistory(items)
+	return items
+}
+
 func (s *MemoryStore) ListInterviewBankOpsActions(filter domain.InterviewBankOpsActionFilter) []domain.InterviewBankOpsAction {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1167,6 +1217,7 @@ func (s *MemoryStore) seedAdminConfig() {
 func defaultProfile() domain.UserProfile {
 	return domain.UserProfile{
 		TargetLevel:      "intermediate",
+		TargetRole:       "",
 		PreferredDomains: []string{"database", "network", "os"},
 		CapabilityRadar: map[string]int{
 			"database": 72,

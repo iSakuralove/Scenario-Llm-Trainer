@@ -7,12 +7,15 @@ import type {
   Asset,
   CommunityPost,
   InterviewBankOpsAction,
+  InterviewBankOpsActionDetail,
+  InterviewBankOpsActionHistoryEntry,
   InterviewBankOpsActionCandidateRequest,
   InterviewBankOpsActionCandidateResponse,
   InterviewBankOpsActionCandidateSaveRequest,
   InterviewBankOpsActionCandidateSaveResponse,
   InterviewBankOpsActionCreateRequest,
   InterviewBankOpsActionFilters,
+  InterviewBankOpsActionUpdateRequest,
   InterviewKnowledgeAtom,
   InterviewKnowledgeAtomArchiveRequest,
   InterviewKnowledgeAtomFilters,
@@ -934,6 +937,16 @@ export const api = {
     request<{ list: InterviewBankOpsAction[]; total: number; filters: InterviewBankOpsActionFilters }>(
       `/admin/interview-bank/ops-actions${queryString(filters as Record<string, string | number | undefined>)}`,
       {},
+      token,
+    ),
+
+  adminInterviewBankOpsActionDetail: (token: string, actionId: string) =>
+    request<InterviewBankOpsActionDetail>(`/admin/interview-bank/ops-actions/${encodeURIComponent(actionId)}`, {}, token),
+
+  updateInterviewBankOpsAction: (token: string, actionId: string, payload: InterviewBankOpsActionUpdateRequest) =>
+    request<{ action: InterviewBankOpsAction; history_entry: InterviewBankOpsActionHistoryEntry }>(
+      `/admin/interview-bank/ops-actions/${encodeURIComponent(actionId)}`,
+      { method: 'PATCH', body: JSON.stringify(payload) },
       token,
     ),
 

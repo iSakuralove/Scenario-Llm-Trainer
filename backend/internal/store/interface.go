@@ -46,6 +46,9 @@ type Store interface {
 	ListInterviewRetrievalLogs(filter domain.InterviewRetrievalLogFilter) []domain.InterviewRetrievalLog
 	InterviewRetrievalAnalytics(filter domain.InterviewRetrievalLogFilter) domain.InterviewRetrievalAnalytics
 	CreateInterviewBankOpsAction(action domain.InterviewBankOpsAction) (domain.InterviewBankOpsAction, error)
+	GetInterviewBankOpsAction(id string) (*domain.InterviewBankOpsAction, bool)
+	UpdateInterviewBankOpsActionStatus(actionID, nextStatus, note, adminID string) (domain.InterviewBankOpsAction, domain.InterviewBankOpsActionHistoryEntry, error)
+	ListInterviewBankOpsActionHistory(actionID string) []domain.InterviewBankOpsActionHistoryEntry
 	ListInterviewBankOpsActions(filter domain.InterviewBankOpsActionFilter) []domain.InterviewBankOpsAction
 
 	AddCommunityPost(post domain.CommunityPost) domain.CommunityPost

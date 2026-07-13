@@ -21,8 +21,11 @@ import { Loading, Metric } from '../../components/common'
 import { useToken } from '../../lib/auth'
 import type {
   InterviewBankOpsAction,
+  InterviewBankOpsActionDetail,
   InterviewBankOpsActionCandidate,
   InterviewBankOpsActionCreateRequest,
+  InterviewBankOpsActionHistoryEntry,
+  InterviewBankOpsActionUpdateRequest,
   InterviewKnowledgeAtom,
   InterviewKnowledgeAtomFilters,
   InterviewKnowledgeAtomUpdateRequest,
@@ -105,6 +108,13 @@ interface OpsActionForm {
   atom_id: string
 }
 
+interface OpsActionFilterForm {
+  status: string
+  action_type: string
+  priority: string
+  source: string
+}
+
 const emptyOpsActionForm: OpsActionForm = {
   action_type: 'fill_gap',
   priority: 'P1',
@@ -114,6 +124,13 @@ const emptyOpsActionForm: OpsActionForm = {
   category: 'cache',
   difficulty: 'L3',
   atom_id: '',
+}
+
+const emptyOpsActionFilters: OpsActionFilterForm = {
+  status: 'open',
+  action_type: '',
+  priority: '',
+  source: '',
 }
 
 export function InterviewBankAdminPage() {
@@ -155,12 +172,18 @@ export function InterviewBankAdminPage() {
   const [retrievalAnalytics, setRetrievalAnalytics] = useState<InterviewRetrievalAnalyticsResponse | null>(null)
   const [retrievalLogs, setRetrievalLogs] = useState<InterviewRetrievalLog[]>([])
   const [opsActions, setOpsActions] = useState<InterviewBankOpsAction[]>([])
+  const [activeOpsActionID, setActiveOpsActionID] = useState('')
+  const [activeOpsActionDetail, setActiveOpsActionDetail] = useState<InterviewBankOpsActionDetail | null>(null)
+  const [opsActionFilters, setOpsActionFilters] = useState<OpsActionFilterForm>(emptyOpsActionFilters)
+  const [opsActionNote, setOpsActionNote] = useState('')
   const [opsActionForm, setOpsActionForm] = useState<OpsActionForm>(emptyOpsActionForm)
   const [isCreatingOpsAction, setIsCreatingOpsAction] = useState(false)
   const [opsActionCandidates, setOpsActionCandidates] = useState<InterviewBankOpsActionCandidate[]>([])
   const [selectedOpsCandidateKeys, setSelectedOpsCandidateKeys] = useState<Set<string>>(() => new Set())
   const [isGeneratingOpsCandidates, setIsGeneratingOpsCandidates] = useState(false)
   const [isSavingOpsCandidates, setIsSavingOpsCandidates] = useState(false)
+  const [isOpsActionDetailLoading, setIsOpsActionDetailLoading] = useState(false)
+  const [isUpdatingOpsActionStatus, setIsUpdatingOpsActionStatus] = useState(false)
 
   const loadData = useCallback(async () => {
     setIsLoading(true)
@@ -173,7 +196,16 @@ export function InterviewBankAdminPage() {
         api.adminInterviewBankBatches(token, 20),
         api.adminInterviewBankRetrievalAnalytics(token, { limit: 500 }),
         api.adminInterviewBankRetrievalLogs(token, { limit: 20 }),
-        api.adminInterviewBankOpsActions(token, { status: 'open', limit: 20 }),
+        api.adminInterviewBankOpsActions(token, {
+          status: opsActionFilters.status || undefined,
+          action_type: opsActionFilters.action_type || undefined,
+          priority: opsActionFilters.priority || undefined,
+          source: opsActionFilters.source || undefined,
+          domain: filters.domain?.trim() || undefined,
+          category: filters.category?.trim() || undefined,
+          difficulty: filters.difficulty?.trim() || undefined,
+          limit: 50,
+        }),
       ])
       setSummary(nextSummary)
       setHealth(nextHealth)
@@ -192,7 +224,7 @@ export function InterviewBankAdminPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [filters, token])
+  }, [filters, opsActionFilters, token])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -262,6 +294,10 @@ export function InterviewBankAdminPage() {
     setOpsActionForm((current) => ({ ...current, [key]: value }))
   }
 
+  function updateOpsActionFilters<K extends keyof OpsActionFilterForm>(key: K, value: OpsActionFilterForm[K]) {
+    setOpsActionFilters((current) => ({ ...current, [key]: value }))
+  }
+
   function applyOpsActionTarget(action: InterviewBankOpsAction) {
     if (action.domain || action.category || action.difficulty) {
       setFilters({
@@ -283,6 +319,30 @@ export function InterviewBankAdminPage() {
     }
     if (action.atom_id) {
       void handleOpenAtom(action.atom_id)
+    }
+  }
+
+  async function runInterviewBankRebuild(
+    payload: InterviewKnowledgeIndexRebuildRequest,
+    successLabel: string,
+    afterRefresh?: () => Promise<void>,
+  ) {
+    setError('')
+    setMessage('')
+    setRebuildResult(null)
+    try {
+      setIsRebuilding(true)
+      const result = await api.rebuildInterviewBankIndex(token, payload)
+      setRebuildResult(result)
+      setMessage(`${successLabel}：成功 ${result.indexed} 条，失败 ${result.failed} 条，跳过 ${result.skipped} 条`)
+      await loadData()
+      if (afterRefresh) {
+        await afterRefresh()
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '索引重建失败')
+    } finally {
+      setIsRebuilding(false)
     }
   }
 
@@ -322,6 +382,49 @@ export function InterviewBankAdminPage() {
       setError(err instanceof Error ? err.message : '运营动作创建失败')
     } finally {
       setIsCreatingOpsAction(false)
+    }
+  }
+
+  async function handleOpenOpsActionDetail(actionID: string) {
+    setError('')
+    setMessage('')
+    setActiveOpsActionID(actionID)
+    setIsOpsActionDetailLoading(true)
+    try {
+      const detail = await api.adminInterviewBankOpsActionDetail(token, actionID)
+      setActiveOpsActionDetail(detail)
+      setOpsActionNote('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '运营动作详情读取失败')
+    } finally {
+      setIsOpsActionDetailLoading(false)
+    }
+  }
+
+  async function handleUpdateOpsActionStatus(nextStatus: string) {
+    const detail = activeOpsActionDetail
+    if (!detail) return
+    if ((nextStatus === 'resolved' || nextStatus === 'dismissed') && !opsActionNote.trim()) {
+      setError('关闭或忽略动作时必须填写备注')
+      return
+    }
+    const payload: InterviewBankOpsActionUpdateRequest = {
+      status: nextStatus,
+      note: opsActionNote.trim() || undefined,
+    }
+    setError('')
+    setMessage('')
+    try {
+      setIsUpdatingOpsActionStatus(true)
+      const result = await api.updateInterviewBankOpsAction(token, detail.action.id, payload)
+      setMessage(`动作状态已更新为 ${opsActionStatusLabel(result.action.status)}`)
+      await loadData()
+      await handleOpenOpsActionDetail(detail.action.id)
+      setOpsActionNote('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '运营动作状态更新失败')
+    } finally {
+      setIsUpdatingOpsActionStatus(false)
     }
   }
 
@@ -492,27 +595,35 @@ export function InterviewBankAdminPage() {
   }
 
   async function handleRebuild(scope: 'pending_failed' | 'selected') {
-    setError('')
-    setMessage('')
-    setRebuildResult(null)
-    try {
-      const atomIDs = [...selectedAtomIds]
-      if (scope === 'selected' && atomIDs.length === 0) {
-        throw new Error('请选择要重建索引的题库资源')
-      }
-      const payload: InterviewKnowledgeIndexRebuildRequest = scope === 'selected'
-        ? { atom_ids: atomIDs, limit: 50 }
-        : { vector_status: 'pending_failed', limit: 50 }
-      setIsRebuilding(true)
-      const result = await api.rebuildInterviewBankIndex(token, payload)
-      setRebuildResult(result)
-      setMessage(`索引重建完成：成功 ${result.indexed} 条，失败 ${result.failed} 条，跳过 ${result.skipped} 条`)
-      await loadData()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '索引重建失败')
-    } finally {
-      setIsRebuilding(false)
+    const atomIDs = [...selectedAtomIds]
+    if (scope === 'selected' && atomIDs.length === 0) {
+      setError('请选择要重建索引的题库资源')
+      return
     }
+    const payload: InterviewKnowledgeIndexRebuildRequest = scope === 'selected'
+      ? { atom_ids: atomIDs, limit: 50 }
+      : { vector_status: 'pending_failed', limit: 50 }
+    await runInterviewBankRebuild(payload, '索引重建完成')
+  }
+
+  async function handleRebuildOpsActionAtom() {
+    const detail = activeOpsActionDetail
+    const atomID = detail?.atom_context?.id
+    if (!detail || !atomID) return
+    if (detail.atom_context?.status === 'archived') {
+      setError('已归档 atom 不能从这里直接重建索引')
+      return
+    }
+    await runInterviewBankRebuild(
+      { atom_ids: [atomID], limit: 1 },
+      '动作关联 atom 重建完成',
+      async () => {
+        await handleOpenOpsActionDetail(detail.action.id)
+        if (activeAtom?.id === atomID) {
+          await handleOpenAtom(atomID)
+        }
+      },
+    )
   }
 
   async function handleRetrievalPreview() {
@@ -572,6 +683,7 @@ export function InterviewBankAdminPage() {
     setMessage('')
     const confirmed = window.confirm('保存后将立即影响后续新面试，历史会话不受影响')
     if (!confirmed) return
+    const linkedOpsActionID = activeOpsActionDetail?.action.atom_id === activeAtom.id ? activeOpsActionDetail.action.id : ''
     try {
       setIsSavingAtom(true)
       const payload = editFormToPayload(editForm)
@@ -582,6 +694,9 @@ export function InterviewBankAdminPage() {
       setEditForm(atomToEditForm(result.atom))
       setMessage(`保存完成：${result.atom.id} v${result.atom.current_version}`)
       await loadData()
+      if (linkedOpsActionID) {
+        await handleOpenOpsActionDetail(linkedOpsActionID)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '题目保存失败')
     } finally {
@@ -600,6 +715,7 @@ export function InterviewBankAdminPage() {
     }
     const confirmed = window.confirm('归档后该题将不再进入后续新面试和追问检索')
     if (!confirmed) return
+    const linkedOpsActionID = activeOpsActionDetail?.action.atom_id === activeAtom.id ? activeOpsActionDetail.action.id : ''
     try {
       setIsArchivingAtom(true)
       const result = await api.archiveInterviewBankAtom(token, activeAtom.id, { reason })
@@ -615,6 +731,9 @@ export function InterviewBankAdminPage() {
       })
       setMessage(`归档完成：${result.atom.id} v${result.atom.current_version}`)
       await loadData()
+      if (linkedOpsActionID) {
+        await handleOpenOpsActionDetail(linkedOpsActionID)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '题目归档失败')
     } finally {
@@ -628,6 +747,7 @@ export function InterviewBankAdminPage() {
     setMessage('')
     const confirmed = window.confirm('恢复后将进入后续新面试；追问增强需等待管理员重建索引')
     if (!confirmed) return
+    const linkedOpsActionID = activeOpsActionDetail?.action.atom_id === activeAtom.id ? activeOpsActionDetail.action.id : ''
     try {
       setIsRestoringAtom(true)
       const result = await api.restoreInterviewBankAtom(token, activeAtom.id)
@@ -637,6 +757,9 @@ export function InterviewBankAdminPage() {
       setEditForm(atomToEditForm(result.atom))
       setMessage(`恢复完成：${result.atom.id} v${result.atom.current_version}`)
       await loadData()
+      if (linkedOpsActionID) {
+        await handleOpenOpsActionDetail(linkedOpsActionID)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '题目恢复失败')
     } finally {
@@ -746,20 +869,36 @@ export function InterviewBankAdminPage() {
         />
         <OpsActionPanel
           actions={opsActions}
+          activeActionID={activeOpsActionID}
+          filters={opsActionFilters}
           candidates={opsActionCandidates}
           selectedCandidateKeys={selectedOpsCandidateKeys}
           form={opsActionForm}
           isCreating={isCreatingOpsAction}
           isGeneratingCandidates={isGeneratingOpsCandidates}
           isSavingCandidates={isSavingOpsCandidates}
+          onFilterChange={updateOpsActionFilters}
           onChange={updateOpsActionForm}
           onCreate={() => void handleCreateOpsAction()}
           onGenerateCandidates={() => void handleGenerateOpsActionCandidates()}
           onToggleCandidate={toggleOpsActionCandidate}
           onToggleAllCandidates={toggleAllOpsActionCandidates}
           onSaveCandidates={() => void handleSaveSelectedOpsActionCandidates()}
+          onOpenDetail={(actionID) => void handleOpenOpsActionDetail(actionID)}
           onOpenAtom={(atomID) => void handleOpenAtom(atomID)}
           onApplyTarget={applyOpsActionTarget}
+        />
+        <OpsActionDetailPanel
+          detail={activeOpsActionDetail}
+          isLoading={isOpsActionDetailLoading}
+          isRebuilding={isRebuilding}
+          note={opsActionNote}
+          isUpdatingStatus={isUpdatingOpsActionStatus}
+          onNoteChange={setOpsActionNote}
+          onApplyTarget={applyOpsActionTarget}
+          onOpenAtom={(atomID) => void handleOpenAtom(atomID)}
+          onRebuildAtom={() => void handleRebuildOpsActionAtom()}
+          onUpdateStatus={(nextStatus) => void handleUpdateOpsActionStatus(nextStatus)}
         />
       </div>
 
@@ -1098,34 +1237,42 @@ function RetrievalPreviewPanel({
 
 function OpsActionPanel({
   actions,
+  activeActionID,
+  filters,
   candidates,
   selectedCandidateKeys,
   form,
   isCreating,
   isGeneratingCandidates,
   isSavingCandidates,
+  onFilterChange,
   onChange,
   onCreate,
   onGenerateCandidates,
   onToggleCandidate,
   onToggleAllCandidates,
   onSaveCandidates,
+  onOpenDetail,
   onOpenAtom,
   onApplyTarget,
 }: {
   actions: InterviewBankOpsAction[]
+  activeActionID: string
+  filters: OpsActionFilterForm
   candidates: InterviewBankOpsActionCandidate[]
   selectedCandidateKeys: Set<string>
   form: OpsActionForm
   isCreating: boolean
   isGeneratingCandidates: boolean
   isSavingCandidates: boolean
+  onFilterChange: <K extends keyof OpsActionFilterForm>(key: K, value: OpsActionFilterForm[K]) => void
   onChange: <K extends keyof OpsActionForm>(key: K, value: OpsActionForm[K]) => void
   onCreate: () => void
   onGenerateCandidates: () => void
   onToggleCandidate: (candidate: InterviewBankOpsActionCandidate) => void
   onToggleAllCandidates: () => void
   onSaveCandidates: () => void
+  onOpenDetail: (actionID: string) => void
   onOpenAtom: (atomID: string) => void
   onApplyTarget: (action: InterviewBankOpsAction) => void
 }) {
@@ -1137,9 +1284,49 @@ function OpsActionPanel({
       <div className="interview-bank-list-title">
         <div>
           <div className="panel-title"><CheckCircle2 size={18} /> 运营动作</div>
-          <p className="interview-bank-panel-subtitle">保存管理员要跟进的题库建设动作，当前仅展示 open 队列。</p>
+          <p className="interview-bank-panel-subtitle">保存管理员要跟进的题库建设动作；领域/分类/难度复用页面顶部筛选，这里补充状态、类型、优先级和来源过滤。</p>
         </div>
-        <span className="interview-bank-retrieval-window">{actions.length} 个 open</span>
+        <span className="interview-bank-retrieval-window">{actions.length} 个结果</span>
+      </div>
+
+      <div className="interview-bank-ops-filter-grid">
+        <label>
+          状态
+          <select value={filters.status} onChange={(event) => onFilterChange('status', event.target.value)}>
+            <option value="">全部状态</option>
+            <option value="open">待处理</option>
+            <option value="in_progress">处理中</option>
+            <option value="watching">观察中</option>
+            <option value="resolved">已解决</option>
+            <option value="dismissed">已忽略</option>
+            <option value="reopened">已重开</option>
+          </select>
+        </label>
+        <label>
+          类型
+          <select value={filters.action_type} onChange={(event) => onFilterChange('action_type', event.target.value)}>
+            <option value="">全部类型</option>
+            {['fill_gap', 'fix_atom', 'rebuild_index', 'review_archive', 'observe'].map((value) => (
+              <option value={value} key={value}>{opsActionTypeLabel(value)}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          优先级
+          <select value={filters.priority} onChange={(event) => onFilterChange('priority', event.target.value)}>
+            <option value="">全部优先级</option>
+            {['P0', 'P1', 'P2', 'P3'].map((value) => <option value={value} key={value}>{value}</option>)}
+          </select>
+        </label>
+        <label>
+          来源
+          <select value={filters.source} onChange={(event) => onFilterChange('source', event.target.value)}>
+            <option value="">全部来源</option>
+            {['health_diagnostic', 'index_status', 'retrieval_analytics', 'manual'].map((value) => (
+              <option value={value} key={value}>{opsActionSourceLabel(value)}</option>
+            ))}
+          </select>
+        </label>
       </div>
 
       <div className="interview-bank-ops-action-form">
@@ -1245,13 +1432,16 @@ function OpsActionPanel({
       {actions.length > 0 ? (
         <div className="interview-bank-ops-action-list">
           {actions.map((action) => (
-            <div className="interview-bank-ops-action-row" key={action.id}>
+            <div className={`interview-bank-ops-action-row ${activeActionID === action.id ? 'is-selected' : ''}`} key={action.id}>
               <div>
                 <strong>{action.title}</strong>
                 <span>{opsActionTypeLabel(action.action_type)} · {opsActionStatusLabel(action.status)} · {action.priority} · {opsActionTargetLabel(action)}</span>
                 <small>{action.reason} · {formatOptionalDate(action.updated_at)}</small>
               </div>
               <div className="interview-bank-ops-action-row-actions">
+                <button className="ghost-button compact" type="button" onClick={() => onOpenDetail(action.id)}>
+                  <Eye size={15} />{activeActionID === action.id ? '已打开' : '详情'}
+                </button>
                 {(action.domain || action.category || action.difficulty) ? (
                   <button className="ghost-button compact" type="button" onClick={() => onApplyTarget(action)}>
                     <Search size={15} />套用
@@ -1269,9 +1459,222 @@ function OpsActionPanel({
       ) : (
         <div className="interview-bank-empty-row">
           <strong>暂无运营动作</strong>
-          <span>手工创建动作后会进入 open 队列。</span>
+          <span>切换过滤条件，或创建/保存新的运营动作。</span>
         </div>
       )}
+    </section>
+  )
+}
+
+function OpsActionDetailPanel({
+  detail,
+  isLoading,
+  isRebuilding,
+  note,
+  isUpdatingStatus,
+  onNoteChange,
+  onApplyTarget,
+  onOpenAtom,
+  onRebuildAtom,
+  onUpdateStatus,
+}: {
+  detail: InterviewBankOpsActionDetail | null
+  isLoading: boolean
+  isRebuilding: boolean
+  note: string
+  isUpdatingStatus: boolean
+  onNoteChange: (value: string) => void
+  onApplyTarget: (action: InterviewBankOpsAction) => void
+  onOpenAtom: (atomID: string) => void
+  onRebuildAtom: () => void
+  onUpdateStatus: (nextStatus: string) => void
+}) {
+  if (isLoading) {
+    return (
+      <section className="panel interview-bank-ops-action-detail-panel">
+        <div className="panel-title"><Eye size={18} /> 动作详情</div>
+        <div className="interview-bank-empty-row">
+          <strong>正在读取运营动作详情</strong>
+          <span>请稍候。</span>
+        </div>
+      </section>
+    )
+  }
+
+  if (!detail) {
+    return (
+      <section className="panel interview-bank-ops-action-detail-panel">
+        <div className="panel-title"><Eye size={18} /> 动作详情</div>
+        <div className="interview-bank-empty-row">
+          <strong>未选择运营动作</strong>
+          <span>在 open 队列中点击“详情”后，可查看证据、当前 atom 状态，并复用现有治理入口。</span>
+        </div>
+      </section>
+    )
+  }
+
+  const action = detail.action
+  const atomContext = detail.atom_context
+  const canApplyTarget = Boolean(action.domain || action.category || action.difficulty)
+  const canRebuildAtom = action.action_type === 'rebuild_index' && Boolean(atomContext?.id) && atomContext?.status !== 'archived'
+  const evidenceEntries = Object.entries(action.evidence ?? {})
+  const history = detail.history ?? []
+  const canReopen = action.status === 'resolved' || action.status === 'dismissed'
+
+  return (
+    <section className="panel interview-bank-ops-action-detail-panel">
+      <div className="interview-bank-detail-header">
+        <div>
+          <div className="panel-title"><Eye size={18} /> 动作详情</div>
+          <h2>{action.title}</h2>
+          <p>{opsActionTypeLabel(action.action_type)} · {opsActionStatusLabel(action.status)} · {action.priority} · {opsActionSourceLabel(action.source)}</p>
+        </div>
+        {detail.stale ? (
+          <span className="interview-bank-pill ops-stale"><AlertTriangle size={14} />已过时</span>
+        ) : null}
+      </div>
+
+      <div className="interview-bank-ops-detail-meta">
+        <div className="interview-bank-ops-detail-card">
+          <span>目标范围</span>
+          <strong>{opsActionTargetLabel(action)}</strong>
+          <small>{formatOptionalDate(action.updated_at)} 更新</small>
+        </div>
+        <div className="interview-bank-ops-detail-card">
+          <span>触发原因</span>
+          <strong>{action.reason}</strong>
+          <small>{action.created_by || 'system'} 创建于 {formatOptionalDate(action.created_at)}</small>
+        </div>
+      </div>
+
+      {detail.stale ? (
+        <div className="interview-bank-ops-stale-box">
+          <strong>关联资源已变化</strong>
+          <span>{detail.stale_reason || '当前动作目标已和创建时不同，请结合当前 atom 状态决定是否继续处理。'}</span>
+        </div>
+      ) : null}
+
+      <div className="interview-bank-ops-detail-block">
+        <div className="panel-title"><Database size={18} /> 当前 atom 状态</div>
+        {atomContext ? (
+          <div className="interview-bank-ops-atom-card">
+            <div>
+              <strong>{atomContext.title || atomContext.id}</strong>
+              <span>{atomContext.id}</span>
+            </div>
+            <div className="interview-bank-ops-atom-meta">
+              <span className={`interview-bank-pill status-${atomContext.status}`}>{statusLabel(atomContext.status)}</span>
+              <span className={`interview-bank-pill vector-${atomContext.vector_status}`}>{vectorStatusLabel(atomContext.vector_status)}</span>
+              <span className="interview-bank-pill">v{atomContext.current_version}</span>
+              <span className="interview-bank-pill">更新于 {formatOptionalDate(atomContext.updated_at)}</span>
+            </div>
+          </div>
+        ) : (
+          <div className="interview-bank-empty-row">
+            <strong>当前没有关联 atom 上下文</strong>
+            <span>{action.atom_id ? '后端未找到对应 atom。' : '该动作目前只有组合目标，没有单一 atom。'}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="interview-bank-ops-detail-block">
+        <div className="panel-title"><History size={18} /> 证据快照</div>
+        {evidenceEntries.length > 0 ? (
+          <div className="interview-bank-ops-evidence-list">
+            {evidenceEntries.map(([key, value]) => (
+              <div className="interview-bank-ops-evidence-row" key={key}>
+                <span>{opsActionEvidenceLabel(key)}</span>
+                <strong>{opsActionEvidenceValue(key, value)}</strong>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="interview-bank-empty-row">
+            <strong>没有额外证据</strong>
+            <span>该动作只保留了最小治理元数据。</span>
+          </div>
+        )}
+      </div>
+
+      <div className="interview-bank-ops-detail-block">
+        <div className="panel-title"><CheckCircle2 size={18} /> 状态流转</div>
+        <div className="interview-bank-ops-status-box">
+          <label>
+            备注
+            <textarea
+              value={note}
+              onChange={(event) => onNoteChange(event.target.value)}
+              rows={3}
+              placeholder="关闭/忽略必须填写备注；处理中、观察中、重开可选填"
+            />
+          </label>
+          <div className="interview-bank-ops-action-row-actions">
+            {action.status !== 'in_progress' ? (
+              <button className="ghost-button compact" type="button" onClick={() => onUpdateStatus('in_progress')} disabled={isUpdatingStatus}>
+                {isUpdatingStatus ? '更新中' : '标记处理中'}
+              </button>
+            ) : null}
+            {action.status !== 'watching' ? (
+              <button className="ghost-button compact" type="button" onClick={() => onUpdateStatus('watching')} disabled={isUpdatingStatus}>
+                {isUpdatingStatus ? '更新中' : '标记观察中'}
+              </button>
+            ) : null}
+            {action.status !== 'resolved' ? (
+              <button className="primary-button compact" type="button" onClick={() => onUpdateStatus('resolved')} disabled={isUpdatingStatus}>
+                {isUpdatingStatus ? '更新中' : '标记已解决'}
+              </button>
+            ) : null}
+            {action.status !== 'dismissed' ? (
+              <button className="ghost-button compact danger-button" type="button" onClick={() => onUpdateStatus('dismissed')} disabled={isUpdatingStatus}>
+                {isUpdatingStatus ? '更新中' : '标记已忽略'}
+              </button>
+            ) : null}
+            {canReopen ? (
+              <button className="ghost-button compact" type="button" onClick={() => onUpdateStatus('reopened')} disabled={isUpdatingStatus}>
+                {isUpdatingStatus ? '更新中' : '重开动作'}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      <div className="interview-bank-ops-detail-block">
+        <div className="panel-title"><History size={18} /> 状态历史</div>
+        {history.length > 0 ? (
+          <div className="interview-bank-version-list">
+            {history.map((item: InterviewBankOpsActionHistoryEntry) => (
+              <div className="interview-bank-version-row" key={item.id}>
+                <strong>{opsActionStatusLabel(item.from_status)} → {opsActionStatusLabel(item.to_status)}</strong>
+                <span>{item.created_by || 'system'} · {formatOptionalDate(item.created_at)}</span>
+                <small>{item.note || '无备注'}</small>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="interview-bank-empty-row">
+            <strong>暂无状态历史</strong>
+            <span>第一次状态切换后会在这里显示记录。</span>
+          </div>
+        )}
+      </div>
+
+      <div className="interview-bank-ops-action-row-actions">
+        {canApplyTarget ? (
+          <button className="ghost-button compact" type="button" onClick={() => onApplyTarget(action)}>
+            <Search size={15} />套用到筛选/预览
+          </button>
+        ) : null}
+        {action.atom_id ? (
+          <button className="ghost-button compact" type="button" onClick={() => onOpenAtom(action.atom_id || '')}>
+            <Eye size={15} />打开原子详情
+          </button>
+        ) : null}
+        {canRebuildAtom ? (
+          <button className="primary-button compact" type="button" onClick={onRebuildAtom} disabled={isRebuilding}>
+            <RefreshCw size={15} />{isRebuilding ? '重建中' : '重建关联索引'}
+          </button>
+        ) : null}
+      </div>
     </section>
   )
 }
@@ -1917,6 +2320,78 @@ function opsActionTargetLabel(action: { domain?: string; category?: string; diff
     return `${combo} · ${action.atom_id}`
   }
   return combo || action.atom_id || '未填目标'
+}
+
+function opsActionEvidenceLabel(key: string) {
+  switch (key) {
+    case 'status':
+      return '健康状态'
+    case 'reasons':
+      return '触发原因'
+    case 'actions':
+      return '建议动作'
+    case 'opening_count':
+      return '开场题数量'
+    case 'followup_count':
+      return '追问题数量'
+    case 'indexed_followup_count':
+      return '已索引追问题'
+    case 'published_count':
+      return '已发布数量'
+    case 'atom_id':
+      return 'atom ID'
+    case 'title':
+      return '题目标题'
+    case 'subject':
+      return '考察点'
+    case 'domain':
+      return '领域'
+    case 'category':
+      return '分类'
+    case 'difficulty':
+      return '难度'
+    case 'question_role':
+      return '题目角色'
+    case 'vector_status':
+      return '索引状态'
+    case 'current_version':
+      return '当前版本'
+    case 'fallback_count':
+      return '回退次数'
+    case 'recent_reason':
+      return '最近回退原因'
+    case 'last_seen_at':
+      return '最近出现时间'
+    case 'analytics_window_total_logs':
+      return '分析窗口样本'
+    case 'fallback_rate':
+      return '回退率'
+    case 'hit_count':
+      return '命中次数'
+    case 'last_hit_at':
+      return '最近命中时间'
+    default:
+      return key.replaceAll('_', ' ')
+  }
+}
+
+function opsActionEvidenceValue(key: string, value: unknown) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item)).join(' / ')
+  }
+  if (typeof value === 'number' && key === 'fallback_rate') {
+    return formatPercent(value)
+  }
+  if (typeof value === 'string' && key.endsWith('_at')) {
+    return formatOptionalDate(value)
+  }
+  if (typeof value === 'string' && key === 'category') {
+    return compactCategoryLabel(value)
+  }
+  if (typeof value === 'object' && value) {
+    return JSON.stringify(value)
+  }
+  return String(value ?? '-')
 }
 
 function docTypeLabel(value: string) {

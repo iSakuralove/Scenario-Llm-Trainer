@@ -154,6 +154,11 @@ type interviewBankOpsActionCreateRequest struct {
 	Evidence   map[string]interface{} `json:"evidence"`
 }
 
+type interviewBankOpsActionUpdateRequest struct {
+	Status string `json:"status"`
+	Note   string `json:"note"`
+}
+
 type interviewKnowledgeHealthSummary struct {
 	TotalAtoms          int `json:"total_atoms"`
 	PublishedAtoms      int `json:"published_atoms"`
@@ -380,6 +385,36 @@ func (s *Server) handleAdminInterviewBank(w http.ResponseWriter, r *http.Request
 		filter := parseInterviewBankOpsActionFilter(r)
 		items := s.store.ListInterviewBankOpsActions(filter)
 		writeOK(w, map[string]interface{}{"list": items, "total": len(items), "filters": filter})
+		return
+	}
+	if len(parts) == 2 && parts[0] == "ops-actions" && r.Method == http.MethodGet {
+		detail, ok := s.interviewBankOpsActionDetail(parts[1])
+		if !ok {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+		writeOK(w, detail)
+		return
+	}
+	if len(parts) == 2 && parts[0] == "ops-actions" && r.Method == http.MethodPatch {
+		var req interviewBankOpsActionUpdateRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		action, historyEntry, err := s.store.UpdateInterviewBankOpsActionStatus(parts[1], req.Status, req.Note, user.ID)
+		if err != nil {
+			status := http.StatusBadRequest
+			if err.Error() == "interview bank ops action not found" {
+				status = http.StatusNotFound
+			}
+			writeError(w, status, err.Error())
+			return
+		}
+		s.audit(r, user, "admin.interview_bank_ops_action_status_update", "interview_bank_ops_action", action.ID, map[string]string{
+			"from_status": historyEntry.FromStatus,
+			"to_status":   historyEntry.ToStatus,
+		})
+		writeOK(w, map[string]interface{}{"action": action, "history_entry": historyEntry})
 		return
 	}
 	if len(parts) == 3 && parts[0] == "ops-actions" && parts[1] == "candidates" && parts[2] == "save" && r.Method == http.MethodPost {
@@ -944,6 +979,40 @@ func (s *Server) activeInterviewBankOpsActionKeys() map[string]bool {
 	return active
 }
 
+func (s *Server) interviewBankOpsActionDetail(actionID string) (domain.InterviewBankOpsActionDetail, bool) {
+	action, ok := s.store.GetInterviewBankOpsAction(actionID)
+	if !ok || action == nil {
+		return domain.InterviewBankOpsActionDetail{}, false
+	}
+	detail := domain.InterviewBankOpsActionDetail{
+		Action:      *action,
+		History:     s.store.ListInterviewBankOpsActionHistory(actionID),
+		StaleReason: "",
+	}
+	if strings.TrimSpace(action.AtomID) == "" {
+		return detail, true
+	}
+	atom, ok := s.store.GetInterviewKnowledgeAtom(action.AtomID)
+	if !ok || atom == nil {
+		detail.Stale = true
+		detail.StaleReason = "关联 atom 不存在"
+		return detail, true
+	}
+	detail.AtomContext = &domain.InterviewBankOpsActionAtomContext{
+		ID:             atom.ID,
+		Title:          atom.Title,
+		Status:         atom.Status,
+		VectorStatus:   atom.VectorStatus,
+		CurrentVersion: atom.CurrentVersion,
+		UpdatedAt:      atom.UpdatedAt,
+	}
+	if strings.TrimSpace(atom.Status) == "archived" {
+		detail.Stale = true
+		detail.StaleReason = "关联 atom 已归档"
+	}
+	return detail, true
+}
+
 func interviewKnowledgeHealthCombinationMatchesCandidateRequest(combo interviewKnowledgeHealthCombination, req domain.InterviewBankOpsActionCandidateRequest) bool {
 	if req.Domain != "" && !strings.EqualFold(combo.Domain, strings.TrimSpace(req.Domain)) {
 		return false
@@ -1000,11 +1069,11 @@ func (s *Server) updateInterviewKnowledgeAtom(atomID string, req interviewKnowle
 	updated.FollowUpPaths = normalizeImportStringList(req.FollowUpPaths, false)
 	updated.Status = current.Status
 	// 内容变更后旧向量不再可信，等待管理员手动重建索引。
-	updated.VectorStatus = "pending"
+		updated.VectorStatus = "pending"
 
-	if errors := validateInterviewKnowledgeAtomFields(updated); len(errors) > 0 {
-		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf(strings.Join(errors, "; "))
-	}
+		if errors := validateInterviewKnowledgeAtomFields(updated); len(errors) > 0 {
+			return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf("%s", strings.Join(errors, "; "))
+		}
 	return s.store.SaveInterviewKnowledgeAtomVersioned(updated, domain.InterviewKnowledgeVersionManualEdit, user.ID, changeNote)
 }
 
@@ -1043,11 +1112,11 @@ func (s *Server) restoreInterviewKnowledgeAtom(atomID string, user *domain.User)
 		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf("only archived interview knowledge atoms can be restored")
 	}
 	restored := *current
-	restored.Status = "published"
-	restored.VectorStatus = "pending"
-	if errors := validateInterviewKnowledgeAtomFields(restored); len(errors) > 0 {
-		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf(strings.Join(errors, "; "))
-	}
+		restored.Status = "published"
+		restored.VectorStatus = "pending"
+		if errors := validateInterviewKnowledgeAtomFields(restored); len(errors) > 0 {
+			return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf("%s", strings.Join(errors, "; "))
+		}
 	return s.store.SaveInterviewKnowledgeAtomVersioned(restored, domain.InterviewKnowledgeVersionRestoreArchived, user.ID, "恢复归档")
 }
 

@@ -128,6 +128,417 @@ func TestAdminInterviewBankOpsActionsRequireAdmin(t *testing.T) {
 	}
 }
 
+func TestAdminInterviewBankOpsActionDetailIncludesCurrentAtomContext(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	atom := validInterviewBankAtomForRebuild("atom-ops-detail", "published", "failed")
+	savedAtom, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "详情样例")
+	if err != nil {
+		t.Fatal(err)
+	}
+	action, err := dataStore.CreateInterviewBankOpsAction(domain.InterviewBankOpsAction{
+		ActionType: domain.InterviewBankOpsActionTypeRebuildIndex,
+		Status:     domain.InterviewBankOpsActionStatusOpen,
+		Priority:   "P1",
+		Source:     domain.InterviewBankOpsActionSourceIndexStatus,
+		Title:      "重建题库索引：" + savedAtom.Title,
+		Reason:     "已发布题目索引状态为 failed，可能影响后续追问检索。",
+		Domain:     savedAtom.Domain,
+		Category:   savedAtom.Category,
+		Difficulty: savedAtom.Difficulty,
+		AtomID:     savedAtom.ID,
+		Evidence:   map[string]interface{}{"vector_status": "failed"},
+		CreatedBy:  "admin-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	status, env := requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/ops-actions/"+action.ID, adminToken, nil)
+	if status != http.StatusOK {
+		t.Fatalf("ops action detail status=%d message=%s", status, env.Message)
+	}
+	var detail struct {
+		Action      domain.InterviewBankOpsAction `json:"action"`
+		AtomContext struct {
+			ID             string `json:"id"`
+			Title          string `json:"title"`
+			Status         string `json:"status"`
+			VectorStatus   string `json:"vector_status"`
+			CurrentVersion int    `json:"current_version"`
+		} `json:"atom_context"`
+		Stale       bool   `json:"stale"`
+		StaleReason string `json:"stale_reason"`
+	}
+	mustDecodeData(t, env, &detail)
+	if detail.Action.ID != action.ID || detail.Action.AtomID != savedAtom.ID {
+		t.Fatalf("unexpected action detail: %+v", detail.Action)
+	}
+	if detail.Stale {
+		t.Fatalf("expected non-stale action detail, got stale=%v reason=%q", detail.Stale, detail.StaleReason)
+	}
+	if detail.AtomContext.ID != savedAtom.ID || detail.AtomContext.Status != "published" || detail.AtomContext.VectorStatus != "failed" {
+		t.Fatalf("unexpected atom context: %+v", detail.AtomContext)
+	}
+	if detail.AtomContext.CurrentVersion != savedAtom.CurrentVersion || detail.AtomContext.Title != savedAtom.Title {
+		t.Fatalf("unexpected atom version/title context: %+v saved=%+v", detail.AtomContext, savedAtom)
+	}
+}
+
+func TestAdminInterviewBankOpsActionDetailMarksArchivedOrMissingAtomStale(t *testing.T) {
+	t.Run("archived atom", func(t *testing.T) {
+		dataStore := store.NewMemoryStore(auth.HashPassword)
+		atom := validInterviewBankAtomForRebuild("atom-ops-archived", "archived", "pending")
+		savedAtom, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "详情 stale 样例")
+		if err != nil {
+			t.Fatal(err)
+		}
+		action, err := dataStore.CreateInterviewBankOpsAction(domain.InterviewBankOpsAction{
+			ActionType: domain.InterviewBankOpsActionTypeObserve,
+			Status:     domain.InterviewBankOpsActionStatusOpen,
+			Priority:   "P3",
+			Source:     domain.InterviewBankOpsActionSourceRetrievalAnalytics,
+			Title:      "观察已归档题目",
+			Reason:     "原动作关联资源已被下架。",
+			AtomID:     savedAtom.ID,
+			Evidence:   map[string]interface{}{"hit_count": float64(0)},
+			CreatedBy:  "admin-1",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+		adminToken := loginToken(t, handler, "admin", "admin123")
+
+		status, env := requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/ops-actions/"+action.ID, adminToken, nil)
+		if status != http.StatusOK {
+			t.Fatalf("archived detail status=%d message=%s", status, env.Message)
+		}
+		var detail struct {
+			Stale       bool   `json:"stale"`
+			StaleReason string `json:"stale_reason"`
+			AtomContext struct {
+				Status string `json:"status"`
+			} `json:"atom_context"`
+		}
+		mustDecodeData(t, env, &detail)
+		if !detail.Stale || detail.StaleReason != "关联 atom 已归档" || detail.AtomContext.Status != "archived" {
+			t.Fatalf("expected archived atom stale detail, got %+v", detail)
+		}
+	})
+
+	t.Run("missing atom", func(t *testing.T) {
+		dataStore := store.NewMemoryStore(auth.HashPassword)
+		action, err := dataStore.CreateInterviewBankOpsAction(domain.InterviewBankOpsAction{
+			ActionType: domain.InterviewBankOpsActionTypeFixAtom,
+			Status:     domain.InterviewBankOpsActionStatusOpen,
+			Priority:   "P2",
+			Source:     domain.InterviewBankOpsActionSourceManual,
+			Title:      "检查缺失 atom",
+			Reason:     "原始动作关联原子已不存在。",
+			AtomID:     "atom-missing",
+			Evidence:   map[string]interface{}{"source": "manual"},
+			CreatedBy:  "admin-1",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+		adminToken := loginToken(t, handler, "admin", "admin123")
+
+		status, env := requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/ops-actions/"+action.ID, adminToken, nil)
+		if status != http.StatusOK {
+			t.Fatalf("missing atom detail status=%d message=%s", status, env.Message)
+		}
+		var detail struct {
+			Stale       bool        `json:"stale"`
+			StaleReason string      `json:"stale_reason"`
+			AtomContext interface{} `json:"atom_context"`
+		}
+		mustDecodeData(t, env, &detail)
+		if !detail.Stale || detail.StaleReason != "关联 atom 不存在" || detail.AtomContext != nil {
+			t.Fatalf("expected missing atom stale detail, got %+v", detail)
+		}
+	})
+}
+
+func TestAdminInterviewBankOpsActionDetailRequiresAdmin(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	action, err := dataStore.CreateInterviewBankOpsAction(domain.InterviewBankOpsAction{
+		ActionType: domain.InterviewBankOpsActionTypeFillGap,
+		Status:     domain.InterviewBankOpsActionStatusOpen,
+		Priority:   "P1",
+		Source:     domain.InterviewBankOpsActionSourceManual,
+		Title:      "管理员详情权限",
+		Reason:     "验证详情接口只允许管理员访问。",
+		Domain:     "backend",
+		Category:   "cache",
+		Difficulty: "L3",
+		Evidence:   map[string]interface{}{"source": "manual"},
+		CreatedBy:  "admin-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	demoToken := loginToken(t, handler, "demo", "demo123")
+
+	_, env := requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/ops-actions/"+action.ID, demoToken, nil)
+	if env.Code != http.StatusForbidden {
+		t.Fatalf("student ops action detail code=%d", env.Code)
+	}
+}
+
+func TestAdminInterviewBankOpsActionUpdateStatusAndHistory(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	action, err := dataStore.CreateInterviewBankOpsAction(domain.InterviewBankOpsAction{
+		ActionType: domain.InterviewBankOpsActionTypeRebuildIndex,
+		Status:     domain.InterviewBankOpsActionStatusOpen,
+		Priority:   "P1",
+		Source:     domain.InterviewBankOpsActionSourceIndexStatus,
+		Title:      "重建索引动作闭环样例",
+		Reason:     "索引失败，需要先处理后关闭。",
+		Domain:     "backend",
+		Category:   "cache",
+		Difficulty: "L3",
+		AtomID:     "atom-status-loop",
+		Evidence:   map[string]interface{}{"vector_status": "failed"},
+		CreatedBy:  "admin-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	status, env := requestJSON(t, handler, http.MethodPatch, "/api/v1/admin/interview-bank/ops-actions/"+action.ID, adminToken, map[string]interface{}{
+		"status": "resolved",
+		"note":   "已完成索引重建并复查通过",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("ops action patch status=%d message=%s", status, env.Message)
+	}
+	var updated struct {
+		Action       domain.InterviewBankOpsAction `json:"action"`
+		HistoryEntry struct {
+			ActionID   string `json:"action_id"`
+			FromStatus string `json:"from_status"`
+			ToStatus   string `json:"to_status"`
+			Note       string `json:"note"`
+			CreatedBy  string `json:"created_by"`
+		} `json:"history_entry"`
+	}
+	mustDecodeData(t, env, &updated)
+	if updated.Action.Status != domain.InterviewBankOpsActionStatusResolved {
+		t.Fatalf("expected resolved action, got %+v", updated.Action)
+	}
+	if updated.HistoryEntry.ActionID != action.ID || updated.HistoryEntry.FromStatus != "open" || updated.HistoryEntry.ToStatus != "resolved" {
+		t.Fatalf("unexpected history entry statuses: %+v", updated.HistoryEntry)
+	}
+	if updated.HistoryEntry.Note != "已完成索引重建并复查通过" || updated.HistoryEntry.CreatedBy != "user-admin" {
+		t.Fatalf("unexpected history entry note/admin: %+v", updated.HistoryEntry)
+	}
+
+	status, env = requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/ops-actions/"+action.ID, adminToken, nil)
+	if status != http.StatusOK {
+		t.Fatalf("ops action detail after patch status=%d message=%s", status, env.Message)
+	}
+	var detail struct {
+		Action  domain.InterviewBankOpsAction `json:"action"`
+		History []struct {
+			FromStatus string `json:"from_status"`
+			ToStatus   string `json:"to_status"`
+			Note       string `json:"note"`
+			CreatedBy  string `json:"created_by"`
+		} `json:"history"`
+	}
+	mustDecodeData(t, env, &detail)
+	if detail.Action.Status != domain.InterviewBankOpsActionStatusResolved {
+		t.Fatalf("expected resolved action in detail, got %+v", detail.Action)
+	}
+	if len(detail.History) != 1 {
+		t.Fatalf("expected one history row, got %+v", detail.History)
+	}
+	if detail.History[0].FromStatus != "open" || detail.History[0].ToStatus != "resolved" || detail.History[0].Note != "已完成索引重建并复查通过" {
+		t.Fatalf("unexpected history detail row: %+v", detail.History[0])
+	}
+}
+
+func TestAdminInterviewBankOpsActionUpdateStatusValidatesNoteAndReopenFlow(t *testing.T) {
+	t.Run("resolved note required", func(t *testing.T) {
+		dataStore := store.NewMemoryStore(auth.HashPassword)
+		action, err := dataStore.CreateInterviewBankOpsAction(domain.InterviewBankOpsAction{
+			ActionType: domain.InterviewBankOpsActionTypeFillGap,
+			Status:     domain.InterviewBankOpsActionStatusOpen,
+			Priority:   "P1",
+			Source:     domain.InterviewBankOpsActionSourceManual,
+			Title:      "备注校验",
+			Reason:     "关闭必须留痕。",
+			Domain:     "backend",
+			Category:   "cache",
+			Difficulty: "L3",
+			Evidence:   map[string]interface{}{"source": "manual"},
+			CreatedBy:  "admin-1",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+		adminToken := loginToken(t, handler, "admin", "admin123")
+
+		status, env := requestJSON(t, handler, http.MethodPatch, "/api/v1/admin/interview-bank/ops-actions/"+action.ID, adminToken, map[string]interface{}{
+			"status": "resolved",
+			"note":   " ",
+		})
+		if status != http.StatusBadRequest || env.Message != "note is required for resolved or dismissed" {
+			t.Fatalf("expected resolved note rejection, status=%d env=%+v", status, env)
+		}
+	})
+
+	t.Run("reopened requires closed state", func(t *testing.T) {
+		dataStore := store.NewMemoryStore(auth.HashPassword)
+		action, err := dataStore.CreateInterviewBankOpsAction(domain.InterviewBankOpsAction{
+			ActionType: domain.InterviewBankOpsActionTypeObserve,
+			Status:     domain.InterviewBankOpsActionStatusOpen,
+			Priority:   "P3",
+			Source:     domain.InterviewBankOpsActionSourceManual,
+			Title:      "重开校验",
+			Reason:     "未关闭前不能重开。",
+			AtomID:     "atom-reopen-check",
+			Evidence:   map[string]interface{}{"source": "manual"},
+			CreatedBy:  "admin-1",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+		adminToken := loginToken(t, handler, "admin", "admin123")
+
+		status, env := requestJSON(t, handler, http.MethodPatch, "/api/v1/admin/interview-bank/ops-actions/"+action.ID, adminToken, map[string]interface{}{
+			"status": "reopened",
+		})
+		if status != http.StatusBadRequest || env.Message != "reopened status requires resolved or dismissed action" {
+			t.Fatalf("expected reopen rejection, status=%d env=%+v", status, env)
+		}
+	})
+}
+
+func TestAdminInterviewBankOpsActionUpdateStatusReopenedAndHistoryOrder(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	action, err := dataStore.CreateInterviewBankOpsAction(domain.InterviewBankOpsAction{
+		ActionType: domain.InterviewBankOpsActionTypeObserve,
+		Status:     domain.InterviewBankOpsActionStatusOpen,
+		Priority:   "P3",
+		Source:     domain.InterviewBankOpsActionSourceRetrievalAnalytics,
+		Title:      "观察后重开",
+		Reason:     "需要验证重开和历史顺序。",
+		AtomID:     "atom-reopened",
+		Evidence:   map[string]interface{}{"hit_count": float64(0)},
+		CreatedBy:  "admin-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	adminToken := loginToken(t, handler, "admin", "admin123")
+	demoToken := loginToken(t, handler, "demo", "demo123")
+
+	_, env := requestJSON(t, handler, http.MethodPatch, "/api/v1/admin/interview-bank/ops-actions/"+action.ID, demoToken, map[string]interface{}{
+		"status": "watching",
+	})
+	if env.Code != http.StatusForbidden {
+		t.Fatalf("student ops action patch code=%d", env.Code)
+	}
+
+	for _, payload := range []map[string]interface{}{
+		{"status": "watching", "note": "先观察一轮真实检索"},
+		{"status": "resolved", "note": "确认暂不需要继续处理"},
+		{"status": "reopened", "note": "新一轮真实检索再次触发"},
+	} {
+		status, env := requestJSON(t, handler, http.MethodPatch, "/api/v1/admin/interview-bank/ops-actions/"+action.ID, adminToken, payload)
+		if status != http.StatusOK {
+			t.Fatalf("status transition payload=%+v status=%d env=%+v", payload, status, env)
+		}
+	}
+
+	status, env := requestJSON(t, handler, http.MethodGet, "/api/v1/admin/interview-bank/ops-actions/"+action.ID, adminToken, nil)
+	if status != http.StatusOK {
+		t.Fatalf("detail after reopen status=%d env=%+v", status, env)
+	}
+	var detail struct {
+		Action  domain.InterviewBankOpsAction `json:"action"`
+		History []struct {
+			FromStatus string `json:"from_status"`
+			ToStatus   string `json:"to_status"`
+			Note       string `json:"note"`
+		} `json:"history"`
+	}
+	mustDecodeData(t, env, &detail)
+	if detail.Action.Status != domain.InterviewBankOpsActionStatusReopened {
+		t.Fatalf("expected reopened action, got %+v", detail.Action)
+	}
+	if len(detail.History) != 3 {
+		t.Fatalf("expected three history rows, got %+v", detail.History)
+	}
+	if detail.History[0].FromStatus != "resolved" || detail.History[0].ToStatus != "reopened" {
+		t.Fatalf("expected latest history to be reopen, got %+v", detail.History[0])
+	}
+	if detail.History[1].FromStatus != "watching" || detail.History[1].ToStatus != "resolved" {
+		t.Fatalf("expected middle history to be resolve, got %+v", detail.History[1])
+	}
+	if detail.History[2].FromStatus != "open" || detail.History[2].ToStatus != "watching" {
+		t.Fatalf("expected oldest history to be watching, got %+v", detail.History[2])
+	}
+}
+
+func TestAdminInterviewBankOpsActionReopenRejectsActiveDedupeConflict(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	closed, err := dataStore.CreateInterviewBankOpsAction(domain.InterviewBankOpsAction{
+		ActionType: domain.InterviewBankOpsActionTypeFillGap,
+		Status:     domain.InterviewBankOpsActionStatusResolved,
+		Priority:   "P1",
+		Source:     domain.InterviewBankOpsActionSourceHealthDiagnostic,
+		DedupeKey:  "fill_gap|combo|backend|cache|L3",
+		Title:      "已关闭旧动作",
+		Reason:     "已处理过一次。",
+		Domain:     "backend",
+		Category:   "cache",
+		Difficulty: "L3",
+		Evidence:   map[string]interface{}{"status": "blocked"},
+		CreatedBy:  "admin-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dataStore.CreateInterviewBankOpsAction(domain.InterviewBankOpsAction{
+		ActionType: domain.InterviewBankOpsActionTypeFillGap,
+		Status:     domain.InterviewBankOpsActionStatusOpen,
+		Priority:   "P0",
+		Source:     domain.InterviewBankOpsActionSourceHealthDiagnostic,
+		DedupeKey:  closed.DedupeKey,
+		Title:      "新 open 动作",
+		Reason:     "重新出现同类问题。",
+		Domain:     "backend",
+		Category:   "cache",
+		Difficulty: "L3",
+		Evidence:   map[string]interface{}{"status": "blocked"},
+		CreatedBy:  "admin-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	adminToken := loginToken(t, handler, "admin", "admin123")
+
+	status, env := requestJSON(t, handler, http.MethodPatch, "/api/v1/admin/interview-bank/ops-actions/"+closed.ID, adminToken, map[string]interface{}{
+		"status": "reopened",
+		"note":   "尝试重开旧动作",
+	})
+	if status != http.StatusBadRequest || env.Message != "another active action already uses this dedupe_key" {
+		t.Fatalf("expected reopen dedupe rejection, status=%d env=%+v", status, env)
+	}
+}
+
 func TestAdminInterviewBankOpsActionsValidateCreateRequest(t *testing.T) {
 	dataStore := store.NewMemoryStore(auth.HashPassword)
 	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
