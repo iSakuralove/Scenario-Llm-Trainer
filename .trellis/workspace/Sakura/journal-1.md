@@ -641,3 +641,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 19: 运营动作详情与状态闭环
+
+**Date**: 2026-07-14
+**Task**: 运营动作详情与状态闭环
+**Branch**: `main`
+
+### Summary
+
+完成运营动作详情读取、atom stale 判断、现有筛选/原子详情/单 atom 重建联动，以及处理中、观察、解决、忽略、重开和状态历史闭环；详情专项、Go 全量、前端 lint/build 均通过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c6b2afd` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
