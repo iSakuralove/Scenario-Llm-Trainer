@@ -1,9 +1,17 @@
 package httpapi
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
+	"html"
+	"mime"
+	"mime/multipart"
+	"mime/quotedprintable"
 	"net/http"
+	"net/mail"
 	"net/smtp"
+	"net/textproto"
 	"net/url"
 	"situational-teaching/backend/internal/auth"
 	"situational-teaching/backend/internal/domain"
@@ -219,9 +227,112 @@ func (s *Server) sendPasswordResetMail(recipient, link string) error {
 	if err != nil || port <= 0 {
 		return errors.New("invalid SMTP port")
 	}
+	message, err := buildPasswordResetMail(s.smtpFrom, recipient, link)
+	if err != nil {
+		return err
+	}
 	auth := smtp.PlainAuth("", s.smtpUsername, s.smtpPassword, s.smtpHost)
-	body := "From: " + s.smtpFrom + "\r\n" + "To: " + recipient + "\r\n" + "Subject: Password reset\r\n\r\n" + "请在 10 分钟内打开以下链接重置密码：\r\n" + link + "\r\n"
-	return smtp.SendMail(s.smtpHost+":"+strconv.Itoa(port), auth, s.smtpFrom, []string{recipient}, []byte(body))
+	return smtp.SendMail(
+		s.smtpHost+":"+strconv.Itoa(port),
+		auth,
+		message.envelopeFrom,
+		[]string{message.envelopeTo},
+		message.data,
+	)
+}
+
+type passwordResetMail struct {
+	envelopeFrom string
+	envelopeTo   string
+	data         []byte
+}
+
+func buildPasswordResetMail(sender, recipient, link string) (passwordResetMail, error) {
+	from, err := parseSMTPAddress(sender)
+	if err != nil {
+		return passwordResetMail{}, fmt.Errorf("invalid SMTP sender: %w", err)
+	}
+	to, err := parseSMTPAddress(recipient)
+	if err != nil {
+		return passwordResetMail{}, fmt.Errorf("invalid SMTP recipient: %w", err)
+	}
+	resetURL, err := url.Parse(link)
+	if err != nil || (resetURL.Scheme != "http" && resetURL.Scheme != "https") || resetURL.Host == "" {
+		return passwordResetMail{}, errors.New("invalid password reset URL")
+	}
+
+	var alternatives bytes.Buffer
+	multipartWriter := multipart.NewWriter(&alternatives)
+	plainText := "你正在重置情景式教学系统的登录密码。\r\n\r\n" +
+		"请在 10 分钟内打开以下链接完成重置：\r\n" + link + "\r\n\r\n" +
+		"如果这不是你的操作，请忽略此邮件。"
+	htmlLink := html.EscapeString(link)
+	htmlBody := fmt.Sprintf(`<!doctype html>
+<html lang="zh-CN">
+<body style="margin:0;padding:0;background:#f3f6f9;color:#17202a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif;">
+  <table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="background:#f3f6f9;padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border:1px solid #dfe6ee;border-radius:18px;overflow:hidden;">
+          <tr><td style="padding:28px 32px 14px;font-size:13px;font-weight:700;letter-spacing:.08em;color:#0f766e;">情景式教学系统</td></tr>
+          <tr><td style="padding:0 32px 12px;font-size:26px;line-height:1.35;font-weight:800;color:#111827;">重置你的登录密码</td></tr>
+          <tr><td style="padding:0 32px 24px;font-size:15px;line-height:1.8;color:#52606d;">此链接将在 10 分钟后失效，并且只能使用一次。</td></tr>
+          <tr><td align="center" style="padding:0 32px 28px;"><a href="%s" style="display:inline-block;padding:13px 28px;border-radius:999px;background:#ff5a36;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;">重置密码</a></td></tr>
+          <tr><td style="padding:0 32px 12px;font-size:13px;line-height:1.7;color:#697586;">按钮无法打开时，请复制下面的完整链接到浏览器：</td></tr>
+          <tr><td style="padding:0 32px 26px;word-break:break-all;font-size:12px;line-height:1.7;"><a href="%s" style="color:#0f766e;text-decoration:underline;">%s</a></td></tr>
+          <tr><td style="border-top:1px solid #e7edf3;padding:20px 32px 26px;font-size:12px;line-height:1.7;color:#7a8795;">如果这不是你的操作，请忽略此邮件，你的密码不会被修改。</td></tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`, htmlLink, htmlLink, htmlLink)
+
+	if err := writeMailPart(multipartWriter, "text/plain; charset=UTF-8", plainText); err != nil {
+		return passwordResetMail{}, err
+	}
+	if err := writeMailPart(multipartWriter, "text/html; charset=UTF-8", htmlBody); err != nil {
+		return passwordResetMail{}, err
+	}
+	if err := multipartWriter.Close(); err != nil {
+		return passwordResetMail{}, err
+	}
+
+	var message bytes.Buffer
+	fmt.Fprintf(&message, "From: %s\r\n", from.String())
+	fmt.Fprintf(&message, "To: %s\r\n", to.String())
+	fmt.Fprintf(&message, "Subject: %s\r\n", mime.QEncoding.Encode("UTF-8", "情景式教学系统密码重置"))
+	fmt.Fprint(&message, "MIME-Version: 1.0\r\n")
+	fmt.Fprintf(&message, "Content-Type: multipart/alternative; boundary=%q\r\n\r\n", multipartWriter.Boundary())
+	message.Write(alternatives.Bytes())
+
+	return passwordResetMail{
+		envelopeFrom: from.Address,
+		envelopeTo:   to.Address,
+		data:         message.Bytes(),
+	}, nil
+}
+
+func parseSMTPAddress(value string) (*mail.Address, error) {
+	if strings.ContainsAny(value, "\r\n") {
+		return nil, errors.New("mail address contains a line break")
+	}
+	return mail.ParseAddress(strings.TrimSpace(value))
+}
+
+func writeMailPart(writer *multipart.Writer, contentType, content string) error {
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Type", contentType)
+	header.Set("Content-Transfer-Encoding", "quoted-printable")
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		return err
+	}
+	encoded := quotedprintable.NewWriter(part)
+	if _, err := encoded.Write([]byte(content)); err != nil {
+		return err
+	}
+	return encoded.Close()
 }
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, user *domain.User, suffix string) {
 	switch suffix {

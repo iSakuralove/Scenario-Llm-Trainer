@@ -12,12 +12,15 @@ export function AuthPage() {
   const location = useLocation()
   const navigate = useNavigate()
   const setSession = useAuthStore((state) => state.setSession)
+  const logout = useAuthStore((state) => state.logout)
   const resetToken = new URLSearchParams(location.search).get('token') || ''
-  const [mode, setMode] = useState<'login' | 'register' | 'forgot' | 'reset'>(resetToken ? 'reset' : 'login')
+  const isResetRoute = location.pathname === '/reset-password'
+  const [mode, setMode] = useState<'login' | 'register' | 'forgot' | 'reset'>(isResetRoute || resetToken ? 'reset' : 'login')
   const [username, setUsername] = useState('demo')
   const [email, setEmail] = useState('demo@example.com')
-  const [password, setPassword] = useState('demo123')
-  const [error, setError] = useState('')
+  const [password, setPassword] = useState(isResetRoute || resetToken ? '' : 'demo123')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [feedback, setFeedback] = useState<{ tone: 'error' | 'success'; message: string } | null>(null)
   const [isSubmitting, setSubmitting] = useState(false)
   const aiStatus = useAIStatusStore((state) => state.status)
   const loadAIStatus = useAIStatusStore((state) => state.load)
@@ -28,18 +31,37 @@ export function AuthPage() {
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-    setError('')
+    setFeedback(null)
+    if (mode === 'reset') {
+      if (!resetToken) {
+        setFeedback({ tone: 'error', message: '重置链接缺少安全令牌，请返回登录页重新发送邮件。' })
+        return
+      }
+      if (password.length < 6) {
+        setFeedback({ tone: 'error', message: '密码至少需要 6 位。' })
+        return
+      }
+      if (password !== confirmPassword) {
+        setFeedback({ tone: 'error', message: '两次输入的密码不一致。' })
+        return
+      }
+    }
     setSubmitting(true)
     try {
       if (mode === 'forgot') {
         await api.requestPasswordReset(email || username)
-        setError('如果该邮箱已注册，重置邮件会发送到你的邮箱。')
+        setFeedback({ tone: 'success', message: '如果该邮箱已注册，重置邮件会发送到你的邮箱。' })
         return
       }
       if (mode === 'reset') {
         await api.confirmPasswordReset(resetToken, password)
+        logout()
         setMode('login')
-        setError('密码已重置，请使用新密码登录。')
+        setUsername('')
+        setPassword('')
+        setConfirmPassword('')
+        setFeedback({ tone: 'success', message: '密码已重置，请使用新密码登录。' })
+        navigate('/', { replace: true })
         return
       }
       const session = mode === 'login' ? await api.login(username, password) : await api.register(username, email, password)
@@ -50,14 +72,14 @@ export function AuthPage() {
         : defaultRoute
       navigate(targetPath === '/' ? defaultRoute : targetPath, { replace: true })
     } catch (err) {
-      setError(err instanceof Error ? err.message : '登录失败')
+      setFeedback({ tone: 'error', message: err instanceof Error ? err.message : '登录失败' })
     } finally {
       setSubmitting(false)
     }
   }
 
   return (
-    <div className="auth-layout">
+    <div className={`auth-layout ${mode === 'reset' ? 'auth-layout-reset' : ''}`}>
       <section className="auth-intro" aria-label="登录页海报封面">
         <div className="auth-stage-meta">
           <div className="auth-kicker">
@@ -145,13 +167,22 @@ export function AuthPage() {
         <div className="auth-runtime">本地演示环境 · {aiModeLabel(aiStatus)}</div>
       </section>
 
-      <form className="auth-panel" onSubmit={submit}>
+      <form className="auth-panel" onSubmit={submit} aria-labelledby="auth-panel-title">
+        {mode === 'reset' && (
+          <div className="auth-reset-brand" aria-label="情景式教学系统密码安全中心">
+            <span className="auth-reset-brand-mark" aria-hidden="true">AI</span>
+            <span>
+              <strong>情景式教学系统</strong>
+              <small>密码安全中心</small>
+            </span>
+          </div>
+        )}
         <div className="auth-panel-year" aria-hidden="true">
           2026
         </div>
         <div className="auth-panel-head">
           <div className="auth-panel-kicker">LIVE DEMO ACCESS</div>
-          <h2>{mode === 'login' ? '登录演示账号' : mode === 'register' ? '创建学员账号' : mode === 'forgot' ? '找回密码' : '设置新密码'}</h2>
+          <h2 id="auth-panel-title">{mode === 'login' ? '登录演示账号' : mode === 'register' ? '创建学员账号' : mode === 'forgot' ? '找回密码' : '设置新密码'}</h2>
           <p>
             {mode === 'login'
               ? '选择演示账号后进入系统，体验排障训练、技术面试与案例沉淀的完整流程。'
@@ -160,28 +191,55 @@ export function AuthPage() {
         </div>
 
         <div className="auth-form-fields">
-          <label>
-            {mode === 'forgot' ? '注册邮箱' : mode === 'reset' ? '重置邮箱' : '用户名或邮箱'}
-            <input autoComplete="username" value={mode === 'forgot' ? email : username} disabled={mode === 'reset'} onChange={(event) => mode === 'forgot' ? setEmail(event.target.value) : setUsername(event.target.value)} />
-          </label>
+          {mode !== 'reset' && (
+            <label>
+              {mode === 'forgot' ? '注册邮箱' : '用户名或邮箱'}
+              <input
+                autoComplete={mode === 'forgot' ? 'email' : 'username'}
+                type={mode === 'forgot' ? 'email' : 'text'}
+                value={mode === 'forgot' ? email : username}
+                required
+                onChange={(event) => mode === 'forgot' ? setEmail(event.target.value) : setUsername(event.target.value)}
+              />
+            </label>
+          )}
           {mode === 'register' && (
             <label>
               邮箱
-              <input autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+              <input autoComplete="email" type="email" value={email} required onChange={(event) => setEmail(event.target.value)} />
             </label>
           )}
           {mode !== 'forgot' && <label>
-            密码
+            {mode === 'reset' ? '新密码' : '密码'}
             <input
               autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+              minLength={mode === 'login' ? undefined : 6}
               type="password"
               value={password}
+              required
               onChange={(event) => setPassword(event.target.value)}
             />
           </label>}
+          {mode === 'reset' && (
+            <label>
+              确认新密码
+              <input
+                autoComplete="new-password"
+                minLength={6}
+                type="password"
+                value={confirmPassword}
+                required
+                onChange={(event) => setConfirmPassword(event.target.value)}
+              />
+            </label>
+          )}
         </div>
 
-        {error && <div className="form-error">{error}</div>}
+        {feedback && (
+          <div className={`form-feedback ${feedback.tone}`} role={feedback.tone === 'error' ? 'alert' : 'status'} aria-live="polite">
+            {feedback.message}
+          </div>
+        )}
 
         <button className="primary-button" type="submit" disabled={isSubmitting}>
           <Play size={18} />
@@ -189,12 +247,20 @@ export function AuthPage() {
         </button>
         {mode === 'login' && <button className="ghost-button" type="button" onClick={() => setMode('forgot')}>忘记密码</button>}
         {mode !== 'reset' && <button className="ghost-button" type="button" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>{mode === 'login' ? '需要新账号' : '已有账号登录'}</button>}
-        <div className="auth-panel-demo">
+        {mode === 'reset' && <button className="ghost-button" type="button" onClick={() => {
+          logout()
+          setMode('login')
+          setPassword('')
+          setConfirmPassword('')
+          setFeedback(null)
+          navigate('/', { replace: true })
+        }}>返回登录页</button>}
+        {mode === 'login' && <div className="auth-panel-demo">
           <strong>演示账号</strong>
           <span>demo / demo123</span>
           <span>instructor / instructor123</span>
           <span>admin / admin123</span>
-        </div>
+        </div>}
       </form>
 
     </div>

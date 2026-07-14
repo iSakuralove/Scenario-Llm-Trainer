@@ -1,8 +1,14 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
+	"net/mail"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +16,65 @@ import (
 	"situational-teaching/backend/internal/auth"
 	"situational-teaching/backend/internal/store"
 )
+
+func TestBuildPasswordResetMailIncludesClickableHTMLAlternative(t *testing.T) {
+	link := "http://localhost:5173/reset-password?token=test-token"
+	built, err := buildPasswordResetMail("sender@example.com", "student@example.com", link)
+	if err != nil {
+		t.Fatalf("build password reset mail: %v", err)
+	}
+	if built.envelopeFrom != "sender@example.com" || built.envelopeTo != "student@example.com" {
+		t.Fatalf("unexpected envelope addresses: from=%q to=%q", built.envelopeFrom, built.envelopeTo)
+	}
+
+	message, err := mail.ReadMessage(bytes.NewReader(built.data))
+	if err != nil {
+		t.Fatalf("parse password reset mail: %v", err)
+	}
+	mediaType, params, err := mime.ParseMediaType(message.Header.Get("Content-Type"))
+	if err != nil {
+		t.Fatalf("parse mail content type: %v", err)
+	}
+	if mediaType != "multipart/alternative" {
+		t.Fatalf("content type=%q, want multipart/alternative", mediaType)
+	}
+
+	parts := multipart.NewReader(message.Body, params["boundary"])
+	var htmlBody string
+	for {
+		part, partErr := parts.NextPart()
+		if partErr == io.EOF {
+			break
+		}
+		if partErr != nil {
+			t.Fatalf("read mail part: %v", partErr)
+		}
+		if strings.HasPrefix(part.Header.Get("Content-Type"), "text/html") {
+			content, readErr := io.ReadAll(part)
+			if readErr != nil {
+				t.Fatalf("read HTML mail part: %v", readErr)
+			}
+			htmlBody = string(content)
+		}
+	}
+	if !strings.Contains(htmlBody, `href="`+link+`"`) {
+		t.Fatalf("HTML mail does not contain clickable reset link: %q", htmlBody)
+	}
+	if !strings.Contains(htmlBody, "10 分钟") {
+		t.Fatalf("HTML mail does not explain expiry: %q", htmlBody)
+	}
+}
+
+func TestBuildPasswordResetMailRejectsHeaderInjection(t *testing.T) {
+	_, err := buildPasswordResetMail(
+		"sender@example.com",
+		"student@example.com\r\nBcc: attacker@example.com",
+		"http://localhost:5173/reset-password?token=test-token",
+	)
+	if err == nil {
+		t.Fatal("expected injected recipient header to be rejected")
+	}
+}
 
 func TestAnonymousPasswordResetIsDisabledByDefault(t *testing.T) {
 	dataStore := store.NewMemoryStore(auth.HashPassword)

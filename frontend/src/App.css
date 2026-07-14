@@ -626,6 +626,90 @@
   background: linear-gradient(90deg, #ff693f 0%, #ff865d 100%);
 }
 
+.auth-layout-reset {
+  grid-template-columns: minmax(0, 520px);
+  place-content: center;
+  padding: clamp(24px, 5vw, 72px);
+  background:
+    radial-gradient(circle at 50% 18%, rgba(92, 225, 198, 0.13), transparent 28%),
+    radial-gradient(circle at 18% 82%, rgba(255, 90, 54, 0.1), transparent 25%),
+    #0b1119;
+}
+
+.auth-layout-reset .auth-intro {
+  display: none;
+}
+
+.auth-layout-reset .auth-panel {
+  width: 100%;
+  min-height: 560px;
+  align-content: center;
+  padding: 48px 44px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 24px;
+  background: rgba(249, 251, 253, 0.98);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.35);
+}
+
+.auth-reset-brand {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.auth-reset-brand-mark {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 15px;
+  background: linear-gradient(135deg, #ff5a36 0%, #ff7b50 100%);
+  color: #ffffff;
+  font-size: 20px;
+  font-weight: 900;
+  box-shadow: 0 10px 24px rgba(255, 90, 54, 0.22);
+}
+
+.auth-reset-brand > span:last-child {
+  display: grid;
+  gap: 2px;
+}
+
+.auth-reset-brand strong {
+  color: #111827;
+  font-size: 15px;
+}
+
+.auth-reset-brand small {
+  color: #667382;
+  font-size: 12px;
+}
+
+.auth-panel .form-feedback {
+  padding: 11px 13px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.6;
+}
+
+.auth-panel .form-feedback.error {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b42318;
+}
+
+.auth-panel .form-feedback.success {
+  border-color: #99f6e4;
+  background: #f0fdfa;
+  color: #0f766e;
+}
+
 .auth-panel-demo {
   display: grid;
   gap: 6px;
@@ -750,6 +834,17 @@
 
   .auth-panel h2 {
     font-size: 28px;
+  }
+
+  .auth-layout-reset {
+    min-height: 100svh;
+    padding: 18px;
+  }
+
+  .auth-layout-reset .auth-panel {
+    min-height: 0;
+    padding: 30px 20px 24px;
+    border-radius: 20px;
   }
 }
 

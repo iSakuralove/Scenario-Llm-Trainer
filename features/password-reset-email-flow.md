@@ -7,7 +7,8 @@
 ## 修改范围
 
 - 后端新增邮箱重置申请和令牌确认接口。
-- 前端登录页增加“忘记密码”和带 token 的新密码页面。
+- 后端重置邮件升级为纯文本与 HTML 双格式邮件。
+- 前端登录页增加“忘记密码”和带 token 的独立公开新密码页面。
 - 个人档案增加已登录用户的密码更新入口。
 
 ## 核心实现
@@ -15,6 +16,9 @@
 - 重置 token 使用签名 JWT，10 分钟过期并绑定用户 `TokenVersion`。
 - 成功改密后 `UpdateUserPassword` 增加 TokenVersion，使旧登录令牌和旧重置 token 失效。
 - SMTP 从环境变量读取；未配置时明确返回服务未配置，不降级为明文密码或可猜链接。
+- 邮件使用 `multipart/alternative`，同时提供 HTML“重置密码”按钮、可点击完整链接和纯文本回退，并校验邮件头换行注入与链接协议。
+- `/reset-password` 在根路由层优先于登录态判断，即使用户已有本地会话也不进入 `AppShell`；重置页只显示安全操作面板，不展示侧边栏。
+- 重置表单增加确认密码、缺少 token、最短长度和两次密码不一致校验；成功后清理已失效的本地登录令牌。
 
 ## 影响范围
 
@@ -23,12 +27,15 @@
 
 ## 验证方式
 
-- `go test ./internal/httpapi -run PasswordReset -count=1`
-- `npm --prefix frontend run lint`
-- `npm --prefix frontend run build`
-- 浏览器确认登录页出现“忘记密码”，个人档案出现“密码安全”。
+- `cd backend && go test ./...`
+- `cd frontend && pnpm run lint`
+- `cd frontend && pnpm run build`
+- 1920×1080 真实 Chrome 验证：重置页无侧边栏、无横向溢出、控制台无错误，密码不一致时前端阻止提交。
+- QQ 邮箱真实投递验证：HTML 邮件中存在“重置密码”按钮和完整链接两个可点击 `<a>` 元素，均指向 `/reset-password?token=...`。
+- 最新后端已离线更新到 `teaching-mvp-api:latest`，8080 API 启动正常，PostgreSQL 与 Redis 未重建。
 
 ## 已知限制
 
-- 未配置 SMTP 时无法实际发送邮件；需要部署环境设置 SMTP 变量后验证真实投递。
 - Docker Compose 只引用系统环境变量，不在仓库文件中保存 SMTP 授权码；`SMTP_PASSWORD` 必须留空于示例文件。
+- Windows 新增或修改系统环境变量后，已经运行的终端或 Codex 进程不会自动刷新；重新创建容器前需要启动新终端，或在当前进程中重新载入用户级/系统级环境变量。
+- 当前 `APP_PUBLIC_URL=http://localhost:5173` 只适用于收件人与前端运行在同一台电脑的本地演示；部署到其他设备访问时必须改为可访问的 HTTPS 公网地址。

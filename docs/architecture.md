@@ -172,6 +172,14 @@
 
 ## 当前安全约束
 
+### 邮箱密码重置链路
+
+- `POST /api/v1/auth/password-reset/request` 对未知邮箱返回统一 accepted 响应；已注册邮箱收到 10 分钟有效、绑定当前 `TokenVersion` 的签名 `password_reset` token。
+- SMTP 邮件使用 `multipart/alternative`，同时提供纯文本回退和 HTML 按钮/完整链接；邮件地址拒绝 CR/LF 注入，重置 URL 只接受带 host 的 `http/https` 绝对地址。
+- 前端 `/reset-password` 是根路由层的公开入口，优先于本地登录态判断并绕过 `AppShell`；因此已有登录会话的用户打开邮件链接时也只看到独立重置表单，不会落入侧边栏空页面。
+- 表单先校验 token、新密码长度和确认密码，再调用 `POST /api/v1/auth/password-reset`。成功后后端递增 `TokenVersion`，前端同步清理旧 access/refresh token 并返回登录页。
+- `SMTP_PASSWORD` 等凭据只通过运行环境注入，不进入仓库文件或镜像层；`APP_PUBLIC_URL` 在本地演示使用 localhost，部署环境必须设置为收件人可访问的 HTTPS 地址。
+
 - 密码哈希使用 bcrypt，兼容旧 SHA-256 演示数据登录。
 - 登录成功时，如果检测到旧 SHA-256 密码 hash，会透明升级为 bcrypt。
 - 持久化模式下必须显式提供安全的 `JWT_SECRET`；开发内存模式允许生成临时随机密钥。
