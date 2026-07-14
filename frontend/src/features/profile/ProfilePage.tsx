@@ -181,11 +181,17 @@ export function ProfilePage() {
           </div>
         </section>
         <div className="profile-side-column">
-          <section className="panel profile-summary-panel">
+          <section className="panel profile-security-panel">
             <div className="panel-title"><Settings size={18} /> 密码安全</div>
-            <label>新密码<input type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="至少 6 位" /></label>
-            <button className="primary-button compact" type="button" disabled={!newPassword.trim()} onClick={() => void changePassword()}>更新密码</button>
-            <small>忘记密码时可退出登录，在登录页通过邮箱发送重置链接。</small>
+            <p className="profile-security-copy">定期更新密码可以降低账号被盗风险。修改后，其他已登录设备会自动失效。</p>
+            <div className="profile-security-form">
+              <label>
+                <span>新密码</span>
+                <input type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="至少 6 位" />
+              </label>
+              <button className="primary-button compact" type="button" disabled={!newPassword.trim()} onClick={() => void changePassword()}>更新密码</button>
+            </div>
+            <div className="profile-security-note">忘记密码？退出登录后，可在登录页通过注册邮箱发送一次性重置链接。</div>
           </section>
           <section className="panel profile-summary-panel">
             <div className="panel-title"><Radar size={18} /> 当前训练画像</div>

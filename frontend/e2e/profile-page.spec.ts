@@ -107,7 +107,7 @@ test.describe('个人档案页面', () => {
     const nextSummaryCopy = useSecurityAndDns ? '优先围绕 安全、dns' : '优先围绕 数据库、网络、操作系统'
 
     await page.locator('.profile-settings-form select').selectOption(nextTargetValue)
-    await page.locator('.profile-settings-form input').fill(nextDomainInput)
+    await page.getByPlaceholder('database,network,os').fill(nextDomainInput)
 
     await expect.poll(async () => (await targetCard.textContent()) ?? '').toBe(originalTargetCardText)
     await expect.poll(async () => (await domainCard.textContent()) ?? '').toBe(originalDomainCardText)
