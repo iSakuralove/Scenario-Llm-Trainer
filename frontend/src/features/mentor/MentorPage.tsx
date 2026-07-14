@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Bot, ClipboardList, Compass, Sparkles } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { EmptyState, HeaderBlock, Loading, Metric } from '../../components/common'
-import { api } from '../../api/client'
+import { api, type MentorSnapshot } from '../../api/client'
 import { useToken } from '../../lib/auth'
 import './MentorPage.css'
 
@@ -34,7 +34,13 @@ export function MentorPage() {
       })
       .catch((err) => {
         if (ignore) return
-        setError(err instanceof Error ? err.message : '读取 Mentor 数据失败')
+        const message = err instanceof Error ? err.message : '读取 Mentor 数据失败'
+        if (isMentorEndpointUnavailable(message)) {
+          setData(mentorCompatibilitySnapshot())
+          setError('')
+          return
+        }
+        setError(message)
       })
     return () => {
       ignore = true
@@ -210,4 +216,25 @@ function mentorTargetLevelLabel(level: string) {
     architect: '架构师',
   }
   return labels[level] ?? '中级'
+}
+
+function isMentorEndpointUnavailable(message: string) {
+  return message.trim().toLowerCase() === 'not found'
+}
+
+function mentorCompatibilitySnapshot(): MentorSnapshot {
+  return {
+    generated_at: new Date().toISOString(),
+    overview: 'AI Mentor 聚合服务尚未启用。你仍可继续完成面试和排查训练，服务升级后会自动形成综合诊断。',
+    strengths: [],
+    weaknesses: [],
+    risks: [{ level: 'info', title: 'Mentor 服务等待升级', message: '当前环境使用兼容模式，不影响面试、排查和个人档案功能。' }],
+    actions: [
+      { title: '积累面试样本', detail: '完成一轮面试，为后续综合诊断准备训练数据。', action_label: '进入面试舱', action_path: '/interviews' },
+      { title: '完善目标画像', detail: '补充目标岗位和项目经历，让后续建议更贴近你的方向。', action_label: '完善档案', action_path: '/profile' },
+    ],
+    coverage: { coverage_percent: 0, completed_sessions: 0, subject_count: 0, top_subjects: [], uncovered_tracks: [] },
+    profile: { target_level: 'intermediate', target_role: '', preferred_domains: [], has_resume_summary: false, has_project_summary: false },
+    sample_ready: false,
+  }
 }
