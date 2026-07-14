@@ -1,11 +1,10 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { ChevronDown, Code2, Eye, List, Maximize2, Mic, Minimize2, Pencil, Quote, Radar, Send, Trash2, UploadCloud } from 'lucide-react'
+import { Bot, ChevronDown, Code2, Eye, List, Maximize2, Mic, Minimize2, Pencil, Quote, Radar, Send, Trash2, UploadCloud, UserRound } from 'lucide-react'
 import type { AgentTrace, InterviewQuestion, InterviewSession, TranscriptSuggestion, VoiceQualityResult } from '../../types'
 import { EmptyState, Metric } from '../../components/common'
 import { MarkdownPreview } from '../../components/common/MarkdownPreview'
 import { useToken } from '../../lib/auth'
-import { domainLabel } from '../../lib/domain'
 import { useInterviewSessionStore } from '../../stores/interviewSessionStore'
 import './InterviewSessionPage.css'
 
@@ -27,7 +26,10 @@ export function InterviewSessionPage() {
   const [voiceObjectUrl, setVoiceObjectUrl] = useState('')
   const [previewMode, setPreviewMode] = useState<'edit' | 'preview'>('edit')
   const [isMarkdownExpanded, setMarkdownExpanded] = useState(false)
+  const [isAdvancedEditor, setAdvancedEditor] = useState(false)
   const [isTemplateExpanded, setTemplateExpanded] = useState(false)
+  const [activeAnchor, setActiveAnchor] = useState('round-1-question')
+  const [isAnchorOpen, setAnchorOpen] = useState(false)
   const question = useInterviewSessionStore((store) => store.question)
   const session = useInterviewSessionStore((store) => store.session)
   const isLoading = useInterviewSessionStore((store) => store.isLoading)
@@ -204,6 +206,7 @@ export function InterviewSessionPage() {
   const voiceNeedsConfirm = submitType === 'voice' && Boolean(voiceAsset) && !voiceConfirmed
   const rejectedVoiceDraftNeedsEdit = Boolean(voiceTranscript) && voiceRejected && answer.trim() === voiceTranscript.trim()
   const canSubmit = Boolean(answer.trim()) && !isVoiceBusy && !isSubmitting && !rejectedVoiceDraftNeedsEdit && !(submitType === 'voice' && (voiceRejected || voiceNeedsConfirm))
+  const timeline = buildInterviewTimeline(question, session, lastEvaluation)
   const transcriptSuggestions = voiceQuality?.transcript_suggestions ?? voiceQuality?.suggestions ?? []
   const voiceTranscriptEdited = Boolean(voiceTranscript) && answer.trim() !== voiceTranscript.trim()
 
@@ -223,17 +226,48 @@ export function InterviewSessionPage() {
     updateVoiceEditedState('已应用全部术语建议，请重新确认转写')
   }
 
+  function jumpToAnchor(anchorId: string) {
+    document.getElementById(anchorId)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setActiveAnchor(anchorId)
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${anchorId}`)
+    setAnchorOpen(false)
+  }
+
   return (
     <section className="interview-layout interview-session-page">
       <div className="interview-main-column">
-        <section className="panel interview-question">
-          <div className="scenario-meta">
-            <span>{domainLabel(question.domain)}</span>
-            <span>{question.difficulty}</span>
-            <span>第 {session.current_round} 轮</span>
+        <section className="panel interview-chat-panel" aria-label="面试对话">
+          <div className="chat-panel-head">
+            <div>
+              <div className="panel-title"><Bot size={18} /> 面试对话</div>
+              <span>按轮次回看题目、回答与追问，点击右侧锚点快速定位。</span>
+            </div>
+            <button className="ghost-button compact anchor-toggle" type="button" onClick={() => setAnchorOpen((open) => !open)} aria-expanded={isAnchorOpen}>
+              对话锚点
+            </button>
           </div>
-          <h2>{question.title}</h2>
-          <p>{session.status.startsWith('follow_up') ? session.follow_up_question : question.description}</p>
+          <div className={`interview-timeline-layout ${isAnchorOpen ? 'anchors-open' : ''}`}>
+            <div className="interview-timeline" data-testid="interview-timeline">
+              {timeline.map((message) => (
+                <article id={message.id} key={message.id} className={`timeline-message ${message.role}`}>
+                  <div className="timeline-avatar" aria-hidden="true">{message.role === 'user' ? <UserRound size={17} /> : <Bot size={17} />}</div>
+                  <div className="timeline-bubble">
+                    <div className="timeline-meta"><strong>{message.role === 'user' ? '你' : 'AI 面试官'}</strong><span>{message.label}</span></div>
+                    <div className="timeline-content">{message.content}</div>
+                  </div>
+                </article>
+              ))}
+              {timeline.length === 1 && <div className="timeline-empty">历史回答会在提交后出现在这里。</div>}
+            </div>
+            <nav className="interview-anchor-nav" aria-label="面试对话锚点">
+              <div className="anchor-nav-title">面试导航</div>
+              {timeline.map((message) => (
+                <button key={message.id} type="button" className={activeAnchor === message.id ? 'active' : ''} onClick={() => jumpToAnchor(message.id)}>
+                  <span>{message.role === 'user' ? '回答' : message.label}</span>
+                </button>
+              ))}
+            </nav>
+          </div>
         </section>
       </div>
       <section className="panel answer-panel">
@@ -352,7 +386,10 @@ export function InterviewSessionPage() {
             )}
           </div>
         )}
-        <div className={`markdown-composer ${isMarkdownExpanded ? 'expanded' : ''}`}>
+        <button className="ghost-button compact advanced-editor-toggle" type="button" aria-expanded={isAdvancedEditor} onClick={() => setAdvancedEditor((open) => !open)}>
+          <Code2 size={15} />{isAdvancedEditor ? '收起专业编辑' : '展开 Markdown / 代码编辑'}
+        </button>
+        <div className={`markdown-composer ${isAdvancedEditor ? 'advanced' : 'simple'} ${isMarkdownExpanded ? 'expanded' : ''}`}>
           <div className="markdown-toolbar" aria-label="Markdown 工具栏">
             <ToolbarSelect
               icon={<Pencil size={14} />}
@@ -968,6 +1005,34 @@ function SafeAgentSummary({
       ))}
     </div>
   )
+}
+
+type TimelineMessage = {
+  id: string
+  role: 'ai' | 'user'
+  label: string
+  content: string
+}
+
+function buildInterviewTimeline(question: InterviewQuestion, session: InterviewSession, lastEvaluation: InterviewSession['evaluations'][number] | null): TimelineMessage[] {
+  const messages: TimelineMessage[] = [{
+    id: `round-${session.current_round}-question`,
+    role: 'ai',
+    label: `第 ${session.current_round} 轮 · ${session.status.startsWith('follow_up') ? '追问' : '开场题'}`,
+    content: `${question.title}\n\n${session.status.startsWith('follow_up') ? session.follow_up_question || question.description || '' : question.description || ''}`,
+  }]
+  for (const submission of session.submissions ?? []) {
+    messages.push({ id: `round-${submission.round}-answer`, role: 'user', label: `第 ${submission.round} 轮 · ${submission.type === 'voice' ? '语音回答' : '文字回答'}`, content: submission.content })
+  }
+  for (const evaluation of session.evaluations ?? []) {
+    if (evaluation.follow_up_question) {
+      messages.push({ id: `round-${evaluation.round}-followup`, role: 'ai', label: `第 ${evaluation.round} 轮 · 追问`, content: evaluation.follow_up_question })
+    }
+  }
+  if (lastEvaluation?.follow_up_question && !messages.some((message) => message.id === `round-${lastEvaluation.round}-followup`)) {
+    messages.push({ id: `round-${lastEvaluation.round}-followup`, role: 'ai', label: `第 ${lastEvaluation.round} 轮 · 追问`, content: lastEvaluation.follow_up_question })
+  }
+  return messages
 }
 
 function compactFeedbackSummary(value: string) {

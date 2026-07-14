@@ -2,6 +2,44 @@
   color: #e6edf5;
 }
 
+.interview-chat-panel { padding: 22px 24px; }
+.chat-panel-head { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 18px; }
+.chat-panel-head > div > span { color: rgba(220, 228, 238, .62); font-size: 13px; }
+.interview-timeline-layout { display: grid; grid-template-columns: minmax(0, 1fr) 172px; gap: 22px; }
+.interview-timeline { display: grid; gap: 16px; min-width: 0; }
+.timeline-message { display: flex; gap: 10px; align-items: flex-start; max-width: 82%; }
+.timeline-message.user { margin-left: auto; flex-direction: row-reverse; }
+.timeline-avatar { width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center; border-radius: 12px; color: #07151a; background: #8ef0db; }
+.timeline-message.user .timeline-avatar { color: #fff; background: #587dff; }
+.timeline-bubble { border: 1px solid rgba(255,255,255,.11); border-radius: 16px; padding: 12px 15px; background: rgba(255,255,255,.045); min-width: 0; }
+.timeline-message.user .timeline-bubble { background: rgba(88,125,255,.16); border-color: rgba(125,150,255,.28); }
+.timeline-meta { display: flex; gap: 10px; align-items: baseline; margin-bottom: 6px; font-size: 12px; }
+.timeline-meta strong { color: #f6fafe; }
+.timeline-meta span { color: rgba(220,228,238,.56); }
+.timeline-content { white-space: pre-wrap; overflow-wrap: anywhere; color: rgba(238,244,250,.88); line-height: 1.7; }
+.timeline-empty { margin-left: 44px; color: rgba(220,228,238,.5); font-size: 13px; }
+.interview-anchor-nav { position: sticky; top: 18px; align-self: start; border-left: 1px solid rgba(255,255,255,.1); padding-left: 14px; }
+.anchor-nav-title { color: #8ef0db; font-size: 12px; font-weight: 800; margin-bottom: 10px; }
+.interview-anchor-nav button { display: block; width: 100%; padding: 8px; border: 0; border-left: 2px solid transparent; background: transparent; color: rgba(220,228,238,.58); text-align: left; cursor: pointer; }
+.interview-anchor-nav button:hover, .interview-anchor-nav button.active { color: #fff; border-left-color: #8ef0db; background: rgba(142,240,219,.08); }
+.anchor-toggle { display: none; }
+.advanced-editor-toggle { margin: 12px 0 8px; }
+.markdown-composer.simple .markdown-toolbar,
+.markdown-composer.simple .markdown-preview-hint,
+.markdown-composer.simple .markdown-preview-panel { display: none; }
+.markdown-composer.simple .markdown-workspace { display: block; }
+.markdown-composer.simple .markdown-workspace textarea { min-height: 118px; width: 100%; }
+
+@media (max-width: 720px) {
+  .interview-chat-panel { padding: 16px; }
+  .chat-panel-head { align-items: flex-start; }
+  .anchor-toggle { display: inline-flex; }
+  .interview-timeline-layout { display: block; }
+  .interview-anchor-nav { display: none; margin: 0 0 14px; padding: 10px; border: 1px solid rgba(255,255,255,.1); border-radius: 12px; }
+  .interview-timeline-layout.anchors-open .interview-anchor-nav { display: block; }
+  .timeline-message { max-width: 94%; }
+}
+
 .interview-session-page .panel,
 .interview-session-page .answer-panel,
 .interview-session-page .answer-template-panel {
