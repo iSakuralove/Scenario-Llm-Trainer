@@ -108,6 +108,65 @@ func TestInterviewLaunchpadReturnsOpenTracksFromAvailableQuestions(t *testing.T)
 	}
 }
 
+func TestInterviewLaunchpadIncludesRecommendedTracksAndRecentSessions(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	user, ok := dataStore.FindUserByIdentifier("demo")
+	if !ok || user == nil {
+		t.Fatal("expected demo user")
+	}
+	question, ok := dataStore.FindInterviewQuestion("database", "L3", "scenario_analysis")
+	if !ok || question == nil {
+		t.Fatal("expected database L3 scenario question")
+	}
+	session := dataStore.CreateInterviewSession(user.ID, question)
+	if session == nil {
+		t.Fatal("expected created interview session")
+	}
+	session.Status = "follow_up_1_presented"
+	dataStore.SaveInterviewSession(session)
+
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+
+	status, env := requestJSON(t, handler, http.MethodGet, "/api/v1/interviews/launchpad", token, nil)
+	if status != http.StatusOK || env.Code != http.StatusOK {
+		t.Fatalf("launchpad status=%d env=%+v", status, env)
+	}
+	var payload struct {
+		RecommendedTracks []struct {
+			ID         string `json:"id"`
+			Domain     string `json:"domain"`
+			Difficulty string `json:"difficulty"`
+			Reason     string `json:"reason"`
+			SourceKind string `json:"source_kind"`
+		} `json:"recommended_tracks"`
+		RecentSessions []struct {
+			ID            string `json:"id"`
+			Status        string `json:"status"`
+			Domain        string `json:"domain"`
+			Difficulty    string `json:"difficulty"`
+			QuestionTitle string `json:"question_title"`
+		} `json:"recent_sessions"`
+	}
+	mustDecodeData(t, env, &payload)
+	if len(payload.RecentSessions) == 0 {
+		t.Fatalf("expected recent sessions in launchpad, got %+v", payload)
+	}
+	if payload.RecentSessions[0].ID != session.ID || payload.RecentSessions[0].Status != "follow_up_1_presented" {
+		t.Fatalf("unexpected recent session payload: %+v", payload.RecentSessions[0])
+	}
+	if len(payload.RecommendedTracks) == 0 {
+		t.Fatalf("expected recommended tracks in launchpad, got %+v", payload)
+	}
+	first := payload.RecommendedTracks[0]
+	if first.Domain != "database" || first.Difficulty != "L3" {
+		t.Fatalf("expected unfinished session track to be recommended first, got %+v", first)
+	}
+	if first.Reason == "" || first.SourceKind == "" {
+		t.Fatalf("expected recommendation reason/source_kind, got %+v", first)
+	}
+}
+
 func TestCreateInterviewSessionReturnsNotFoundForUnsupportedTrack(t *testing.T) {
 	dataStore := store.NewMemoryStore(auth.HashPassword)
 	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
@@ -255,6 +314,435 @@ func TestCreateInterviewSessionSupportsExpandedLaunchTracks(t *testing.T) {
 		if payload.Question.Domain != tc.domain || payload.Question.Difficulty != tc.difficulty || payload.Question.QuestionType != tc.questionType {
 			t.Fatalf("unexpected question track for %s/%s/%s: %+v", tc.domain, tc.difficulty, tc.questionType, payload.Question)
 		}
+	}
+}
+
+func TestInterviewLaunchpadAtomTracksIncludeTags(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	atom := validInterviewBankAtomForRebuild("atom-launchpad-java-tags", "published", "indexed")
+	atom.Category = "java"
+	atom.Domain = "java"
+	atom.QuestionRole = "opening"
+	atom.Tags = []string{"collections", "hashmap", "java"}
+	if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "launchpad tags"); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+
+	status, env := requestJSON(t, handler, http.MethodGet, "/api/v1/interviews/launchpad", token, nil)
+	if status != http.StatusOK || env.Code != http.StatusOK {
+		t.Fatalf("launchpad status=%d env=%+v", status, env)
+	}
+	var payload struct {
+		FallbackMode bool `json:"fallback_mode"`
+		OpenTracks   []struct {
+			Domain string   `json:"domain"`
+			Tags   []string `json:"tags"`
+		} `json:"open_tracks"`
+	}
+	mustDecodeData(t, env, &payload)
+	if payload.FallbackMode {
+		t.Fatalf("expected atom-backed launchpad mode, got %+v", payload)
+	}
+	if len(payload.OpenTracks) == 0 {
+		t.Fatalf("expected atom-backed tracks, got %+v", payload)
+	}
+	found := false
+	for _, track := range payload.OpenTracks {
+		if track.Domain != "java" {
+			continue
+		}
+		found = true
+		if len(track.Tags) == 0 {
+			t.Fatalf("expected java track tags, got %+v", track)
+		}
+	}
+	if !found {
+		t.Fatalf("expected java launchpad track, got %+v", payload.OpenTracks)
+	}
+}
+
+func TestInterviewLaunchpadSummaryStateForRetrievalDegraded(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	atom := validInterviewBankAtomForRebuild("atom-launchpad-degraded", "published", "pending")
+	atom.Category = "cache"
+	atom.Domain = "cache"
+	atom.QuestionRole = "opening"
+	if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "launchpad degraded"); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+
+	status, env := requestJSON(t, handler, http.MethodGet, "/api/v1/interviews/launchpad", token, nil)
+	if status != http.StatusOK || env.Code != http.StatusOK {
+		t.Fatalf("launchpad status=%d env=%+v", status, env)
+	}
+	var payload struct {
+		FallbackMode bool `json:"fallback_mode"`
+		Summary      struct {
+			State              string `json:"state"`
+			PublishedAtomCount int    `json:"published_atom_count"`
+			IndexedAtomCount   int    `json:"indexed_atom_count"`
+		} `json:"summary"`
+	}
+	mustDecodeData(t, env, &payload)
+	if payload.FallbackMode {
+		t.Fatalf("expected atom-backed launchpad mode, got %+v", payload)
+	}
+	if payload.Summary.State != "retrieval_degraded" {
+		t.Fatalf("expected retrieval_degraded state, got %+v", payload.Summary)
+	}
+	if payload.Summary.PublishedAtomCount == 0 || payload.Summary.IndexedAtomCount != 0 {
+		t.Fatalf("unexpected degraded summary counts: %+v", payload.Summary)
+	}
+}
+
+func TestInterviewLaunchpadRecommendsTrackFromWeakDimension(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	user, ok := dataStore.FindUserByIdentifier("demo")
+	if !ok || user == nil {
+		t.Fatal("expected demo user")
+	}
+	question, ok := dataStore.FindInterviewQuestion("database", "L3", "scenario_analysis")
+	if !ok || question == nil {
+		t.Fatal("expected database L3 interview question")
+	}
+	session := dataStore.CreateInterviewSession(user.ID, question)
+	if session == nil {
+		t.Fatal("expected created interview session")
+	}
+	session.Status = "final_evaluated"
+	session.FinalScore = 58
+	session.QuestionSnapshot.Domain = "database"
+	session.QuestionSnapshot.Difficulty = "L3"
+	session.QuestionSnapshot.Title = "数据库索引与慢查询"
+	session.Evaluations = []domain.InterviewEvaluation{
+		{
+			Round:           1,
+			TotalScore:      58,
+			DimensionScores: map[string]int{"technical_accuracy": 55, "logical_completeness": 78, "solution_feasibility": 80},
+			CreatedAt:       time.Now(),
+		},
+	}
+	dataStore.SaveInterviewSession(session)
+
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+
+	status, env := requestJSON(t, handler, http.MethodGet, "/api/v1/interviews/launchpad", token, nil)
+	if status != http.StatusOK || env.Code != http.StatusOK {
+		t.Fatalf("launchpad status=%d env=%+v", status, env)
+	}
+	var payload struct {
+		RecommendedTracks []struct {
+			Domain     string `json:"domain"`
+			Difficulty string `json:"difficulty"`
+			Reason     string `json:"reason"`
+			SourceKind string `json:"source_kind"`
+		} `json:"recommended_tracks"`
+	}
+	mustDecodeData(t, env, &payload)
+	if len(payload.RecommendedTracks) == 0 {
+		t.Fatalf("expected recommended tracks, got %+v", payload)
+	}
+	found := false
+	for _, item := range payload.RecommendedTracks {
+		if item.SourceKind != "weak_dimension" {
+			continue
+		}
+		found = true
+		if item.Domain != "database" || item.Difficulty != "L3" {
+			t.Fatalf("unexpected weak-dimension recommendation target: %+v", item)
+		}
+		if !strings.Contains(item.Reason, "技术准确性") {
+			t.Fatalf("expected weak-dimension reason to mention 技术准确性, got %+v", item)
+		}
+	}
+	if !found {
+		t.Fatalf("expected weak_dimension recommendation, got %+v", payload.RecommendedTracks)
+	}
+}
+
+func TestInterviewLaunchpadRecentSessionsIncludeWeakDimensionSummary(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	user, ok := dataStore.FindUserByIdentifier("demo")
+	if !ok || user == nil {
+		t.Fatal("expected demo user")
+	}
+	question, ok := dataStore.FindInterviewQuestion("database", "L3", "scenario_analysis")
+	if !ok || question == nil {
+		t.Fatal("expected database L3 interview question")
+	}
+	session := dataStore.CreateInterviewSession(user.ID, question)
+	if session == nil {
+		t.Fatal("expected created interview session")
+	}
+	session.Status = "final_evaluated"
+	session.FinalScore = 64
+	session.QuestionSnapshot.Domain = "database"
+	session.QuestionSnapshot.Difficulty = "L3"
+	session.QuestionSnapshot.Title = "缓存击穿与回退"
+	session.Evaluations = []domain.InterviewEvaluation{
+		{
+			Round:           1,
+			TotalScore:      64,
+			DimensionScores: map[string]int{"solution_feasibility": 61, "technical_accuracy": 75},
+			CreatedAt:       time.Now(),
+		},
+	}
+	dataStore.SaveInterviewSession(session)
+
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+
+	status, env := requestJSON(t, handler, http.MethodGet, "/api/v1/interviews/launchpad", token, nil)
+	if status != http.StatusOK || env.Code != http.StatusOK {
+		t.Fatalf("launchpad status=%d env=%+v", status, env)
+	}
+	var payload struct {
+		RecentSessions []struct {
+			ID            string `json:"id"`
+			WeakDimension string `json:"weak_dimension"`
+			WeakScore     int    `json:"weak_score"`
+		} `json:"recent_sessions"`
+	}
+	mustDecodeData(t, env, &payload)
+	if len(payload.RecentSessions) == 0 {
+		t.Fatalf("expected recent sessions, got %+v", payload)
+	}
+	if payload.RecentSessions[0].ID != session.ID || payload.RecentSessions[0].WeakDimension != "方案可落地性" || payload.RecentSessions[0].WeakScore != 61 {
+		t.Fatalf("unexpected recent session weak summary: %+v", payload.RecentSessions[0])
+	}
+}
+
+func TestInterviewLaunchpadRecommendsRecentlyUpdatedTrack(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	user, ok := dataStore.FindUserByIdentifier("demo")
+	if !ok || user == nil {
+		t.Fatal("expected demo user")
+	}
+	profile := user.Profile
+	profile.PreferredDomains = []string{}
+	if _, err := dataStore.SaveUserProfile(user.ID, profile); err != nil {
+		t.Fatal(err)
+	}
+	atom := validInterviewBankAtomForRebuild("atom-launchpad-fresh-cache", "published", "indexed")
+	atom.Category = "cache"
+	atom.Domain = "cache"
+	atom.QuestionRole = "opening"
+	if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "fresh launchpad content"); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+
+	status, env := requestJSON(t, handler, http.MethodGet, "/api/v1/interviews/launchpad", token, nil)
+	if status != http.StatusOK || env.Code != http.StatusOK {
+		t.Fatalf("launchpad status=%d env=%+v", status, env)
+	}
+	var payload struct {
+		RecommendedTracks []struct {
+			Domain     string `json:"domain"`
+			Reason     string `json:"reason"`
+			SourceKind string `json:"source_kind"`
+		} `json:"recommended_tracks"`
+	}
+	mustDecodeData(t, env, &payload)
+	found := false
+	for _, item := range payload.RecommendedTracks {
+		if item.SourceKind != "fresh_content" {
+			continue
+		}
+		found = true
+		if item.Domain != "cache" {
+			t.Fatalf("unexpected fresh-content domain: %+v", item)
+		}
+		if !strings.Contains(item.Reason, "最近更新") && !strings.Contains(item.Reason, "新发布") {
+			t.Fatalf("expected fresh-content reason to mention recent update, got %+v", item)
+		}
+	}
+	if !found {
+		t.Fatalf("expected fresh_content recommendation, got %+v", payload.RecommendedTracks)
+	}
+}
+
+func TestInterviewLaunchpadRecommendsHabitualTrack(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	user, ok := dataStore.FindUserByIdentifier("demo")
+	if !ok || user == nil {
+		t.Fatal("expected demo user")
+	}
+	profile := user.Profile
+	profile.PreferredDomains = []string{}
+	if _, err := dataStore.SaveUserProfile(user.ID, profile); err != nil {
+		t.Fatal(err)
+	}
+
+	question, ok := dataStore.FindInterviewQuestion("database", "L3", "scenario_analysis")
+	if !ok || question == nil {
+		t.Fatal("expected database L3 interview question")
+	}
+	first := dataStore.CreateInterviewSession(user.ID, question)
+	second := dataStore.CreateInterviewSession(user.ID, question)
+	if first == nil || second == nil {
+		t.Fatal("expected created interview sessions")
+	}
+	first.Status = "final_evaluated"
+	first.FinalScore = 82
+	first.QuestionSnapshot.Domain = "database"
+	first.QuestionSnapshot.Difficulty = "L3"
+	first.StartedAt = time.Now().Add(-2 * time.Hour)
+	second.Status = "final_evaluated"
+	second.FinalScore = 84
+	second.QuestionSnapshot.Domain = "database"
+	second.QuestionSnapshot.Difficulty = "L3"
+	second.StartedAt = time.Now().Add(-30 * time.Minute)
+	dataStore.SaveInterviewSession(first)
+	dataStore.SaveInterviewSession(second)
+
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+
+	status, env := requestJSON(t, handler, http.MethodGet, "/api/v1/interviews/launchpad", token, nil)
+	if status != http.StatusOK || env.Code != http.StatusOK {
+		t.Fatalf("launchpad status=%d env=%+v", status, env)
+	}
+	var payload struct {
+		RecommendedTracks []struct {
+			Domain     string `json:"domain"`
+			Difficulty string `json:"difficulty"`
+			Reason     string `json:"reason"`
+			SourceKind string `json:"source_kind"`
+		} `json:"recommended_tracks"`
+	}
+	mustDecodeData(t, env, &payload)
+	found := false
+	for _, item := range payload.RecommendedTracks {
+		if item.SourceKind != "habitual_track" {
+			continue
+		}
+		found = true
+		if item.Domain != "database" || item.Difficulty != "L3" {
+			t.Fatalf("unexpected habitual-track recommendation target: %+v", item)
+		}
+		if !strings.Contains(item.Reason, "最常练") && !strings.Contains(item.Reason, "常用") {
+			t.Fatalf("expected habitual-track reason to mention usage habit, got %+v", item)
+		}
+	}
+	if !found {
+		t.Fatalf("expected habitual_track recommendation, got %+v", payload.RecommendedTracks)
+	}
+}
+
+func TestInterviewLaunchpadCoverageStatsSummarizeCompletedTrackCoverage(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	user, ok := dataStore.FindUserByIdentifier("demo")
+	if !ok || user == nil {
+		t.Fatal("expected demo user")
+	}
+
+	databaseAtom := validInterviewBankAtomForRebuild("atom-launchpad-coverage-database", "published", "indexed")
+	databaseAtom.Category = "database"
+	databaseAtom.Domain = "database"
+	databaseAtom.Difficulty = "L3"
+	databaseAtom.QuestionRole = "opening"
+	if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(databaseAtom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "coverage database"); err != nil {
+		t.Fatal(err)
+	}
+
+	cacheAtom := validInterviewBankAtomForRebuild("atom-launchpad-coverage-cache", "published", "indexed")
+	cacheAtom.Category = "cache"
+	cacheAtom.Domain = "cache"
+	cacheAtom.Difficulty = "L2"
+	cacheAtom.QuestionRole = "opening"
+	if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(cacheAtom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "coverage cache"); err != nil {
+		t.Fatal(err)
+	}
+
+	question, ok := dataStore.FindInterviewQuestion("database", "L3", "scenario_analysis")
+	if !ok || question == nil {
+		t.Fatal("expected database L3 interview question")
+	}
+	session := dataStore.CreateInterviewSession(user.ID, question)
+	if session == nil {
+		t.Fatal("expected created interview session")
+	}
+	session.Status = "final_evaluated"
+	session.FinalScore = 72
+	session.QuestionSnapshot.Domain = "database"
+	session.QuestionSnapshot.Difficulty = "L3"
+	session.QuestionSnapshot.Subject = "MySQL 索引下推"
+	session.Evaluations = []domain.InterviewEvaluation{
+		{
+			Round:             1,
+			TotalScore:        72,
+			DimensionScores:   map[string]int{"technical_accuracy": 70, "logical_completeness": 74},
+			FollowUpSubject:   "MySQL 索引下推",
+			FollowUpType:      "deepen",
+			RetrievedSubjects: []string{"MySQL 索引下推"},
+			CreatedAt:         time.Now(),
+		},
+		{
+			Round:             2,
+			TotalScore:        68,
+			DimensionScores:   map[string]int{"solution_feasibility": 68},
+			FollowUpSubject:   "慢查询定位",
+			FollowUpType:      "broaden",
+			RetrievedSubjects: []string{"慢查询定位"},
+			CreatedAt:         time.Now(),
+		},
+	}
+	dataStore.SaveInterviewSession(session)
+
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+
+	status, env := requestJSON(t, handler, http.MethodGet, "/api/v1/interviews/launchpad", token, nil)
+	if status != http.StatusOK || env.Code != http.StatusOK {
+		t.Fatalf("launchpad status=%d env=%+v", status, env)
+	}
+
+	var payload struct {
+		CoverageStats struct {
+			TotalOpenTracks      int      `json:"total_open_tracks"`
+			PracticedOpenTracks  int      `json:"practiced_open_tracks"`
+			CoveragePercent      int      `json:"coverage_percent"`
+			CompletedSessions    int      `json:"completed_sessions"`
+			PracticedDomains     []string `json:"practiced_domains"`
+			PracticedDifficulties []string `json:"practiced_difficulties"`
+			SubjectCount         int      `json:"subject_count"`
+			TopSubjects          []string `json:"top_subjects"`
+			UncoveredTrackIDs    []string `json:"uncovered_track_ids"`
+		} `json:"coverage_stats"`
+	}
+	mustDecodeData(t, env, &payload)
+
+	stats := payload.CoverageStats
+	if stats.TotalOpenTracks != 2 || stats.PracticedOpenTracks != 1 {
+		t.Fatalf("unexpected launchpad coverage track counts: %+v", stats)
+	}
+	if stats.CoveragePercent != 50 {
+		t.Fatalf("expected 50 percent launchpad coverage, got %+v", stats)
+	}
+	if stats.CompletedSessions != 1 {
+		t.Fatalf("expected one completed session, got %+v", stats)
+	}
+	if len(stats.PracticedDomains) != 1 || stats.PracticedDomains[0] != "database" {
+		t.Fatalf("unexpected practiced domains: %+v", stats)
+	}
+	if len(stats.PracticedDifficulties) != 1 || stats.PracticedDifficulties[0] != "L3" {
+		t.Fatalf("unexpected practiced difficulties: %+v", stats)
+	}
+	if stats.SubjectCount != 2 {
+		t.Fatalf("expected two covered subjects, got %+v", stats)
+	}
+	if len(stats.TopSubjects) != 2 || stats.TopSubjects[0] != "MySQL 索引下推" {
+		t.Fatalf("unexpected top subjects: %+v", stats)
+	}
+	if len(stats.UncoveredTrackIDs) != 1 || stats.UncoveredTrackIDs[0] != "interview-bank-cache-l2" {
+		t.Fatalf("unexpected uncovered tracks: %+v", stats)
 	}
 }
 

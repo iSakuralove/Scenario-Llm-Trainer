@@ -244,6 +244,22 @@ CREATE INDEX IF NOT EXISTS interview_bank_ops_actions_combo_idx
 CREATE INDEX IF NOT EXISTS interview_bank_ops_actions_atom_idx
     ON interview_bank_ops_actions(atom_id);
 
+CREATE TABLE IF NOT EXISTS interview_bank_ops_action_history (
+    id TEXT PRIMARY KEY,
+    action_id TEXT NOT NULL REFERENCES interview_bank_ops_actions(id) ON DELETE CASCADE,
+    entry_index INT NOT NULL,
+    from_status VARCHAR(32) NOT NULL CHECK (from_status IN ('open','in_progress','watching','resolved','dismissed','reopened')),
+    to_status VARCHAR(32) NOT NULL CHECK (to_status IN ('open','in_progress','watching','resolved','dismissed','reopened')),
+    note TEXT,
+    created_by TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS interview_bank_ops_action_history_action_created_idx
+    ON interview_bank_ops_action_history(action_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS interview_bank_ops_action_history_to_status_created_idx
+    ON interview_bank_ops_action_history(to_status, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS community_posts (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id),

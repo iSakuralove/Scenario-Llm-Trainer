@@ -12,6 +12,7 @@ import (
 
 var errInterviewKnowledgeAtomIDRequired = errors.New("interview knowledge atom id is required")
 var errInterviewKnowledgeAtomNotFound = errors.New("interview knowledge atom not found")
+var errInterviewBankOpsActionNotFound = errors.New("interview bank ops action not found")
 
 func prepareInterviewKnowledgeAtomForVersion(atom domain.InterviewKnowledgeAtom, existing *domain.InterviewKnowledgeAtom, nextVersion int, now time.Time) domain.InterviewKnowledgeAtom {
 	atom.ID = strings.TrimSpace(atom.ID)
@@ -291,6 +292,18 @@ func validateInterviewBankOpsAction(action domain.InterviewBankOpsAction) error 
 	return nil
 }
 
+func isActiveInterviewBankOpsActionStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case domain.InterviewBankOpsActionStatusOpen,
+		domain.InterviewBankOpsActionStatusInProgress,
+		domain.InterviewBankOpsActionStatusWatching,
+		domain.InterviewBankOpsActionStatusReopened:
+		return true
+	default:
+		return false
+	}
+}
+
 func cloneInterviewBankOpsAction(action *domain.InterviewBankOpsAction) *domain.InterviewBankOpsAction {
 	if action == nil {
 		return nil
@@ -298,6 +311,55 @@ func cloneInterviewBankOpsAction(action *domain.InterviewBankOpsAction) *domain.
 	copy := *action
 	copy.Evidence = cloneJSONMap(action.Evidence)
 	return &copy
+}
+
+func prepareInterviewBankOpsActionStatusTransition(current domain.InterviewBankOpsAction, nextStatus, note, adminID string, now time.Time) (domain.InterviewBankOpsAction, domain.InterviewBankOpsActionHistoryEntry, error) {
+	nextStatus = strings.TrimSpace(nextStatus)
+	note = strings.TrimSpace(note)
+	adminID = strings.TrimSpace(adminID)
+	if !domain.ValidInterviewBankOpsActionStatus(nextStatus) {
+		return domain.InterviewBankOpsAction{}, domain.InterviewBankOpsActionHistoryEntry{}, errors.New("invalid status")
+	}
+	if current.Status == nextStatus {
+		return domain.InterviewBankOpsAction{}, domain.InterviewBankOpsActionHistoryEntry{}, errors.New("status is unchanged")
+	}
+	if (nextStatus == domain.InterviewBankOpsActionStatusResolved || nextStatus == domain.InterviewBankOpsActionStatusDismissed) && note == "" {
+		return domain.InterviewBankOpsAction{}, domain.InterviewBankOpsActionHistoryEntry{}, errors.New("note is required for resolved or dismissed")
+	}
+	if nextStatus == domain.InterviewBankOpsActionStatusReopened &&
+		current.Status != domain.InterviewBankOpsActionStatusResolved &&
+		current.Status != domain.InterviewBankOpsActionStatusDismissed {
+		return domain.InterviewBankOpsAction{}, domain.InterviewBankOpsActionHistoryEntry{}, errors.New("reopened status requires resolved or dismissed action")
+	}
+	updated := *cloneInterviewBankOpsAction(&current)
+	updated.Status = nextStatus
+	updated.UpdatedAt = now
+	historyEntry := domain.InterviewBankOpsActionHistoryEntry{
+		ID:         NewID(),
+		ActionID:   current.ID,
+		FromStatus: current.Status,
+		ToStatus:   nextStatus,
+		Note:       note,
+		CreatedBy:  adminID,
+		CreatedAt:  now,
+	}
+	return updated, historyEntry, nil
+}
+
+func cloneInterviewBankOpsActionHistoryEntry(item domain.InterviewBankOpsActionHistoryEntry) domain.InterviewBankOpsActionHistoryEntry {
+	return item
+}
+
+func sortInterviewBankOpsActionHistory(items []domain.InterviewBankOpsActionHistoryEntry) {
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].EntryIndex != items[j].EntryIndex {
+			return items[i].EntryIndex > items[j].EntryIndex
+		}
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].CreatedAt.After(items[j].CreatedAt)
+	})
 }
 
 func interviewBankOpsActionMatchesFilter(action domain.InterviewBankOpsAction, filter domain.InterviewBankOpsActionFilter) bool {

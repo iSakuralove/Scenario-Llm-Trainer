@@ -3,6 +3,7 @@ import { defineConfig, devices } from '@playwright/test'
 const baseURL = 'http://localhost:5173'
 const isCI = Boolean(process.env.CI)
 const browserChannel = process.env.PLAYWRIGHT_BROWSER_CHANNEL ?? (process.platform === 'win32' ? 'chrome' : undefined)
+const recordArtifacts = process.env.PLAYWRIGHT_RECORD_ARTIFACTS !== 'off'
 
 export default defineConfig({
   testDir: './e2e',
@@ -16,9 +17,9 @@ export default defineConfig({
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL,
-    trace: 'retain-on-failure',
-    screenshot: 'only-on-failure',
-    video: 'retain-on-failure',
+    trace: recordArtifacts ? 'retain-on-failure' : 'off',
+    screenshot: recordArtifacts ? 'only-on-failure' : 'off',
+    video: recordArtifacts ? 'retain-on-failure' : 'off',
   },
   webServer: {
     command: 'npm run dev -- --host 127.0.0.1',

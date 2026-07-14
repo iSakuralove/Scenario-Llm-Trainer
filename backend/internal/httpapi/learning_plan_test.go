@@ -79,3 +79,89 @@ func TestLearningPlanDashboardCalendarAndCheckin(t *testing.T) {
 		t.Fatalf("repeat checkin duplicated date: before=%v after=%v", first.User.Profile.CheckinDates, second.User.Profile.CheckinDates)
 	}
 }
+
+func TestDashboardLearningPlanIncludesInterviewRetrainingLoop(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	user, ok := dataStore.FindUserByIdentifier("demo")
+	if !ok || user == nil {
+		t.Fatal("expected demo user")
+	}
+	question, ok := dataStore.FindInterviewQuestion("database", "L3", "scenario_analysis")
+	if !ok || question == nil {
+		t.Fatal("expected database L3 interview question")
+	}
+	session := dataStore.CreateInterviewSession(user.ID, question)
+	if session == nil {
+		t.Fatal("expected created interview session")
+	}
+	session.Status = "final_evaluated"
+	session.FinalScore = 58
+	session.FinalReport = "需要继续补强。"
+	session.QuestionSnapshot.Subject = "缓存穿透"
+	session.Evaluations = []domain.InterviewEvaluation{
+		{
+			Round:             1,
+			TotalScore:        58,
+			DimensionScores:   map[string]int{"technical_accuracy": 55, "logical_completeness": 69},
+			FollowUpSubject:   "缓存穿透",
+			FollowUpType:      "deepen",
+			RetrievedSubjects: []string{"缓存穿透"},
+			CreatedAt:         time.Now(),
+		},
+		{
+			Round:           2,
+			TotalScore:      70,
+			DimensionScores: map[string]int{"solution_feasibility": 64},
+			FollowUpSubject: "回滚验证",
+			FollowUpType:    "fallback_rule_only",
+			FallbackUsed:    true,
+			CreatedAt:       time.Now(),
+		},
+	}
+	dataStore.SaveInterviewSession(session)
+
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+
+	status, env := requestJSON(t, handler, http.MethodGet, "/api/v1/users/me/dashboard", token, nil)
+	if status != http.StatusOK {
+		t.Fatalf("dashboard status=%d message=%s", status, env.Message)
+	}
+	var dashboard struct {
+		LearningPlan struct {
+			Recommendations []domain.LearningRecommendation `json:"recommendations"`
+		} `json:"learning_plan"`
+		ReviewCalendar struct {
+			ReviewPlan []domain.ReviewPlanItem `json:"review_plan"`
+		} `json:"review_calendar"`
+	}
+	mustDecodeData(t, env, &dashboard)
+
+	foundInterviewRecommendation := false
+	for _, item := range dashboard.LearningPlan.Recommendations {
+		if item.Kind != "interview" {
+			continue
+		}
+		foundInterviewRecommendation = true
+		if item.ActionPath != "/interviews" || item.Reason == "" {
+			t.Fatalf("unexpected interview recommendation: %+v", item)
+		}
+	}
+	if !foundInterviewRecommendation {
+		t.Fatalf("expected interview recommendation in learning plan, got %+v", dashboard.LearningPlan.Recommendations)
+	}
+
+	foundInterviewReviewItem := false
+	for _, item := range dashboard.ReviewCalendar.ReviewPlan {
+		if item.SourceKind != "interview_retraining" {
+			continue
+		}
+		foundInterviewReviewItem = true
+		if item.Reason == "" || len(item.Actions) == 0 {
+			t.Fatalf("unexpected interview review plan item: %+v", item)
+		}
+	}
+	if !foundInterviewReviewItem {
+		t.Fatalf("expected interview retraining review item, got %+v", dashboard.ReviewCalendar.ReviewPlan)
+	}
+}

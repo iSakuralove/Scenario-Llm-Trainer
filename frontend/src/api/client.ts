@@ -140,6 +140,7 @@ export interface InterviewLaunchpadSummary {
   published_atom_count: number
   indexed_atom_count: number
   fallback_mode: boolean
+  state: string
   message: string
 }
 
@@ -160,6 +161,7 @@ export interface InterviewLaunchpadTrack {
   difficulty: string
   question_type: string
   question_role: string
+  tags: string[]
   summary: string
   details: string[]
   published_count: number
@@ -169,16 +171,76 @@ export interface InterviewLaunchpadTrack {
   vector_status_summary: string
 }
 
+export interface InterviewLaunchpadRecommendation extends InterviewLaunchpadTrack {
+  reason: string
+  source_kind: string
+}
+
+export interface InterviewLaunchpadRecentSession {
+  id: string
+  status: string
+  domain: string
+  difficulty: string
+  question_title: string
+  final_score?: number
+  weak_dimension?: string
+  weak_score?: number
+  started_at: string
+  ended_at?: string
+  action_path: string
+}
+
+export interface InterviewLaunchpadCoverageStats {
+  total_open_tracks: number
+  practiced_open_tracks: number
+  coverage_percent: number
+  completed_sessions: number
+  practiced_domains: string[]
+  practiced_difficulties: string[]
+  subject_count: number
+  top_subjects: string[]
+  uncovered_track_ids: string[]
+}
+
 export interface InterviewLaunchpadResponse {
   summary: InterviewLaunchpadSummary
   domains: InterviewLaunchpadDomain[]
   open_tracks: InterviewLaunchpadTrack[]
+  recommended_tracks: InterviewLaunchpadRecommendation[]
+  recent_sessions: InterviewLaunchpadRecentSession[]
+  coverage_stats: InterviewLaunchpadCoverageStats
   coverage: {
     domains: string[]
     difficulties: string[]
     question_types: string[]
+    question_roles: string[]
+    vector_status_summary: string[]
   }
   fallback_mode: boolean
+}
+
+export interface MentorSnapshot {
+  generated_at: string
+  overview: string
+  strengths: string[]
+  weaknesses: string[]
+  risks: Array<{ level: string; title: string; message: string }>
+  actions: Array<{ title: string; detail: string; action_label: string; action_path: string }>
+  coverage: {
+    coverage_percent: number
+    completed_sessions: number
+    subject_count: number
+    top_subjects: string[]
+    uncovered_tracks: string[]
+  }
+  profile: {
+    target_level: string
+    target_role?: string
+    preferred_domains: string[]
+    has_resume_summary: boolean
+    has_project_summary: boolean
+  }
+  sample_ready: boolean
 }
 
 function buildApiURL(path: string) {
@@ -672,6 +734,7 @@ export const api = {
 
   history: (token: string) =>
     request<{ scenarios: ScenarioSession[]; interviews: InterviewSession[]; community_posts: CommunityPost[] }>('/users/me/history', {}, token),
+  mentor: (token: string) => request<MentorSnapshot>('/users/me/mentor', {}, token),
 
   learningPlan: (token: string) => request<LearningPlan>('/users/me/learning-plan', {}, token),
 

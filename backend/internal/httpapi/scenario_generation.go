@@ -14,6 +14,8 @@ import (
 	"situational-teaching/backend/internal/store"
 )
 
+const scenarioGenerationStartupDelay = 40 * time.Millisecond
+
 type scenarioGenerationPayload struct {
 	Domain       string                                `json:"domain"`
 	Difficulty   string                                `json:"difficulty"`
@@ -224,7 +226,10 @@ func (s *Server) createScenarioGenerationJob(userID string, req scenarioGenerati
 	if err != nil {
 		return domain.AIJob{}, err
 	}
-	go s.runScenarioGenerationJob(job.ID, userID, req)
+	go func() {
+		time.Sleep(scenarioGenerationStartupDelay)
+		s.runScenarioGenerationJob(job.ID, userID, req)
+	}()
 	return job, nil
 }
 func (s *Server) runScenarioGenerationJob(jobID, userID string, req scenarioGenerationPayload) {

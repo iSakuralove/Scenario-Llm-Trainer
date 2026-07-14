@@ -6,6 +6,7 @@
 
 - 读取 [store-schema-contracts.md](./store-schema-contracts.md) 中与 Store/schema/migration 相关的契约。
 - 修改用户侧 API 聚合契约时，读取 [interview-launchpad-contracts.md](./interview-launchpad-contracts.md)。
+- 修改独立 Mentor 页面或 `GET /users/me/mentor` 时，读取 [mentor-contracts.md](./mentor-contracts.md)。
 - 修改面试报告响应、追问检索摘要、知识点覆盖或复训建议时，读取 [interview-report-contracts.md](./interview-report-contracts.md)。
 - 修改个人档案简历导入或结构化提取时，读取 [profile-import-contracts.md](./profile-import-contracts.md)。
 - 修改管理员面试题库详情、版本历史或在线编辑接口时，读取 [admin-interview-bank-contracts.md](./admin-interview-bank-contracts.md)。

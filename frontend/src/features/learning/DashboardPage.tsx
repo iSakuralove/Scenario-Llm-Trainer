@@ -26,6 +26,8 @@ export function DashboardPage() {
   const learningPlan = data.learning_plan ?? fallbackLearningPlan(data)
   const reviewCalendar = data.review_calendar ?? fallbackReviewCalendar(data, learningPlan)
   const insightByDomain = new Map((learningPlan.domain_insights ?? []).map((item) => [item.domain, item]))
+  const interviewRecommendations = (learningPlan.recommendations ?? []).filter((item) => item.kind === 'interview')
+  const generalRecommendations = (learningPlan.recommendations ?? []).filter((item) => item.kind !== 'interview')
   const checkinText = reviewCalendar.today_checked ? '今日已打卡' : '完成今日打卡'
   const stats = dashboardStats(data)
 
@@ -100,8 +102,20 @@ export function DashboardPage() {
         </section>
         <section className="panel dashboard-recommend-panel">
           <div className="panel-title"><Sparkles size={18} /> 今日推荐</div>
+          {interviewRecommendations.length > 0 ? (
+            <div className="list-stack dashboard-interview-reco-group">
+              <strong className="dashboard-recommend-group-title">面试专项建议</strong>
+              {interviewRecommendations.map((item) => (
+                <Link className="scenario-line interview-recommend-line" key={item.id} to={item.action_path || '/interviews'}>
+                  <strong>{item.title}</strong>
+                  <span>{domainLabel(item.domain)} · {item.difficulty} · {item.action_label || '进入面试舱'}</span>
+                  <small>{item.reason}</small>
+                </Link>
+              ))}
+            </div>
+          ) : null}
           <div className="list-stack">
-            {(learningPlan.recommendations ?? []).map((item) => (
+            {(generalRecommendations.length > 0 ? generalRecommendations : learningPlan.recommendations ?? []).map((item) => (
               <Link className="scenario-line" key={item.id} to={item.action_path || '/scenarios'}>
                 <strong>{item.title}</strong>
                 <span>{domainLabel(item.domain)} · {item.difficulty} · 优先级 {item.priority}</span>

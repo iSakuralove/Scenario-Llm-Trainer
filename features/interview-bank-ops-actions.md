@@ -67,6 +67,12 @@
 - Chrome 真实页面验证：管理员点击“生成候选”，勾选候选并“保存选中”，成功提示显示 saved/skipped existing，open 队列刷新后出现保存的 generated source 动作。
 - Chrome 真实页面验证：管理员点击 open 队列里的“详情”，可以看到证据快照、当前 atom 状态/索引状态/版本；`rebuild_index + atom_id` 动作可以直接触发一次现有单 atom 索引重建。
 
+### 2026-07-14 浏览器冒烟记录
+
+- 使用本机浏览器 1920×1080 访问 `http://localhost:5173/interviews`，管理员会话可正常进入面试舱，并可导航到面试题库。
+- 面试题库列表、健康诊断、运营动作列表和题目资源面板均可渲染；在 390px 移动视口模拟下，`document.documentElement.scrollWidth === window.innerWidth`，未发现横向溢出。
+- 当前 `5173` 前端仍指向 `http://localhost:8080/api/v1` 的旧 Docker API；点击运营动作“详情”返回 `not found`，因此详情证据、状态闭环、单 atom 重建等真实写操作尚未判定通过。最新源码后端已在 `18080` 监听，但当前前端实例未切换到该 API。
+
 ## 已知限制
 
 - 当前支持手工创建、列表读取、动作详情、状态流转、动作历史、健康诊断候选、索引状态候选、真实检索运营候选和候选选择保存。

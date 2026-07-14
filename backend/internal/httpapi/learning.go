@@ -18,6 +18,16 @@ type learningDomainStats struct {
 	CompletedQuestionIDs map[string]bool
 }
 
+type interviewLearningContext struct {
+	SessionID  string
+	QuestionID string
+	Domain     string
+	Difficulty string
+	StartedAt  time.Time
+	FinalScore int
+	Retraining []interviewReportRetrainingSuggestion
+}
+
 func (s *Server) learningPlan(user *domain.User) domain.LearningPlan {
 	if user == nil {
 		return domain.LearningPlan{GeneratedAt: time.Now()}
@@ -27,6 +37,7 @@ func (s *Server) learningPlan(user *domain.User) domain.LearningPlan {
 	scenarios := s.store.ListScenarios("", "", "")
 	statsByDomain := map[string]*learningDomainStats{}
 	completedQuestions := map[string]bool{}
+	interviewContexts := []interviewLearningContext{}
 
 	ensureStats := func(domainName string) *learningDomainStats {
 		domainName = strings.TrimSpace(domainName)
@@ -64,16 +75,37 @@ func (s *Server) learningPlan(user *domain.User) domain.LearningPlan {
 		if session.FinalScore <= 0 {
 			continue
 		}
-		question, ok := s.store.GetInterviewQuestion(session.QuestionID)
-		if !ok {
-			continue
+		domainName := strings.TrimSpace(session.QuestionSnapshot.Domain)
+		difficulty := strings.TrimSpace(session.QuestionSnapshot.Difficulty)
+		if question, ok := s.store.GetInterviewQuestion(session.QuestionID); ok && question != nil {
+			if domainName == "" {
+				domainName = question.Domain
+			}
+			if difficulty == "" {
+				difficulty = question.Difficulty
+			}
 		}
-		item := ensureStats(question.Domain)
+		if domainName == "" {
+			domainName = "interview"
+		}
+		item := ensureStats(domainName)
 		item.Entries = append(item.Entries, learningScoreEntry{
 			Score:      session.FinalScore,
 			At:         session.StartedAt,
 			QuestionID: session.QuestionID,
 		})
+		reportSummary := buildInterviewReportRetrievalSummary(&session)
+		if len(reportSummary.RetrainingSuggestions) > 0 {
+			interviewContexts = append(interviewContexts, interviewLearningContext{
+				SessionID:  session.ID,
+				QuestionID: session.QuestionID,
+				Domain:     domainName,
+				Difficulty: difficulty,
+				StartedAt:  session.StartedAt,
+				FinalScore: session.FinalScore,
+				Retraining: append([]interviewReportRetrainingSuggestion{}, reportSummary.RetrainingSuggestions...),
+			})
+		}
 	}
 
 	domainNames := map[string]bool{}
@@ -145,7 +177,7 @@ func (s *Server) learningPlan(user *domain.User) domain.LearningPlan {
 		focusDomains = focusDomains[:3]
 	}
 
-	recommendations := s.learningRecommendations(user, scenarios, insights, focusDomains, completedQuestions)
+	recommendations := s.learningRecommendations(user, scenarios, insights, focusDomains, completedQuestions, interviewContexts)
 	plan := domain.LearningPlan{
 		GeneratedAt:     time.Now(),
 		Summary:         learningSummary(user, insights, focusDomains),
@@ -153,11 +185,11 @@ func (s *Server) learningPlan(user *domain.User) domain.LearningPlan {
 		FocusDomains:    focusDomains,
 		DomainInsights:  insights,
 		Recommendations: recommendations,
-		ReviewPlan:      buildReviewPlan(focusDomains, recommendations, scenarioSessions, interviewSessions),
+		ReviewPlan:      buildReviewPlan(focusDomains, recommendations, scenarioSessions, interviewSessions, interviewContexts),
 	}
 	return plan
 }
-func (s *Server) learningRecommendations(user *domain.User, scenarios []domain.ScenarioQuestion, insights []domain.LearningDomainInsight, focusDomains []string, completedQuestions map[string]bool) []domain.LearningRecommendation {
+func (s *Server) learningRecommendations(user *domain.User, scenarios []domain.ScenarioQuestion, insights []domain.LearningDomainInsight, focusDomains []string, completedQuestions map[string]bool, interviewContexts []interviewLearningContext) []domain.LearningRecommendation {
 	focus := map[string]bool{}
 	for _, domainName := range focusDomains {
 		focus[domainName] = true
@@ -168,6 +200,9 @@ func (s *Server) learningRecommendations(user *domain.User, scenarios []domain.S
 	}
 
 	items := []domain.LearningRecommendation{}
+	for _, recommendation := range interviewRetrainingRecommendations(user, interviewContexts) {
+		items = append(items, recommendation)
+	}
 	for _, scenario := range scenarios {
 		if scenario.Status != "active" || completedQuestions[scenario.ID] {
 			continue
@@ -225,7 +260,7 @@ func (s *Server) learningRecommendations(user *domain.User, scenarios []domain.S
 	if len(items) > 4 {
 		items = items[:4]
 	}
-	if len(focusDomains) > 0 {
+	if len(focusDomains) > 0 && len(interviewContexts) == 0 {
 		domainName := focusDomains[0]
 		score := scoreByDomain[domainName]
 		items = append(items, domain.LearningRecommendation{
@@ -469,10 +504,26 @@ func learningSummary(user *domain.User, insights []domain.LearningDomainInsight,
 	}
 	return fmt.Sprintf("当前平均分 %d，下一轮优先补强 %s，并用面试追问验证表达完整度。", average, strings.Join(focusLabels, "、"))
 }
-func buildReviewPlan(focusDomains []string, recommendations []domain.LearningRecommendation, scenarioSessions []domain.ScenarioSession, interviewSessions []domain.InterviewSession) []domain.ReviewPlanItem {
+func buildReviewPlan(focusDomains []string, recommendations []domain.LearningRecommendation, scenarioSessions []domain.ScenarioSession, interviewSessions []domain.InterviewSession, interviewContexts []interviewLearningContext) []domain.ReviewPlanItem {
+	items := []domain.ReviewPlanItem{}
+	interviewRetrainingItems := reviewItemsFromInterviewRetraining(interviewContexts)
+	if len(interviewRetrainingItems) > 0 {
+		items = append(items, interviewRetrainingItems...)
+	}
 	wrongItems := reviewItemsFromHistory(scenarioSessions, interviewSessions)
-	if len(wrongItems) >= 3 {
-		return wrongItems[:3]
+	if len(interviewRetrainingItems) > 0 {
+		filtered := make([]domain.ReviewPlanItem, 0, len(wrongItems))
+		for _, item := range wrongItems {
+			if item.SourceKind == "interview_wrong" {
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		wrongItems = filtered
+	}
+	items = append(items, wrongItems...)
+	if len(items) >= 3 {
+		return normalizeReviewPlanDayLabels(items[:3])
 	}
 	if len(focusDomains) == 0 {
 		focusDomains = []string{"database", "network", "os"}
@@ -488,8 +539,6 @@ func buildReviewPlan(focusDomains []string, recommendations []domain.LearningRec
 		{Day: "第 2 天", Focus: "补一次面试表达", Actions: []string{"完成 1 次文本面试", "把根因、证据、修复动作压缩成 2 分钟表达", "整理追问中的缺口"}, Minutes: 30, Target: 75},
 		{Day: "第 3 天", Focus: "回看错因并做同域巩固", Actions: []string{"重看最近复盘报告", "复述标准排查步骤", "再做 1 道同域题或 UGC 转化题"}, Minutes: 40, Target: 80},
 	}
-	items := make([]domain.ReviewPlanItem, 0, len(templates))
-	items = append(items, wrongItems...)
 	for i, template := range templates {
 		if len(items) == 3 {
 			break
@@ -516,7 +565,75 @@ func buildReviewPlan(focusDomains []string, recommendations []domain.LearningRec
 			Reason:           "当前没有足够低分错题，使用画像推荐补齐复习计划。",
 		})
 	}
+	return normalizeReviewPlanDayLabels(items)
+}
+
+func interviewRetrainingRecommendations(user *domain.User, contexts []interviewLearningContext) []domain.LearningRecommendation {
+	if len(contexts) == 0 {
+		return []domain.LearningRecommendation{}
+	}
+	sort.SliceStable(contexts, func(i, j int) bool {
+		if contexts[i].StartedAt.Equal(contexts[j].StartedAt) {
+			return contexts[i].SessionID < contexts[j].SessionID
+		}
+		return contexts[i].StartedAt.After(contexts[j].StartedAt)
+	})
+	items := []domain.LearningRecommendation{}
+	for _, ctx := range contexts {
+		for _, suggestion := range ctx.Retraining {
+			items = append(items, domain.LearningRecommendation{
+				ID:          "interview-retraining:" + ctx.SessionID + ":" + suggestion.ID,
+				Kind:        "interview",
+				Domain:      ctx.Domain,
+				Title:       "面试复训：" + suggestion.Subject,
+				Description: firstNonEmpty(firstString(suggestion.Actions), "围绕本次面试低分知识点重新组织回答并复盘。"),
+				Difficulty:  firstNonEmpty(ctx.Difficulty, targetInterviewDifficulty(user.Profile.TargetLevel)),
+				Priority:    120 - suggestion.Priority*10,
+				Reason:      suggestion.Reason,
+				ActionLabel: "进入面试舱",
+				ActionPath:  "/interviews",
+			})
+		}
+	}
 	return items
+}
+
+func reviewItemsFromInterviewRetraining(contexts []interviewLearningContext) []domain.ReviewPlanItem {
+	if len(contexts) == 0 {
+		return []domain.ReviewPlanItem{}
+	}
+	sort.SliceStable(contexts, func(i, j int) bool {
+		if contexts[i].StartedAt.Equal(contexts[j].StartedAt) {
+			return contexts[i].SessionID < contexts[j].SessionID
+		}
+		return contexts[i].StartedAt.After(contexts[j].StartedAt)
+	})
+	items := []domain.ReviewPlanItem{}
+	for _, ctx := range contexts {
+		for _, suggestion := range ctx.Retraining {
+			items = append(items, domain.ReviewPlanItem{
+				DayLabel:         "",
+				Domain:           ctx.Domain,
+				Focus:            suggestion.Subject + " 面试复训",
+				Actions:          append([]string{}, suggestion.Actions...),
+				EstimatedMinutes: 30,
+				TargetScore:      suggestion.TargetScore,
+				QuestionIDs:      []string{ctx.QuestionID},
+				SourceKind:       "interview_retraining",
+				SourceID:         ctx.SessionID,
+				Reason:           suggestion.Reason,
+			})
+		}
+	}
+	return items
+}
+
+func normalizeReviewPlanDayLabels(items []domain.ReviewPlanItem) []domain.ReviewPlanItem {
+	out := append([]domain.ReviewPlanItem{}, items...)
+	for i := range out {
+		out[i].DayLabel = fmt.Sprintf("第 %d 天", i+1)
+	}
+	return out
 }
 func reviewItemsFromHistory(scenarioSessions []domain.ScenarioSession, interviewSessions []domain.InterviewSession) []domain.ReviewPlanItem {
 	items := []domain.ReviewPlanItem{}

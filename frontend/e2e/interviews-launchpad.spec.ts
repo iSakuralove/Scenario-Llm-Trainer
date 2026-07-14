@@ -1,7 +1,7 @@
 import { expect, type Page, type Route, test } from '@playwright/test'
 
-test('interview launchpad explains roles, domains, available tracks, and request payload', async ({ page }) => {
-  let requestedPayload: Record<string, string> | undefined
+test('interview launchpad prioritizes start, bank counts, history, domains, and request payload', async ({ page }) => {
+  let requestedPayload: Record<string, unknown> | undefined
   await mockShellAPI(page)
   await page.route('**/api/v1/interviews/sessions', async (route) => {
     if (route.request().method() !== 'POST') {
@@ -21,23 +21,23 @@ test('interview launchpad explains roles, domains, available tracks, and request
   await openInterviewsAsStudent(page)
 
   await expect(page.getByRole('heading', { name: '技术面试舱' })).toBeVisible()
-  await expect(page.locator('.interview-launchpad')).toContainText('INTERVIEW')
+  await expect(page.getByTestId('interview-launch-summary')).toContainText('可面试题目')
   await expect(page.getByTestId('interview-launch-summary')).toContainText('五维评分维度')
   await expect(page.getByTestId('interview-launch-summary')).toContainText('技术准确性')
+  await expect(page.getByTestId('interview-history-panel')).toBeVisible()
   await expect(page.locator('.interview-poster-meta strong')).toHaveCount(0)
   await expect.poll(async () =>
     page.getByTestId('interview-launch-summary').evaluate((item) => getComputedStyle(item, '::after').content),
   ).toBe('none')
+  await expect(page.locator('.interview-launchpad')).not.toContainText('COMMAND SCREEN')
+  await expect(page.locator('.interview-launchpad')).not.toContainText('ANSWER PIPELINE')
+  await expect(page.locator('.interview-launchpad')).not.toContainText('岗位级别模型')
+  await expect(page.locator('.interview-launchpad')).not.toContainText('评分与报告产物')
+  await expect(page.locator('.interview-launchpad')).not.toContainText('面试流程')
   await expect(page.locator('.interview-launchpad')).not.toContainText('选择真实可启动训练轨道，进入结构化问答、追问和五维评分。')
   await expect(page.locator('.interview-launchpad')).not.toContainText('只展示真实可启动组合')
   await expect(page.locator('.interview-launchpad')).not.toContainText('后续题库建设范围')
   await expect(page.locator('.interview-launchpad')).not.toContainText('题库待补齐')
-  await expect(page.getByTestId('interview-level-table')).toContainText('L3')
-  await expect(page.getByTestId('interview-level-table')).toContainText('初级工程师')
-  await expect(page.getByTestId('interview-level-table')).toContainText('L4')
-  await expect(page.getByTestId('interview-level-table')).toContainText('中级工程师')
-  await expect(page.getByTestId('interview-level-table')).toContainText('L5')
-  await expect(page.getByTestId('interview-level-table')).toContainText('高级工程师')
 
   await expect(page.getByTestId('interview-domain-cloud-native')).toContainText('deepseek-v4-flash 基线题库')
   await expect(page.getByRole('button', { name: /云原生/ })).toHaveCount(1)
@@ -59,11 +59,11 @@ test('interview launchpad explains roles, domains, available tracks, and request
   await expect(page.getByTestId('interview-launch-summary')).toContainText('L5')
   await page.getByTestId('interview-track-section').getByRole('button', { name: /开始面试/ }).click()
 
-  await expect.poll(() => requestedPayload).toEqual({
+  await expect.poll(() => requestedPayload).toEqual(expect.objectContaining({
     domain: 'architecture',
     difficulty: 'L5',
     question_type: 'principle',
-  })
+  }))
   await expect(page).toHaveURL(/\/interviews\/session\/launchpad-session$/)
 })
 
@@ -113,21 +113,40 @@ test('interview launchpad shows backend not found errors without leaving launchp
   await expect(page).toHaveURL(/\/interviews$/)
 })
 
-test('interview launchpad keeps role table readable on tablet and mobile widths', async ({ page }) => {
+test('interview launchpad does not create history when the session page module cannot load', async ({ page }) => {
+  let createRequests = 0
+  await mockShellAPI(page)
+  await page.route('**/src/features/interviews/InterviewSessionRoute.tsx*', async (route) => {
+    await route.abort('failed')
+  })
+  await page.route('**/api/v1/interviews/sessions', async (route) => {
+    if (route.request().method() === 'POST') createRequests += 1
+    await route.fallback()
+  })
+
+  await openInterviewsAsStudent(page)
+  await page.getByTestId('interview-track-section').getByRole('button', { name: /开始面试/ }).click()
+
+  await expect(page.locator('.launch-error').first()).toContainText('本次未创建面试记录')
+  await expect(page).toHaveURL(/\/interviews$/)
+  expect(createRequests).toBe(0)
+})
+
+test('interview launchpad keeps first-screen action areas readable on tablet and mobile widths', async ({ page }) => {
   await mockShellAPI(page)
   await page.setViewportSize({ width: 1024, height: 768 })
   await openInterviewsAsStudent(page)
 
   await expectNoHorizontalOverflow(page)
-  await expectLevelRowsReadable(page)
   await expectLaunchGridsSingleColumn(page)
+  await expectHistoryBeforeTrackList(page)
 
   await page.setViewportSize({ width: 390, height: 844 })
   await expectNoHorizontalOverflow(page)
-  await expectLevelRowsReadable(page)
+  await expectHistoryBeforeTrackList(page)
 })
 
-test('interview launchpad gives available tracks more width than level guidance on desktop', async ({ page }) => {
+test('interview launchpad gives available tracks more width than domain filters on desktop', async ({ page }) => {
   await mockShellAPI(page)
   await page.setViewportSize({ width: 1440, height: 955 })
   await openInterviewsAsStudent(page)
@@ -135,13 +154,11 @@ test('interview launchpad gives available tracks more width than level guidance 
   await expect.poll(async () =>
     page.evaluate(() => {
       const trackSection = document.querySelector<HTMLElement>('[data-testid="interview-track-section"]')
-      const levelSection = document.querySelector<HTMLElement>('[data-testid="interview-level-section"]')
-      if (!trackSection || !levelSection) return false
+      const domainSection = document.querySelector<HTMLElement>('[data-testid="interview-domain-section"]')
+      if (!trackSection || !domainSection) return false
       const tracks = trackSection.getBoundingClientRect()
-      const levels = levelSection.getBoundingClientRect()
-      const levelTitle = levelSection.querySelector<HTMLElement>('.panel-title')
-      const levelFontSize = levelTitle ? Number.parseFloat(getComputedStyle(levelTitle).fontSize) : 0
-      return tracks.width > levels.width && levelFontSize <= 15
+      const domains = domainSection.getBoundingClientRect()
+      return tracks.width > domains.width
     }),
   ).toBe(true)
 })
@@ -156,14 +173,17 @@ test('interview launchpad avoids oversized empty bands on desktop', async ({ pag
   await expect.poll(async () =>
     page.evaluate(() => {
       const grid = document.querySelector<HTMLElement>('.interview-command-grid')
-      const level = document.querySelector<HTMLElement>('[data-testid="interview-level-section"]')
-      if (!grid || !level) return false
-      const levelBox = level.getBoundingClientRect()
+      if (!grid) return false
       const gridStyle = getComputedStyle(grid)
-      const levelOverflow = level.scrollWidth - level.clientWidth
       const panels = Array.from(grid.children).map((item) => item.getBoundingClientRect()).sort((a, b) => a.top - b.top)
       const maxPanelGap = panels.slice(1).reduce((maxGap, panel, index) => Math.max(maxGap, panel.top - panels[index].bottom), 0)
-      return gridStyle.gridTemplateColumns.split(' ').length === 1 && levelBox.width >= 300 && levelOverflow <= 2 && maxPanelGap <= 30
+      return (
+        gridStyle.gridTemplateColumns.split(' ').length === 1
+        && grid.children.length === 2
+        && !document.body.innerText.includes('ANSWER PIPELINE')
+        && !document.body.innerText.includes('评分与报告产物')
+        && maxPanelGap <= 30
+      )
     }),
   ).toBe(true)
 })
@@ -346,6 +366,18 @@ async function openInterviewsAsStudent(page: Page) {
     window.localStorage.setItem('teaching_mvp_refresh', 'e2e-refresh')
   })
   await page.goto('/interviews')
+  await page.waitForFunction(() => {
+    const hasTrackGrid = Boolean(document.querySelector('[data-testid="interview-track-grid"]'))
+    const hasLoginButton = Array.from(document.querySelectorAll('button')).some((button) => button.textContent?.includes('进入系统'))
+    return hasTrackGrid || hasLoginButton
+  }, null, { timeout: 10_000 })
+  if (await page.getByRole('button', { name: '进入系统' }).isVisible().catch(() => false)) {
+    await page.getByLabel('用户名或邮箱').fill('demo')
+    await page.getByLabel('密码').fill('demo123')
+    await page.getByRole('button', { name: '进入系统' }).click()
+    await page.waitForURL(/\/dashboard$/, { timeout: 10_000 })
+    await page.goto('/interviews')
+  }
   await expect(page.getByTestId('interview-track-grid')).toBeVisible()
 }
 
@@ -486,12 +518,19 @@ async function expectWorkspaceClearOfSidebar(page: Page) {
   ).toBe(true)
 }
 
-async function expectLevelRowsReadable(page: Page) {
-  await expect.poll(async () => page.locator('.level-row p').evaluateAll((items) => items.every((item) => item.getBoundingClientRect().width >= 180))).toBe(true)
-}
-
 async function expectLaunchGridsSingleColumn(page: Page) {
   await expect.poll(async () =>
     page.locator('.interview-command-grid').evaluateAll((items) => items.length > 0 && items.every((item) => getComputedStyle(item).gridTemplateColumns.split(' ').length === 1)),
+  ).toBe(true)
+}
+
+async function expectHistoryBeforeTrackList(page: Page) {
+  await expect.poll(async () =>
+    page.evaluate(() => {
+      const historyPanel = document.querySelector<HTMLElement>('[data-testid="interview-history-panel"]')
+      const trackSection = document.querySelector<HTMLElement>('[data-testid="interview-track-section"]')
+      if (!historyPanel || !trackSection) return false
+      return historyPanel.getBoundingClientRect().top <= trackSection.getBoundingClientRect().top
+    }),
   ).toBe(true)
 }

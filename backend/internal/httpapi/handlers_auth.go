@@ -262,16 +262,22 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, user *domain.U
 			return
 		}
 		writeOK(w, s.learningPlan(user))
-	case "/review-calendar":
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		writeOK(w, reviewCalendarFromPlan(user, s.learningPlan(user), time.Now()))
-	case "/checkin":
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
+		case "/review-calendar":
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			writeOK(w, reviewCalendarFromPlan(user, s.learningPlan(user), time.Now()))
+		case "/mentor":
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			writeOK(w, s.mentorSnapshot(user))
+		case "/checkin":
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
 		}
 		result, updated, err := s.checkin(user, time.Now())
 		if err != nil {

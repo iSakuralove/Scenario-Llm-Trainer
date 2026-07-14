@@ -10,7 +10,7 @@ node_modules/
 frontend/node_modules/
 pnpm-lock.yaml
 frontend/pnpm-lock.yaml
-
+tmp\
 # Frontend build and test output
 dist/
 dist-ssr/

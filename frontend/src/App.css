@@ -978,6 +978,25 @@
   gap: 0;
 }
 
+.dashboard-interview-reco-group {
+  margin-bottom: 12px;
+}
+
+.dashboard-recommend-group-title {
+  display: block;
+  padding: 0 0 10px;
+  color: #8ef0db;
+  font-size: 12px;
+  font-weight: 950;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.dashboard-page .interview-recommend-line {
+  border-left: 3px solid rgba(92, 225, 198, 0.55);
+  padding-left: 12px;
+}
+
 .dashboard-loop-meta {
   display: grid;
   gap: 8px;

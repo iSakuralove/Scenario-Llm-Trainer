@@ -149,8 +149,13 @@ The runtime stores only a bounded, sanitized retrieval query and treats logging 
 ### 2. Signatures
 
 - Store create: `CreateInterviewBankOpsAction(action domain.InterviewBankOpsAction) (domain.InterviewBankOpsAction, error)`。
+- Store get: `GetInterviewBankOpsAction(id string) (*domain.InterviewBankOpsAction, bool)`。
+- Store update: `UpdateInterviewBankOpsActionStatus(actionID, nextStatus, note, adminID string) (domain.InterviewBankOpsAction, domain.InterviewBankOpsActionHistoryEntry, error)`。
+- Store history: `ListInterviewBankOpsActionHistory(actionID string) []domain.InterviewBankOpsActionHistoryEntry`。
 - Store list: `ListInterviewBankOpsActions(filter domain.InterviewBankOpsActionFilter) []domain.InterviewBankOpsAction`。
 - API list: `GET /api/v1/admin/interview-bank/ops-actions`。
+- API detail: `GET /api/v1/admin/interview-bank/ops-actions/{id}`。
+- API update: `PATCH /api/v1/admin/interview-bank/ops-actions/{id}`。
 - API candidates: `POST /api/v1/admin/interview-bank/ops-actions/candidates`。
 - API candidate save: `POST /api/v1/admin/interview-bank/ops-actions/candidates/save`。
 - API manual create: `POST /api/v1/admin/interview-bank/ops-actions`。
@@ -171,6 +176,13 @@ The runtime stores only a bounded, sanitized retrieval query and treats logging 
 - `dedupe_key` must never be empty. Manual actions may derive it from action type plus target scope; if target scope is insufficient, use an ID-scoped manual key.
 - `evidence` must be compact JSON metadata. It must not contain full user answers, full resume text, project background, full atom body content, secrets, tokens, or raw provider payloads.
 - Creating or listing an action must not edit atoms, change atom status, rebuild vectors, write retrieval logs, or create LLM/embedding calls.
+- Detail read is still read-only. It may attach the current linked atom context (`status`, `vector_status`, `current_version`, `updated_at`) when `atom_id` exists, but it must not return full atom body content, principles, pitfalls, follow-up paths, or version snapshots.
+- Detail read marks an action `stale=true` only when the linked atom is missing or currently archived. It must not auto-resolve, auto-dismiss, or mutate the action.
+- Status update is an explicit admin write path. It only changes the action's current `status`/`updated_at` and appends one history row; it must not edit atoms, change atom status, rebuild vectors, write retrieval logs, or create LLM/embedding calls.
+- `resolved` and `dismissed` require a non-empty trimmed note.
+- `reopened` is allowed only when the current action status is `resolved` or `dismissed`.
+- `reopened` must be rejected when another active action (`open`, `in_progress`, `watching`, `reopened`) already uses the same `dedupe_key`.
+- Status history must live in a dedicated table, not inside `evidence`.
 - Candidate generation is read-only. It must not call `CreateInterviewBankOpsAction`, edit atoms, change atom status, rebuild vectors, write retrieval logs, or create LLM/embedding calls.
 - Candidate save is an explicit admin write path. It may call `CreateInterviewBankOpsAction` for selected generated candidates, but must not edit atoms, change atom status, rebuild vectors, write retrieval logs, or create LLM/embedding calls.
 - Candidate generation accepts `health_diagnostic`, `index_status`, and `retrieval_analytics` sources; omitting `sources` includes all three.
@@ -202,6 +214,11 @@ The runtime stores only a bounded, sanitized retrieval query and treats logging 
 - Candidate request with duplicate sources -> dedupe sources in response policy.
 - Candidate save with empty `candidates`, more than 50 candidates, invalid generated source, empty `dedupe_key`, or missing target scope -> HTTP `400`.
 - Candidate save with active duplicate `dedupe_key` -> HTTP `200`, increments `skipped_existing`, and does not create a new action.
+- Status update with unchanged `status` -> HTTP `400`.
+- Status update of a missing action -> HTTP `404`.
+- `resolved` / `dismissed` with empty note -> HTTP `400`.
+- `reopened` from non-closed state -> HTTP `400`.
+- `reopened` with another active same-`dedupe_key` action already present -> HTTP `400`.
 - Store evidence marshal error -> return create error before persisting a partial action.
 - Empty list result -> return `list: []` and `total: 0`, not an error.
 
@@ -216,6 +233,9 @@ The runtime stores only a bounded, sanitized retrieval query and treats logging 
 - Good: Admin saves a selected generated candidate and then sees it in the open queue with the generated source and compact evidence preserved.
 - Good: Saving a candidate whose `dedupe_key` matches an open action skips it; saving one whose previous matching action is resolved creates a new open action.
 - Good: Existing open action with the same `dedupe_key` increments `skipped_existing` and suppresses the duplicate candidate; existing resolved action does not suppress it.
+- Good: Admin resolves one action with a note, sees it disappear from the default open queue, and detail history shows `open -> resolved`.
+- Good: Admin reopens a resolved action with no competing active dedupe, and detail history shows `resolved -> reopened`.
+- Bad: Admin reopens an old resolved action after a new open action with the same `dedupe_key` already exists, creating duplicate active work.
 - Base: No saved actions returns an empty open queue and lets the existing analytics/health panels continue rendering.
 - Base: Candidate generation with no matching health/index signals returns `list: []`, `total: 0`, and the normalized policy.
 - Bad: Creating an action from the frontend also edits the related atom or starts index rebuild; action creation is governance bookkeeping only.
@@ -225,9 +245,11 @@ The runtime stores only a bounded, sanitized retrieval query and treats logging 
 ### 6. Tests Required
 
 - HTTP API: admin create/list success, non-admin forbidden, invalid enum and missing required fields rejected.
+- HTTP API: admin detail success returns action plus current linked atom context; missing action returns `404`; non-admin forbidden.
+- HTTP API: admin status update success returns updated action plus latest history entry; non-admin forbidden; `resolved/dismissed` note required; `reopened` state and active-dedupe rules enforced.
 - HTTP API: candidate generation is admin-only, rejects invalid source, clamps limit, returns blocked health `fill_gap`, warning health `rebuild_index`, failed/pending published atom `rebuild_index`, real retrieval fallback `fill_gap/P0/P1`, zero-hit retrieval atom `observe/P3`, skips draft/archived atoms, skips active dedupe keys, and does not persist actions.
 - HTTP API: candidate save is admin-only, persists selected generated candidates, preserves source/dedupe/evidence, skips active duplicates, allows resolved duplicates, rejects invalid candidate payloads, and refreshes the open action list.
-- Store unit: MemoryStore create/list filters, default values, sorting, clone safety, and evidence round-trip.
+- Store unit: MemoryStore create/list/update/history clone safety, status transition ordering, and reopen dedupe conflict behavior.
 - Schema text: `SchemaSQL`, `LegacyCompatibilitySQL`, and `backend/migrations/001_schema.sql` all contain the action table and indexes.
 - Postgres behavior: create/list query must use the same filters and limit cap as MemoryStore.
 - Frontend: `npm --prefix frontend run lint` and `npm --prefix frontend run build` after adding API/types/page contracts.
@@ -313,6 +335,7 @@ Manual actions have a fixed source/status boundary, and future generated actions
 - HTTP API: non-admin forbidden, validate invalid payload does not write, publish writes atom and batch, duplicate publish creates second version, failed-vector filter returns only failed atoms.
 - System status: response includes `interview_bank` and `counts.interview_knowledge_atoms`.
 - Frontend: `npm --prefix frontend run lint` and `npm --prefix frontend run build` after adding API/types/page contracts.
+- Script: local import-package builder must normalize single-atom / array / package JSON inputs into `{ batchId, items, validationReport, reviewReport }`, and when given TXT/MD/PDF/DOCX sources it must route through extract → chunk → model output parsing before admin validate/publish.
 
 ### 7. Wrong vs Correct
 

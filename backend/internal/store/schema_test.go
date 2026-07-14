@@ -173,6 +173,11 @@ func TestInterviewBankOpsActionSchemaIsRuntimeAndDockerAligned(t *testing.T) {
 		"evidence JSONB DEFAULT '{}'",
 		"interview_bank_ops_actions_status_updated_idx",
 		"interview_bank_ops_actions_combo_idx",
+		"CREATE TABLE IF NOT EXISTS interview_bank_ops_action_history",
+		"entry_index INT NOT NULL",
+		"from_status VARCHAR(32) NOT NULL CHECK",
+		"to_status VARCHAR(32) NOT NULL CHECK",
+		"interview_bank_ops_action_history_action_created_idx",
 	} {
 		if !strings.Contains(SchemaSQL, required) {
 			t.Fatalf("runtime schema must include ops action fragment %q", required)

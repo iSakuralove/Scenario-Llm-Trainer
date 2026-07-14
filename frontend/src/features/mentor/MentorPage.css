@@ -1,0 +1,136 @@
+.mentor-page {
+  display: grid;
+  gap: 24px;
+}
+
+.mentor-hero-grid,
+.mentor-diagnosis-grid,
+.mentor-action-grid {
+  display: grid;
+  gap: 24px;
+}
+
+.mentor-hero-card,
+.mentor-panel,
+.mentor-error-panel {
+  min-width: 0;
+}
+
+.mentor-hero-card {
+  display: grid;
+  gap: 10px;
+}
+
+.mentor-hero-card span {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.mentor-hero-card strong {
+  font-size: 20px;
+  line-height: 1.5;
+}
+
+.mentor-hero-card small {
+  color: #64748b;
+}
+
+.mentor-metrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.mentor-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.mentor-list-block {
+  display: grid;
+  gap: 10px;
+}
+
+.mentor-list-block > span {
+  color: #0f766e;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.mentor-list-block ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+  color: #1f2937;
+}
+
+.mentor-risk-list,
+.mentor-action-list {
+  display: grid;
+  gap: 12px;
+}
+
+.mentor-risk-item,
+.mentor-action-item,
+.mentor-error-panel {
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.82);
+}
+
+.mentor-risk-item.warning {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: rgba(255, 251, 235, 0.9);
+}
+
+.mentor-risk-item.danger {
+  border-color: rgba(244, 63, 94, 0.28);
+  background: rgba(255, 241, 242, 0.92);
+}
+
+.mentor-risk-item.info {
+  border-color: rgba(45, 212, 191, 0.28);
+  background: rgba(240, 253, 250, 0.92);
+}
+
+.mentor-risk-item strong,
+.mentor-action-item strong,
+.mentor-error-panel strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.mentor-risk-item p,
+.mentor-action-item p,
+.mentor-error-panel p {
+  margin: 0;
+  color: #475569;
+  line-height: 1.6;
+}
+
+.mentor-action-item {
+  display: grid;
+  gap: 12px;
+}
+
+.mentor-footer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+@media (min-width: 1024px) {
+  .mentor-hero-grid,
+  .mentor-diagnosis-grid,
+  .mentor-action-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .mentor-metrics {
+    grid-template-columns: 1fr;
+  }
+}

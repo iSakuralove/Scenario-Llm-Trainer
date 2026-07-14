@@ -2,6 +2,7 @@ import { Suspense, lazy, useEffect } from 'react'
 import { Link, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 import {
   BookOpenCheck,
+  Bot,
   BrainCircuit,
   Database,
   Gauge,
@@ -28,6 +29,7 @@ const InterviewsPage = lazy(() => import('../features/interviews/InterviewsPage'
 const InterviewSessionRoute = lazy(() => import('../features/interviews/InterviewSessionRoute').then((module) => ({ default: module.InterviewSessionRoute })))
 const InterviewReportPage = lazy(() => import('../features/interviews/InterviewReportPage').then((module) => ({ default: module.InterviewReportPage })))
 const CommunityPage = lazy(() => import('../features/community/CommunityPage').then((module) => ({ default: module.CommunityPage })))
+const MentorPage = lazy(() => import('../features/mentor/MentorPage').then((module) => ({ default: module.MentorPage })))
 const ProfilePage = lazy(() => import('../features/profile/ProfilePage').then((module) => ({ default: module.ProfilePage })))
 const SystemPage = lazy(() => import('../features/system/SystemPage').then((module) => ({ default: module.SystemPage })))
 const InterviewBankAdminPage = lazy(() => import('../features/interviewBank/InterviewBankAdminPage').then((module) => ({ default: module.InterviewBankAdminPage })))
@@ -86,6 +88,7 @@ export function AppShell() {
           <NavLink to="/dashboard"><Gauge size={18} />仪表盘</NavLink>
           <NavLink to="/scenarios"><BrainCircuit size={18} />排查工坊</NavLink>
           <NavLink to="/interviews"><MessageSquareText size={18} />面试舱</NavLink>
+          <NavLink to="/mentor"><Bot size={18} />AI Mentor</NavLink>
           <NavLink to="/community"><BookOpenCheck size={18} />案例工坊</NavLink>
           <NavLink to="/profile"><UserRound size={18} />个人档案</NavLink>
           {user?.role === 'admin' && <NavLink to="/interview-bank"><Database size={18} />面试题库</NavLink>}
@@ -115,6 +118,7 @@ export function AppShell() {
             <Route path="/scenarios/session/:id" element={<ScenarioSessionPage />} />
             <Route path="/scenarios/session/:id/review" element={<ScenarioReviewPage />} />
             <Route path="/interviews" element={<InterviewsPage />} />
+            <Route path="/mentor" element={<MentorPage />} />
             <Route path="/interviews/session/:id" element={<InterviewSessionRoute />} />
             <Route path="/interviews/session/:id/report" element={<InterviewReportPage />} />
             <Route path="/community" element={<CommunityPage />} />
