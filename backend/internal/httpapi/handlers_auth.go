@@ -1,10 +1,14 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
+	"net/smtp"
+	"net/url"
 	"situational-teaching/backend/internal/auth"
 	"situational-teaching/backend/internal/domain"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -84,20 +88,44 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request, path string)
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		if !s.allowAnonPasswordReset {
-			writeError(w, http.StatusNotFound, "not found")
-			return
-		}
 		var req struct {
 			Identifier  string `json:"identifier"`
 			NewPassword string `json:"new_password"`
+			Token       string `json:"token"`
 		}
 		if !decode(w, r, &req) {
 			return
 		}
-		user, ok := s.store.FindUserByIdentifier(req.Identifier)
-		if !ok {
-			writeError(w, http.StatusNotFound, "账号不存在")
+		if strings.TrimSpace(req.Token) == "" && s.allowAnonPasswordReset {
+			user, ok := s.store.FindUserByIdentifier(req.Identifier)
+			if !ok {
+				writeError(w, http.StatusNotFound, "账号不存在")
+				return
+			}
+			updated, resetErr := s.resetUserPassword(r, user, req.NewPassword)
+			if resetErr != nil {
+				writeError(w, http.StatusBadRequest, resetErr.Error())
+				return
+			}
+			writeOK(w, map[string]interface{}{"user": updated})
+			return
+		}
+		if strings.TrimSpace(req.Token) == "" && strings.TrimSpace(req.Identifier) != "" {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+		if strings.TrimSpace(req.Token) == "" {
+			writeError(w, http.StatusBadRequest, "重置令牌不能为空")
+			return
+		}
+		claims, err := s.auth.Validate(req.Token)
+		if err != nil || claims.Type != "password_reset" {
+			writeError(w, http.StatusBadRequest, "重置链接无效或已过期")
+			return
+		}
+		user, ok := s.store.GetUser(claims.Subject)
+		if !ok || user.TokenVersion != claims.TokenVersion {
+			writeError(w, http.StatusBadRequest, "重置链接无效或已使用")
 			return
 		}
 		updated, err := s.resetUserPassword(r, user, req.NewPassword)
@@ -106,6 +134,37 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request, path string)
 			return
 		}
 		writeOK(w, map[string]interface{}{"user": updated})
+	case "password-reset/request":
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var req struct {
+			Email string `json:"email"`
+		}
+		if !decode(w, r, &req) {
+			return
+		}
+		if s.smtpHost == "" || s.smtpFrom == "" || s.appPublicURL == "" {
+			writeError(w, http.StatusServiceUnavailable, "邮件服务未配置")
+			return
+		}
+		user, ok := s.store.FindUserByIdentifier(req.Email)
+		if !ok || !strings.Contains(user.Email, "@") {
+			writeOK(w, map[string]bool{"accepted": true})
+			return
+		}
+		resetToken, err := s.auth.SignWithVersion(user.ID, user.Role, "password_reset", 10*time.Minute, user.TokenVersion)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "生成重置链接失败")
+			return
+		}
+		link := s.appPublicURL + "/reset-password?token=" + url.QueryEscape(resetToken)
+		if err := s.sendPasswordResetMail(user.Email, link); err != nil {
+			writeError(w, http.StatusServiceUnavailable, "重置邮件发送失败")
+			return
+		}
+		writeOK(w, map[string]bool{"accepted": true})
 	case "refresh":
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -153,6 +212,16 @@ func (s *Server) resetUserPassword(r *http.Request, user *domain.User, newPasswo
 	}
 	s.audit(r, updated, "auth.password_reset", "user", updated.ID, nil)
 	return updated, nil
+}
+
+func (s *Server) sendPasswordResetMail(recipient, link string) error {
+	port, err := strconv.Atoi(s.smtpPort)
+	if err != nil || port <= 0 {
+		return errors.New("invalid SMTP port")
+	}
+	auth := smtp.PlainAuth("", s.smtpUsername, s.smtpPassword, s.smtpHost)
+	body := "From: " + s.smtpFrom + "\r\n" + "To: " + recipient + "\r\n" + "Subject: Password reset\r\n\r\n" + "请在 10 分钟内打开以下链接重置密码：\r\n" + link + "\r\n"
+	return smtp.SendMail(s.smtpHost+":"+strconv.Itoa(port), auth, s.smtpFrom, []string{recipient}, []byte(body))
 }
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, user *domain.User, suffix string) {
 	switch suffix {
@@ -262,22 +331,22 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, user *domain.U
 			return
 		}
 		writeOK(w, s.learningPlan(user))
-		case "/review-calendar":
-			if r.Method != http.MethodGet {
-				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			writeOK(w, reviewCalendarFromPlan(user, s.learningPlan(user), time.Now()))
-		case "/mentor":
-			if r.Method != http.MethodGet {
-				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			writeOK(w, s.mentorSnapshot(user))
-		case "/checkin":
-			if r.Method != http.MethodPost {
-				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
+	case "/review-calendar":
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		writeOK(w, reviewCalendarFromPlan(user, s.learningPlan(user), time.Now()))
+	case "/mentor":
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		writeOK(w, s.mentorSnapshot(user))
+	case "/checkin":
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
 		}
 		result, updated, err := s.checkin(user, time.Now())
 		if err != nil {

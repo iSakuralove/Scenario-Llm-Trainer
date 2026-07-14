@@ -22,6 +22,7 @@ export function ProfilePage() {
   const [domainTextDraft, setDomainTextDraft] = useState(savedPreferredDomains.join(','))
   const [resumeSummaryDraft, setResumeSummaryDraft] = useState(savedResumeSummary)
   const [projectSummaryDraft, setProjectSummaryDraft] = useState(savedProjectSummary)
+  const [newPassword, setNewPassword] = useState('')
   const [isImportingResume, setImportingResume] = useState(false)
   const [communityPosts, setCommunityPosts] = useState<CommunityPost[]>([])
   const [message, setMessage] = useState('')
@@ -77,6 +78,17 @@ export function ProfilePage() {
     }
   }
 
+  async function changePassword() {
+    try {
+      const result = await api.updatePassword(token, newPassword)
+      setSession(result.user, result.access_token, result.refresh_token)
+      setNewPassword('')
+      setMessage('密码已更新，请妥善保管新密码')
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : '密码更新失败')
+    }
+  }
+
   const preferredDomains = savedPreferredDomains
   const stats = user?.profile.total_stats ?? {
     scenarios_solved: 0,
@@ -95,11 +107,6 @@ export function ProfilePage() {
     <section className="page-stack profile-page">
       <HeaderBlock icon={<Settings size={22} />} title="个人档案" description="维护目标职级与偏好专业域，驱动题目推荐和能力画像。" />
       <section className="profile-hero panel">
-        <div className="profile-hero-copy">
-          <div className="profile-hero-kicker">Profile Workspace</div>
-          <h2>让训练方向、目标职级和案例沉淀保持在同一张工作台上。</h2>
-          <p>把目标职级、专业偏好和案例沉淀放在同一张档案页里，让训练路径保持清晰、稳定、可延续。</p>
-        </div>
         <div className="profile-domain-ribbon">
           <div className="profile-domain-ribbon-head">
             <Radar size={18} />
@@ -121,7 +128,7 @@ export function ProfilePage() {
           </div>
         ))}
       </div>
-      <div className="two-column profile-main-grid">
+      <div className="profile-main-grid">
         <section className="panel profile-settings-panel">
           <div className="panel-title"><Sparkles size={18} /> 训练偏好设置</div>
           <div className="profile-settings-form">
@@ -173,30 +180,38 @@ export function ProfilePage() {
             </div>
           </div>
         </section>
-        <section className="panel profile-summary-panel">
-          <div className="panel-title"><Radar size={18} /> 当前训练画像</div>
-          <div className="profile-summary-list">
-            <div className="profile-summary-row">
-              <strong>排查训练</strong>
-              <span>{stats.scenarios_solved} 次</span>
+        <div className="profile-side-column">
+          <section className="panel profile-summary-panel">
+            <div className="panel-title"><Settings size={18} /> 密码安全</div>
+            <label>新密码<input type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="至少 6 位" /></label>
+            <button className="primary-button compact" type="button" disabled={!newPassword.trim()} onClick={() => void changePassword()}>更新密码</button>
+            <small>忘记密码时可退出登录，在登录页通过邮箱发送重置链接。</small>
+          </section>
+          <section className="panel profile-summary-panel">
+            <div className="panel-title"><Radar size={18} /> 当前训练画像</div>
+            <div className="profile-summary-list">
+              <div className="profile-summary-row">
+                <strong>排查训练</strong>
+                <span>{stats.scenarios_solved} 次</span>
+              </div>
+              <div className="profile-summary-row">
+                <strong>面试训练</strong>
+                <span>{stats.interviews_taken} 次</span>
+              </div>
+              <div className="profile-summary-row">
+                <strong>连续打卡</strong>
+                <span>{stats.streak_days} 天</span>
+              </div>
+              <div className="profile-summary-row">
+                <strong>推荐节奏</strong>
+                <span>{preferredDomains.length > 0 ? `优先围绕 ${preferredDomains.map(domainLabel).join('、')}` : '请先补充专业域偏好'}</span>
+              </div>
             </div>
-            <div className="profile-summary-row">
-              <strong>面试训练</strong>
-              <span>{stats.interviews_taken} 次</span>
-            </div>
-            <div className="profile-summary-row">
-              <strong>连续打卡</strong>
-              <span>{stats.streak_days} 天</span>
-            </div>
-            <div className="profile-summary-row">
-              <strong>推荐节奏</strong>
-              <span>{preferredDomains.length > 0 ? `优先围绕 ${preferredDomains.map(domainLabel).join('、')}` : '请先补充专业域偏好'}</span>
-            </div>
-          </div>
-        </section>
+          </section>
+          <CommunityPostHistoryPanel posts={communityPosts} error={historyError} />
+          {user?.role === 'admin' && <AdminUserPanel token={token} />}
+        </div>
       </div>
-      <CommunityPostHistoryPanel posts={communityPosts} error={historyError} />
-      {user?.role === 'admin' && <AdminUserPanel token={token} />}
     </section>
   )
 }

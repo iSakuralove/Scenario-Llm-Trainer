@@ -12,7 +12,8 @@ export function AuthPage() {
   const location = useLocation()
   const navigate = useNavigate()
   const setSession = useAuthStore((state) => state.setSession)
-  const [mode, setMode] = useState<'login' | 'register'>('login')
+  const resetToken = new URLSearchParams(location.search).get('token') || ''
+  const [mode, setMode] = useState<'login' | 'register' | 'forgot' | 'reset'>(resetToken ? 'reset' : 'login')
   const [username, setUsername] = useState('demo')
   const [email, setEmail] = useState('demo@example.com')
   const [password, setPassword] = useState('demo123')
@@ -30,10 +31,18 @@ export function AuthPage() {
     setError('')
     setSubmitting(true)
     try {
-      const session =
-        mode === 'login'
-          ? await api.login(username, password)
-          : await api.register(username, email, password)
+      if (mode === 'forgot') {
+        await api.requestPasswordReset(email || username)
+        setError('如果该邮箱已注册，重置邮件会发送到你的邮箱。')
+        return
+      }
+      if (mode === 'reset') {
+        await api.confirmPasswordReset(resetToken, password)
+        setMode('login')
+        setError('密码已重置，请使用新密码登录。')
+        return
+      }
+      const session = mode === 'login' ? await api.login(username, password) : await api.register(username, email, password)
       setSession(session.user, session.access_token, session.refresh_token)
       const defaultRoute = getDefaultRouteForRole(session.user.role)
       const targetPath = isRouteAllowedForRole(location.pathname, session.user.role)
@@ -142,18 +151,18 @@ export function AuthPage() {
         </div>
         <div className="auth-panel-head">
           <div className="auth-panel-kicker">LIVE DEMO ACCESS</div>
-          <h2>{mode === 'login' ? '登录演示账号' : '创建学员账号'}</h2>
+          <h2>{mode === 'login' ? '登录演示账号' : mode === 'register' ? '创建学员账号' : mode === 'forgot' ? '找回密码' : '设置新密码'}</h2>
           <p>
             {mode === 'login'
               ? '选择演示账号后进入系统，体验排障训练、技术面试与案例沉淀的完整流程。'
-              : '创建新账号后进入系统，继续体验排障训练、技术面试与案例沉淀的完整流程。'}
+              : mode === 'register' ? '创建新账号后进入系统，继续体验排障训练、技术面试与案例沉淀的完整流程。' : mode === 'forgot' ? '输入注册邮箱，我们会发送一次性密码重置链接。' : '请输入至少 6 位的新密码。'}
           </p>
         </div>
 
         <div className="auth-form-fields">
           <label>
-            用户名或邮箱
-            <input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} />
+            {mode === 'forgot' ? '注册邮箱' : mode === 'reset' ? '重置邮箱' : '用户名或邮箱'}
+            <input autoComplete="username" value={mode === 'forgot' ? email : username} disabled={mode === 'reset'} onChange={(event) => mode === 'forgot' ? setEmail(event.target.value) : setUsername(event.target.value)} />
           </label>
           {mode === 'register' && (
             <label>
@@ -161,7 +170,7 @@ export function AuthPage() {
               <input autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} />
             </label>
           )}
-          <label>
+          {mode !== 'forgot' && <label>
             密码
             <input
               autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
@@ -169,18 +178,17 @@ export function AuthPage() {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
             />
-          </label>
+          </label>}
         </div>
 
         {error && <div className="form-error">{error}</div>}
 
         <button className="primary-button" type="submit" disabled={isSubmitting}>
           <Play size={18} />
-          {isSubmitting ? '处理中' : mode === 'login' ? '进入系统' : '注册并进入'}
+          {isSubmitting ? '处理中' : mode === 'login' ? '进入系统' : mode === 'register' ? '注册并进入' : mode === 'forgot' ? '发送重置邮件' : '确认新密码'}
         </button>
-        <button className="ghost-button" type="button" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
-          {mode === 'login' ? '需要新账号' : '已有账号登录'}
-        </button>
+        {mode === 'login' && <button className="ghost-button" type="button" onClick={() => setMode('forgot')}>忘记密码</button>}
+        {mode !== 'reset' && <button className="ghost-button" type="button" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>{mode === 'login' ? '需要新账号' : '已有账号登录'}</button>}
         <div className="auth-panel-demo">
           <strong>演示账号</strong>
           <span>demo / demo123</span>

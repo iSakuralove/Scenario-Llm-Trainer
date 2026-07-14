@@ -26,6 +26,12 @@ type Server struct {
 	auth                   *auth.Manager
 	limiter                ratelimit.Limiter
 	allowAnonPasswordReset bool
+	smtpHost               string
+	smtpPort               string
+	smtpUsername           string
+	smtpPassword           string
+	smtpFrom               string
+	appPublicURL           string
 	llmMu                  sync.RWMutex
 	llm                    *ai.Router
 	stt                    STTProvider
@@ -33,6 +39,13 @@ type Server struct {
 	assets                 AssetStorage
 	jobMu                  sync.Mutex
 	jobStop                map[string]context.CancelFunc
+}
+
+func envOrDefault(key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
 }
 
 type agentAuditPayload struct {
@@ -68,6 +81,12 @@ func NewServer(dataStore store.Store, authManager *auth.Manager, limiter ratelim
 		auth:                   authManager,
 		limiter:                limiter,
 		allowAnonPasswordReset: anonymousPasswordResetEnabled(dataStore),
+		smtpHost:               strings.TrimSpace(os.Getenv("SMTP_HOST")),
+		smtpPort:               envOrDefault("SMTP_PORT", "587"),
+		smtpUsername:           strings.TrimSpace(os.Getenv("SMTP_USERNAME")),
+		smtpPassword:           os.Getenv("SMTP_PASSWORD"),
+		smtpFrom:               strings.TrimSpace(os.Getenv("SMTP_FROM")),
+		appPublicURL:           strings.TrimRight(strings.TrimSpace(os.Getenv("APP_PUBLIC_URL")), "/"),
 		llm:                    llmRouter,
 		assets:                 assetStorage,
 		stt:                    NewSTTProviderFromEnv(assetStorage),
