@@ -507,7 +507,8 @@ test('student can upload voice answer and use transcript draft', async ({ page }
 
   await loginAs(page, 'student')
   await page.goto('/interviews')
-  await page.getByRole('button', { name: '开始面试' }).click()
+  await page.getByTestId('interview-track-grid').getByRole('radio').first().click()
+  await page.getByRole('button', { name: '开始这场面试' }).click()
 
   const file = Buffer.from('voice')
   await page.getByTestId('voice-file-input').setInputFiles({ name: 'answer.webm', mimeType: 'audio/webm', buffer: file })
@@ -963,8 +964,9 @@ test('student can reach an interview report without real LLM feedback', async ({
   await page.goto('/interviews')
 
   await expectNoWhiteScreen(page)
-  await expect(page.getByRole('heading', { name: '技术面试舱' })).toBeVisible()
-  await page.getByRole('button', { name: '开始面试' }).click()
+  await expect(page.getByRole('heading', { name: '选择一道题，开始真实追问' })).toBeVisible()
+  await page.getByTestId('interview-track-grid').getByRole('radio').first().click()
+  await page.getByRole('button', { name: '开始这场面试' }).click()
   await expect(page.locator('.answer-panel')).toContainText('回答')
   await page.getByPlaceholder(/用结构化方式回答/).fill('首先定位慢查询日志，然后对比执行计划和索引命中，最后灰度回滚并验证核心指标。')
   await page.getByRole('button', { name: /提交回答/ }).click()

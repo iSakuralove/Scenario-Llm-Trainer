@@ -93,20 +93,23 @@ CLAUDE.md
 CONTEXT.md
 /DESIGN.md
 MEMORY.md
-
+.gitignore
 # Local review and analysis output
 review/
 代码审查报告.md
 docs/adr/
 docs/memos-agent-prompt.md
 features/2026-06-11-agents-generated-doc.md
-
+*.md
 # Excluded from the GitHub source branch by policy
 交付/
 img/
 流程/
 docs/report-figures/generated/
-
+.trellis\
+.serena\
+docs\
+features\
 # Binary media and archives are not committed to this source branch
 *.zip
 *.7z

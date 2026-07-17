@@ -212,6 +212,35 @@ func TestInterviewSubmitEndsAfterRepeatedIrrelevantAnswers(t *testing.T) {
 	}
 }
 
+func TestEvaluateIrrelevantInterviewAnswerAcceptsTechnicalChineseAnswer(t *testing.T) {
+	question := &domain.InterviewQuestion{
+		Title:             "load average 高但 CPU 不高怎么排查",
+		Description:       "Linux 主机 load average 很高，但 CPU 使用率并不高。请说明可能原因、验证命令和处理策略。",
+		ReferenceAnswer:   "应解释 load 与可运行/不可中断进程关系，使用 vmstat、iostat、ps 定位 IO wait 与 D 状态进程。",
+		ReferenceKeywords: []string{"load", "D 状态", "IO wait", "vmstat", "iostat", "ps"},
+	}
+	// 第二轮追问常见：围绕验证步骤展开，不一定复述开场英文关键词。
+	answer := "我会先确认 load average 是否持续偏高，然后用 vmstat 看 r 与 b 队列，再用 iostat 看磁盘利用率。若发现大量 D 状态进程，就定位对应文件系统或 NFS，并准备限流与扩容回滚。"
+	decision := evaluateIrrelevantInterviewAnswer(question, answer, 0)
+	if decision.Irrelevant {
+		t.Fatalf("technical chinese answer should not be treated as irrelevant: %+v", decision)
+	}
+}
+
+func TestEvaluateIrrelevantInterviewAnswerStillRejectsChitchat(t *testing.T) {
+	question := &domain.InterviewQuestion{
+		Title:             "如何定位 MySQL 慢查询",
+		Description:       "线上接口突然变慢，你怀疑是 MySQL 查询问题。请说明你的定位路径、关键命令、可能修复方案和回滚考虑。",
+		ReferenceAnswer:   "应从链路耗时、慢查询日志、EXPLAIN、索引覆盖、执行计划变化、灰度建索引与回滚方案等方面回答。",
+		ReferenceKeywords: []string{"慢查询", "EXPLAIN", "索引", "执行计划", "回滚", "灰度"},
+	}
+	answer := strings.Repeat("我今天只想聊电影音乐旅行计划和周末逛街安排，这些内容和当前技术面试题没有关系。", 4)
+	decision := evaluateIrrelevantInterviewAnswer(question, answer, 0)
+	if !decision.Irrelevant {
+		t.Fatalf("chitchat answer should still be treated as irrelevant: %+v", decision)
+	}
+}
+
 func mustInterviewTraceText(trace *domain.AgentTrace) string {
 	if trace == nil {
 		return ""

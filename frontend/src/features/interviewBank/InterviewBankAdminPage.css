@@ -142,6 +142,41 @@
   gap: 12px;
 }
 
+.interview-bank-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(15, 23, 34, 0.96), rgba(16, 25, 38, 0.96));
+}
+
+.interview-bank-tabs button {
+  flex: 1 1 auto;
+  min-width: 120px;
+  padding: 10px 18px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: transparent;
+  color: rgba(220, 228, 238, 0.7);
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease;
+}
+
+.interview-bank-tabs button:hover {
+  color: #f5f8fc;
+  background: rgba(92, 225, 198, 0.08);
+}
+
+.interview-bank-tabs button.is-active {
+  color: #05221c;
+  background: #8ef0db;
+  border-color: rgba(142, 240, 219, 0.6);
+}
+
 .interview-bank-filter-grid,
 .interview-bank-actions,
 .interview-bank-main-grid,

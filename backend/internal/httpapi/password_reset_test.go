@@ -311,3 +311,69 @@ func (l *countingLimiter) Allow(_ context.Context, key string, limit int, _ time
 func (l *countingLimiter) Enabled() bool {
 	return true
 }
+
+// TestPasswordResetVerifyEndpoint 覆盖邮件 token 链路的三态：有效、10 分钟后过期、
+// 以及一次性失效（改密后 TokenVersion 递增导致旧链接失效）。此前该链路无测试覆盖。
+func TestPasswordResetVerifyEndpoint(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	authManager := auth.NewManager("test-secret", time.Hour)
+	server := NewServerForTests(dataStore, authManager)
+	handler := server.Handler()
+
+	user, ok := dataStore.FindUserByIdentifier("demo")
+	if !ok {
+		t.Fatal("demo user should exist")
+	}
+
+	// 有效 token → 校验通过。
+	validToken, err := authManager.SignWithVersion(user.ID, user.Role, "password_reset", 10*time.Minute, user.TokenVersion)
+	if err != nil {
+		t.Fatalf("sign valid reset token: %v", err)
+	}
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/auth/password-reset/verify", "", map[string]string{
+		"token": validToken,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("valid token verify status=%d message=%s", status, env.Message)
+	}
+
+	// 过期 token → 校验失败。
+	expiredToken, err := authManager.SignWithVersion(user.ID, user.Role, "password_reset", -time.Minute, user.TokenVersion)
+	if err != nil {
+		t.Fatalf("sign expired reset token: %v", err)
+	}
+	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/auth/password-reset/verify", "", map[string]string{
+		"token": expiredToken,
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("expired token verify status=%d message=%s", status, env.Message)
+	}
+
+	// 空 token → 校验失败。
+	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/auth/password-reset/verify", "", map[string]string{
+		"token": "",
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("empty token verify status=%d message=%s", status, env.Message)
+	}
+
+	// 用一个有效 token 完成改密后，TokenVersion 递增，旧的（同版本）token 失效。
+	onetimeToken, err := authManager.SignWithVersion(user.ID, user.Role, "password_reset", 10*time.Minute, user.TokenVersion)
+	if err != nil {
+		t.Fatalf("sign one-time reset token: %v", err)
+	}
+	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/auth/password-reset", "", map[string]string{
+		"token":        onetimeToken,
+		"new_password": "demo456",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("password reset status=%d message=%s", status, env.Message)
+	}
+	// 改密后再次校验同一 token → 已使用，失败。
+	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/auth/password-reset/verify", "", map[string]string{
+		"token": onetimeToken,
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("reused token verify status=%d message=%s", status, env.Message)
+	}
+}

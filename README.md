@@ -26,6 +26,181 @@ docker-compose.yml  API、PostgreSQL、Redis 本地编排
 
 管理员查看情景题时可看到完整根因和标准步骤；学员接口会自动脱敏。UGC 转化为正式情景题时，题目创建人记录为终审管理员，避免原作者以 owner 身份看到完整答案。
 
+
+## 快速开始
+
+仓库地址：https://github.com/iSakuralove/Scenario-Llm-Trainer
+
+本节说明如何从零把本项目跑起来，以及部署时需要注意的事项。没有真实模型 Key 也能启动；配置 DeepSeek / Embedding 后可验证完整 AI 能力。
+
+### 环境要求
+
+- Git
+- Node.js 20+
+- Go 1.22+（本机直接运行后端时需要）
+- Docker Desktop（推荐，用于 PostgreSQL / Redis / API 的持久化演示）
+- 可选：DeepSeek、Embedding、SMTP 凭据
+
+### 克隆项目
+
+```powershell
+git clone git@github.com:iSakuralove/Scenario-Llm-Trainer.git
+cd Scenario-Llm-Trainer
+git checkout main
+git pull
+```
+
+### 配置环境变量
+
+不要把真实 Key 提交进 Git。在仓库根目录创建本地 `.env`（已被忽略）：
+
+```powershell
+# 至少配置 JWT_SECRET；AI 相关变量可按需补充
+@'
+JWT_SECRET=please-change-me-to-a-long-random-string
+DEEPSEEK_KEY=
+EMBEDDING_BASE_URL=https://router.tumuer.me/
+EMBEDDING_API_KEY=
+EMBEDDING_MODEL=text-embedding-3-small
+SMTP_HOST=smtp.qq.com
+SMTP_PORT=587
+SMTP_USERNAME=
+SMTP_PASSWORD=
+SMTP_FROM=
+APP_PUBLIC_URL=http://localhost:5173
+'@ | Out-File -FilePath .env -Encoding utf8
+```
+
+说明：
+
+1. Docker 启动 API 时必须提供 `JWT_SECRET`
+2. 配置 `DEEPSEEK_KEY` 后，面试反馈与题目生成会走真实模型
+3. Embedding 相关变量用于语义检索；缺失时会自动回退本地规则
+4. 修改 `.env` 后需要重建 API 容器才会生效：
+
+```powershell
+docker compose up -d --force-recreate --no-build api
+```
+
+更完整的变量清单见下文「环境变量」。
+
+### 推荐启动：Docker 后端 + 本机前端
+
+适合演示和联调，数据持久化在 PostgreSQL。
+
+```powershell
+# 终端 1
+docker compose up --build api
+
+# 终端 2
+cd frontend
+npm install
+npm run dev
+```
+
+访问：
+
+- 前端：http://localhost:5173
+- API 健康检查：http://localhost:8080/healthz
+- 管理员系统状态：http://localhost:8080/api/v1/system/status
+
+演示账号：
+
+- 学员：`demo` / `demo123`
+- 讲师：`instructor` / `instructor123`
+- 管理员：`admin` / `admin123`
+
+登录请求字段为 `identifier` + `password`。
+
+### 轻量启动：本机全栈
+
+不依赖 Docker，后端默认内存存储；重启后业务数据会清空。
+
+```powershell
+npm run dev:all
+```
+
+### 面试舱使用说明
+
+1. 登录后打开 `/interviews`
+2. 首屏直接展示可选题卡片（兼容题默认覆盖数据库、网络、操作系统、安全、DevOps）
+3. 若正式题库已有少量原子题，会与兼容题合并，不会只显示 1 道正式题
+4. 点击题目后，仅在卡片下方展开一份共享的“本场面试设置”
+5. 选择面试方式与重点追问后开始面试
+6. 会话页按时间线作答；认真的技术回答不会被固定文案“请认真回答面试问题…”误拦截
+7. 配置有效 `DEEPSEEK_KEY` 后，反馈应来自 DeepSeek，而不是 mock 模板
+
+### 部署注意事项
+
+1. **密钥安全**：`.env`、系统环境变量中的 Key 不要提交仓库；`docker compose` 通过环境变量注入。
+2. **API 镜像要更新**：后端改动后需要 `docker compose up --build api`。若 Docker Hub 拉基础镜像失败，可在本机交叉编译 linux 二进制后热替换进容器。
+3. **AI 回退行为**：DeepSeek 调用失败时会降级 mock；可在系统状态页查看 provider 与 recent attempts。
+4. **Embedding 默认地址**：`https://router.tumuer.me/`；未配置 Key 时不影响服务启动。
+5. **SMTP 可选**：密码重置邮件依赖 SMTP 相关变量与 `APP_PUBLIC_URL`。
+6. **中文内容编码**：接口与浏览器路径使用 UTF-8。若历史记录出现 `??`，通常是历史坏数据，删除该会话后重新作答即可。
+7. **前端 API 地址**：默认请求 `http://localhost:8080/api/v1`；如需修改，复制 `frontend/.env.example` 为 `frontend/.env` 并设置 `VITE_API_URL`。
+
+### 本地验证
+
+```powershell
+# 后端定向测试
+cd backend
+go test ./internal/httpapi -count=1 -run "Launchpad|Irrelevant|EvaluateIrrelevant"
+
+# 前端
+cd ..\frontend
+npm run lint
+npm run build
+```
+
+页面验收建议：
+
+1. 使用 `demo/demo123` 登录
+2. 打开面试舱，确认可见多道题
+3. 选题 → 设置 → 开始面试
+4. 连续认真回答两轮，确认正常评分与追问
+5. 使用管理员账号查看系统状态中的 AI provider
+
+---
+
+## 最近更新（2026-07）
+
+### 面试舱题目优先交互
+
+- `/interviews` 调整为“先选题、再开始真实追问”
+- 题目卡片网格展示；初始不默认选题
+- 共享设置面板只出现在卡片区下方
+- 历史面试默认折叠，功能保留
+- smoke / E2E 同步更新
+
+### Launchpad 轨道合并
+
+- `open_tracks` 合并正式原子题与兼容种子题
+- 少量正式题不会覆盖原有兼容题
+- 原子统计只统计正式题
+- 兼容说明不暴露在正常用户界面
+
+### 面试无关作答误判修复
+
+- 修复认真中文技术作答被误判为离题的问题
+- 增加技术结构词与题面短语相关度判断
+- 保留闲聊拦截与多次无效后结束逻辑
+
+### DeepSeek / Embedding
+
+- DeepSeek 通过 `DEEPSEEK_KEY` 注入，容器重建后生效
+- Embedding 默认路由调整为 `https://router.tumuer.me/`
+- 反馈失败时回退 mock，可在系统状态页观察
+
+### 密码重置与其他
+
+- 完善邮箱密码重置与公开重置页
+- SMTP 环境变量注入修正
+- 面试会话时间线与锚点导航
+- Mentor 旧接口兼容回退
+
+---
+
 ## 环境变量
 
 后端支持以下变量：
@@ -42,7 +217,7 @@ LLM_MODEL=
 ZETA_KEY=
 JIANYI_API_KEY=
 DEEPSEEK_KEY=
-EMBEDDING_BASE_URL=https://jeniya.top
+EMBEDDING_BASE_URL=https://router.tumuer.me/
 EMBEDDING_API_KEY=
 jeniya_embedding_key=
 EMBEDDING_MODEL=text-embedding-3-small
@@ -64,7 +239,7 @@ STT_TIMEOUT_SECONDS=60
 - 情景题生成任务 `scenario_generate` 会优先固定使用 `deepseek-v4-flash`；即使管理员把全局 AI 配置改成其他 DeepSeek 模型，生成题仍回到该模型执行，失败后再按 Provider 链路降级。
 - `scenario_generate` 是非流式结构化 JSON 调用；验证时系统状态的 recent attempts 应显示 DeepSeek 成功，页面来源应为 `DeepSeek deepseek-v4-flash`，不应因全局流式开关误显示 `Mock LLM 兜底`。
 - 第三方中转站可使用 `LLM_BASE_URL=https://jeniya.top`、`JIANYI_API_KEY=<your-key>`、`LLM_MODEL=gpt-5.5`。
-- 排查会话语义网关会直接调用 `https://jeniya.top/v1/embeddings`；Key 读取顺序为 `EMBEDDING_API_KEY`、`jeniya_embedding_key`、`JIANYI_API_KEY`，推荐用 `jeniya_embedding_key` 放置 embedding 专用 key。默认模型为 `text-embedding-3-small`；如果需要切换模型，请确认该模型仍在 embeddings 端点可用。未配置 key 或调用失败时，后端保留本地相似度与关键词规则，不影响 Go 后端单独运行。
+- 排查会话语义网关会直接调用 `https://router.tumuer.me/v1/embeddings`；Key 读取顺序为 `EMBEDDING_API_KEY`、`jeniya_embedding_key`、`JIANYI_API_KEY`，推荐用 `jeniya_embedding_key` 放置 embedding 专用 key。默认模型为 `text-embedding-3-small`；如果需要切换模型，请确认该模型仍在 embeddings 端点可用。未配置 key 或调用失败时，后端保留本地相似度与关键词规则，不影响 Go 后端单独运行。
 - 语音转写优先使用 `STT_API_KEY`，其次 `ZETA_KEY`，最后兼容 `JIANYI_API_KEY`；存在 `ZETA_KEY` 时默认 `STT_BASE_URL=https://api.zetatechs.com`，默认 `STT_MODEL=gpt-4o-mini-transcribe-2025-12-15`。
 - Zeta 可选路线包括 `https://api.zetatechs.com`、`https://api.zetatechs.online`、`https://ent.zetatechs.com`、`https://ent.zetatechs.online`，用 `STT_BASE_URL` 切换。
 - 不要把真实模型 Key 写入仓库；用系统环境变量或本机 `.env` 注入。

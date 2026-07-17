@@ -682,6 +682,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email }),
     }),
+  verifyPasswordReset: (token: string) =>
+    request<{ valid: boolean }>('/auth/password-reset/verify', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    }),
   confirmPasswordReset: (token: string, newPassword: string) =>
     request<{ user: User }>('/auth/password-reset', {
       method: 'POST',

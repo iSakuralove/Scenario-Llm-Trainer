@@ -15,6 +15,7 @@ import {
   Save,
   Search,
   Upload,
+  X,
 } from 'lucide-react'
 import { api } from '../../api/client'
 import { Loading, Metric } from '../../components/common'
@@ -133,6 +134,15 @@ const emptyOpsActionFilters: OpsActionFilterForm = {
   source: '',
 }
 
+type InterviewBankTab = 'library' | 'health' | 'retrieval' | 'ops'
+
+const bankTabs: Array<{ value: InterviewBankTab; label: string }> = [
+  { value: 'library', label: '题库管理' },
+  { value: 'health', label: '健康诊断' },
+  { value: 'retrieval', label: '检索运营' },
+  { value: 'ops', label: '运营动作' },
+]
+
 export function InterviewBankAdminPage() {
   const token = useToken()
   const [summary, setSummary] = useState<InterviewKnowledgeSummary | null>(null)
@@ -184,54 +194,108 @@ export function InterviewBankAdminPage() {
   const [isSavingOpsCandidates, setIsSavingOpsCandidates] = useState(false)
   const [isOpsActionDetailLoading, setIsOpsActionDetailLoading] = useState(false)
   const [isUpdatingOpsActionStatus, setIsUpdatingOpsActionStatus] = useState(false)
+  const [activeTab, setActiveTab] = useState<InterviewBankTab>('library')
+  const [debouncedFilters, setDebouncedFilters] = useState<InterviewKnowledgeAtomFilters>(emptyFilters)
 
-  const loadData = useCallback(async () => {
+  // 领域是自由文本输入，逐字触发筛选加载会连带重拉后端数据；这里做 300ms 防抖。
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedFilters(filters), 300)
+    return () => window.clearTimeout(timer)
+  }, [filters])
+
+  // Hero 指标在所有标签页都展示，独立加载。
+  const loadSummary = useCallback(async () => {
+    const nextSummary = await api.adminInterviewBankSummary(token)
+    setSummary(nextSummary)
+  }, [token])
+
+  // 题库管理标签页：原子列表（随筛选变化）+ 最近批次。
+  const loadLibrary = useCallback(async () => {
+    const [atomData, batchData] = await Promise.all([
+      api.adminInterviewBankAtoms(token, debouncedFilters),
+      api.adminInterviewBankBatches(token, 20),
+    ])
+    setAtoms(atomData.list ?? [])
+    setTotalAtoms(atomData.total ?? 0)
+    setBatches(batchData.list ?? [])
+    setSelectedAtomIds((current) => {
+      const visibleIDs = new Set((atomData.list ?? []).map((atom) => atom.id))
+      return new Set([...current].filter((id) => visibleIDs.has(id)))
+    })
+  }, [debouncedFilters, token])
+
+  // 健康诊断标签页。
+  const loadHealth = useCallback(async () => {
+    const nextHealth = await api.adminInterviewBankHealth(token)
+    setHealth(nextHealth)
+  }, [token])
+
+  // 检索运营标签页：命中率/回退分析 + 脱敏日志。仅在该标签激活时加载重接口。
+  const loadRetrieval = useCallback(async () => {
+    const [nextRetrievalAnalytics, nextRetrievalLogs] = await Promise.all([
+      api.adminInterviewBankRetrievalAnalytics(token, { limit: 500 }),
+      api.adminInterviewBankRetrievalLogs(token, { limit: 20 }),
+    ])
+    setRetrievalAnalytics(nextRetrievalAnalytics)
+    setRetrievalLogs(nextRetrievalLogs.list ?? [])
+  }, [token])
+
+  // 运营动作标签页：复用题库筛选的领域/分类/难度 + 动作自身过滤。
+  const loadOps = useCallback(async () => {
+    const nextOpsActions = await api.adminInterviewBankOpsActions(token, {
+      status: opsActionFilters.status || undefined,
+      action_type: opsActionFilters.action_type || undefined,
+      priority: opsActionFilters.priority || undefined,
+      source: opsActionFilters.source || undefined,
+      domain: debouncedFilters.domain?.trim() || undefined,
+      category: debouncedFilters.category?.trim() || undefined,
+      difficulty: debouncedFilters.difficulty?.trim() || undefined,
+      limit: 50,
+    })
+    setOpsActions(nextOpsActions.list ?? [])
+  }, [debouncedFilters, opsActionFilters, token])
+
+  const runLoad = useCallback(async (loader: () => Promise<void>) => {
     setIsLoading(true)
     setError('')
     try {
-      const [nextSummary, nextHealth, atomData, batchData, nextRetrievalAnalytics, nextRetrievalLogs, nextOpsActions] = await Promise.all([
-        api.adminInterviewBankSummary(token),
-        api.adminInterviewBankHealth(token),
-        api.adminInterviewBankAtoms(token, filters),
-        api.adminInterviewBankBatches(token, 20),
-        api.adminInterviewBankRetrievalAnalytics(token, { limit: 500 }),
-        api.adminInterviewBankRetrievalLogs(token, { limit: 20 }),
-        api.adminInterviewBankOpsActions(token, {
-          status: opsActionFilters.status || undefined,
-          action_type: opsActionFilters.action_type || undefined,
-          priority: opsActionFilters.priority || undefined,
-          source: opsActionFilters.source || undefined,
-          domain: filters.domain?.trim() || undefined,
-          category: filters.category?.trim() || undefined,
-          difficulty: filters.difficulty?.trim() || undefined,
-          limit: 50,
-        }),
-      ])
-      setSummary(nextSummary)
-      setHealth(nextHealth)
-      setAtoms(atomData.list ?? [])
-      setTotalAtoms(atomData.total ?? 0)
-      setBatches(batchData.list ?? [])
-      setRetrievalAnalytics(nextRetrievalAnalytics)
-      setRetrievalLogs(nextRetrievalLogs.list ?? [])
-      setOpsActions(nextOpsActions.list ?? [])
-      setSelectedAtomIds((current) => {
-        const visibleIDs = new Set((atomData.list ?? []).map((atom) => atom.id))
-        return new Set([...current].filter((id) => visibleIDs.has(id)))
-      })
+      await loader()
     } catch (err) {
       setError(err instanceof Error ? err.message : '题库治理数据读取失败')
     } finally {
       setIsLoading(false)
     }
-  }, [filters, opsActionFilters, token])
+  }, [])
 
+  // Hero 指标全标签页共享，始终加载。setTimeout 规避 effect 内同步 setState 规则。
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadData()
-    }, 0)
+    const timer = window.setTimeout(() => void runLoad(loadSummary), 0)
     return () => window.clearTimeout(timer)
-  }, [loadData])
+  }, [runLoad, loadSummary])
+
+  // 仅加载当前激活标签页对应的数据，切换 tab 或其数据依赖变化时重新拉取。
+  useEffect(() => {
+    const loader =
+      activeTab === 'library' ? loadLibrary
+      : activeTab === 'health' ? loadHealth
+      : activeTab === 'retrieval' ? loadRetrieval
+      : loadOps
+    const timer = window.setTimeout(() => void runLoad(loader), 0)
+    return () => window.clearTimeout(timer)
+  }, [activeTab, runLoad, loadLibrary, loadHealth, loadRetrieval, loadOps])
+
+  // 变更后统一刷新：始终刷新 Hero 指标，并只刷新当前标签页相关数据。
+  const loadData = useCallback(async () => {
+    await runLoad(async () => {
+      await Promise.all([
+        loadSummary(),
+        activeTab === 'library' ? loadLibrary() : Promise.resolve(),
+        activeTab === 'health' ? loadHealth() : Promise.resolve(),
+        activeTab === 'retrieval' ? loadRetrieval() : Promise.resolve(),
+        activeTab === 'ops' ? loadOps() : Promise.resolve(),
+      ])
+    })
+  }, [runLoad, activeTab, loadSummary, loadLibrary, loadHealth, loadRetrieval, loadOps])
 
   const reportSummary = report?.summary
   const canPublish = Boolean(report && (reportSummary?.valid_count ?? 0) > 0 && (reportSummary?.error_count ?? 0) === 0 && !isPublishing)
@@ -269,6 +333,8 @@ export function InterviewBankAdminPage() {
       category: combo.category,
       difficulty: combo.difficulty,
     }))
+    setActiveTab('library')
+    setMessage('已套用健康组合到题库筛选')
   }
 
   function applyRetrievalCombination(combo: InterviewRetrievalFallbackCombination) {
@@ -287,6 +353,7 @@ export function InterviewBankAdminPage() {
       category: combo.category,
       difficulty: combo.difficulty,
     }))
+    setActiveTab('library')
     setMessage('已套用回退组合到题库筛选和检索预览')
   }
 
@@ -315,7 +382,8 @@ export function InterviewBankAdminPage() {
         category: action.category ?? current.category,
         difficulty: action.difficulty ?? current.difficulty,
       }))
-      setMessage('已套用运营动作目标到题库筛选和检索预览')
+      setActiveTab('library')
+      setMessage('已套用运营动作目标到题库筛选，可切换标签查看检索预览')
     }
     if (action.atom_id) {
       void handleOpenAtom(action.atom_id)
@@ -656,6 +724,8 @@ export function InterviewBankAdminPage() {
   async function handleOpenAtom(atomID: string) {
     setError('')
     setMessage('')
+    // 原子详情面板位于「题库管理」标签页，跨标签查看时先切回去。
+    setActiveTab('library')
     setIsDetailLoading(true)
     try {
       const [detail, history] = await Promise.all([
@@ -675,6 +745,21 @@ export function InterviewBankAdminPage() {
 
   function updateEditForm<K extends keyof AtomEditForm>(key: K, value: AtomEditForm[K]) {
     setEditForm((current) => current ? { ...current, [key]: value } : current)
+  }
+
+  function handleCloseAtom() {
+    setActiveAtom(null)
+    setActiveVersions([])
+    setEditForm(null)
+    setArchiveReason('')
+    setIsDetailLoading(false)
+  }
+
+  function handleCloseOpsActionDetail() {
+    setActiveOpsActionID('')
+    setActiveOpsActionDetail(null)
+    setOpsActionNote('')
+    setIsOpsActionDetailLoading(false)
   }
 
   async function handleSaveAtom() {
@@ -793,9 +878,25 @@ export function InterviewBankAdminPage() {
         </div>
       </section>
 
+      <nav className="interview-bank-tabs" role="tablist">
+        {bankTabs.map((tab) => (
+          <button
+            key={tab.value}
+            role="tab"
+            type="button"
+            aria-selected={activeTab === tab.value}
+            className={activeTab === tab.value ? 'is-active' : ''}
+            onClick={() => setActiveTab(tab.value)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
       {error && <span className="inline-error">{error}</span>}
       {message && <span className="success-line">{message}</span>}
 
+      {(activeTab === 'library' || activeTab === 'ops') && (
       <section className="panel interview-bank-toolbar">
         <div className="panel-title"><ListFilter size={18} /> 筛选</div>
         <div className="interview-bank-filter-grid">
@@ -844,7 +945,9 @@ export function InterviewBankAdminPage() {
           </button>
         </div>
       </section>
+      )}
 
+      {activeTab === 'health' && (
       <div className="interview-bank-ops-grid">
         <HealthDiagnosticPanel
           health={health}
@@ -861,12 +964,20 @@ export function InterviewBankAdminPage() {
           onSubmit={() => void handleRetrievalPreview()}
           onOpenAtom={(atomID) => void handleOpenAtom(atomID)}
         />
-        <RetrievalOperationsPanel
-          analytics={retrievalAnalytics}
-          logs={retrievalLogs}
-          onOpenAtom={(atomID) => void handleOpenAtom(atomID)}
-          onApplyCombination={applyRetrievalCombination}
-        />
+      </div>
+      )}
+
+      {activeTab === 'retrieval' && (
+      <RetrievalOperationsPanel
+        analytics={retrievalAnalytics}
+        logs={retrievalLogs}
+        onOpenAtom={(atomID) => void handleOpenAtom(atomID)}
+        onApplyCombination={applyRetrievalCombination}
+      />
+      )}
+
+      {activeTab === 'ops' && (
+      <div className="interview-bank-ops-grid">
         <OpsActionPanel
           actions={opsActions}
           activeActionID={activeOpsActionID}
@@ -894,6 +1005,7 @@ export function InterviewBankAdminPage() {
           isRebuilding={isRebuilding}
           note={opsActionNote}
           isUpdatingStatus={isUpdatingOpsActionStatus}
+          onClose={handleCloseOpsActionDetail}
           onNoteChange={setOpsActionNote}
           onApplyTarget={applyOpsActionTarget}
           onOpenAtom={(atomID) => void handleOpenAtom(atomID)}
@@ -901,7 +1013,9 @@ export function InterviewBankAdminPage() {
           onUpdateStatus={(nextStatus) => void handleUpdateOpsActionStatus(nextStatus)}
         />
       </div>
+      )}
 
+      {activeTab === 'library' && (<>
       <div className="interview-bank-main-grid">
         <section className="panel interview-bank-import-panel">
           <div className="panel-title"><FileJson size={18} /> 导入包</div>
@@ -1032,7 +1146,9 @@ export function InterviewBankAdminPage() {
         onSave={() => void handleSaveAtom()}
         onArchive={() => void handleArchiveAtom()}
         onRestore={() => void handleRestoreAtom()}
+        onClose={handleCloseAtom}
       />
+      </>)}
     </section>
   )
 }
@@ -1477,6 +1593,7 @@ function OpsActionDetailPanel({
   onOpenAtom,
   onRebuildAtom,
   onUpdateStatus,
+  onClose,
 }: {
   detail: InterviewBankOpsActionDetail | null
   isLoading: boolean
@@ -1488,11 +1605,17 @@ function OpsActionDetailPanel({
   onOpenAtom: (atomID: string) => void
   onRebuildAtom: () => void
   onUpdateStatus: (nextStatus: string) => void
+  onClose: () => void
 }) {
   if (isLoading) {
     return (
       <section className="panel interview-bank-ops-action-detail-panel">
-        <div className="panel-title"><Eye size={18} /> 动作详情</div>
+        <div className="interview-bank-detail-header">
+          <div className="panel-title"><Eye size={18} /> 动作详情</div>
+          <button className="ghost-button compact" type="button" onClick={onClose} aria-label="关闭动作详情">
+            <X size={16} />关闭
+          </button>
+        </div>
         <div className="interview-bank-empty-row">
           <strong>正在读取运营动作详情</strong>
           <span>请稍候。</span>
@@ -1529,9 +1652,14 @@ function OpsActionDetailPanel({
           <h2>{action.title}</h2>
           <p>{opsActionTypeLabel(action.action_type)} · {opsActionStatusLabel(action.status)} · {action.priority} · {opsActionSourceLabel(action.source)}</p>
         </div>
-        {detail.stale ? (
-          <span className="interview-bank-pill ops-stale"><AlertTriangle size={14} />已过时</span>
-        ) : null}
+        <div className="interview-bank-detail-actions">
+          {detail.stale ? (
+            <span className="interview-bank-pill ops-stale"><AlertTriangle size={14} />已过时</span>
+          ) : null}
+          <button className="ghost-button compact" type="button" onClick={onClose} aria-label="关闭动作详情">
+            <X size={16} />关闭
+          </button>
+        </div>
       </div>
 
       <div className="interview-bank-ops-detail-meta">
@@ -1921,6 +2049,7 @@ function AtomDetailPanel({
   onSave,
   onArchive,
   onRestore,
+  onClose,
 }: {
   atom: InterviewKnowledgeAtom | null
   versions: InterviewKnowledgeAtomVersion[]
@@ -1935,11 +2064,17 @@ function AtomDetailPanel({
   onSave: () => void
   onArchive: () => void
   onRestore: () => void
+  onClose: () => void
 }) {
   if (isLoading) {
     return (
       <section className="panel interview-bank-detail-panel">
-        <div className="panel-title"><Eye size={18} /> 题目详情</div>
+        <div className="interview-bank-detail-header">
+          <div className="panel-title"><Eye size={18} /> 题目详情</div>
+          <button className="ghost-button compact" type="button" onClick={onClose}>
+            <X size={16} />关闭
+          </button>
+        </div>
         <div className="interview-bank-empty-row">
           <strong>正在读取题目详情</strong>
           <span>请稍候。</span>
@@ -1977,6 +2112,9 @@ function AtomDetailPanel({
               <RotateCcw size={16} />{isRestoring ? '恢复中' : '恢复'}
             </button>
           ) : null}
+          <button className="ghost-button compact" type="button" onClick={onClose}>
+            <X size={16} />关闭
+          </button>
         </div>
       </div>
 

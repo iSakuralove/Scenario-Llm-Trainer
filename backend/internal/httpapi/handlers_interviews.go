@@ -212,88 +212,23 @@ type interviewLaunchpadCoverageStats struct {
 
 func (s *Server) interviewLaunchpad(user *domain.User) map[string]interface{} {
 	atomTracks := s.interviewLaunchpadAtomTracks()
-	if len(atomTracks) > 0 {
-		domainCounts := map[string]int{}
-		difficulties := []string{}
-		questionTypes := []string{}
-		publishedCount := 0
-		indexedCount := 0
-		for _, track := range atomTracks {
-			domainCounts[track.Domain]++
-			difficulties = append(difficulties, track.Difficulty)
-			questionTypes = append(questionTypes, track.QuestionType)
-			publishedCount += track.PublishedCount
-			indexedCount += track.IndexedCount
-		}
-		domains := make([]interviewLaunchpadDomain, 0, len(domainCounts))
-		for domainName, count := range domainCounts {
-			domains = append(domains, interviewLaunchpadDomain{
-				Value:          domainName,
-				Label:          interviewLaunchpadDomainLabel(domainName),
-				Group:          "题库开放",
-				Note:           fmt.Sprintf("%d 个训练入口", count),
-				OpenTrackCount: count,
-			})
-		}
-		sort.Slice(domains, func(i, j int) bool {
-			return domains[i].Value < domains[j].Value
-		})
-		recentSessions := s.interviewLaunchpadRecentSessions(user)
-		return map[string]interface{}{
-			"summary": map[string]interface{}{
-				"open_track_count":     len(atomTracks),
-				"published_atom_count": publishedCount,
-				"indexed_atom_count":   indexedCount,
-				"fallback_mode":        false,
-				"state":                interviewLaunchpadSummaryState(false, len(atomTracks), publishedCount, indexedCount),
-				"message":              "当前训练轨道来自正式题库；索引未命中的追问会自动回退规则链路。",
-			},
-			"domains":            domains,
-			"open_tracks":        atomTracks,
-			"recommended_tracks": s.recommendInterviewLaunchpadTracks(user, atomTracks, recentSessions),
-			"recent_sessions":    recentSessions,
-			"coverage_stats":     s.interviewLaunchpadCoverageStats(user, atomTracks),
-			"coverage": map[string]interface{}{
-				"domains":               uniqueStrings(keysFromCounts(domainCounts)),
-				"difficulties":          uniqueStrings(difficulties),
-				"question_types":        uniqueStrings(questionTypes),
-				"question_roles":        uniqueStrings(trackQuestionRoles(atomTracks)),
-				"vector_status_summary": uniqueStrings(trackVectorStatusSummaries(atomTracks)),
-			},
-			"fallback_mode": false,
-		}
-	}
-	tracks := []interviewLaunchpadTrack{}
+	// 正式原子轨道与兼容种子题合并：少量正式题不应覆盖既有可开场题。
+	seedTracks := s.interviewLaunchpadSeedTracks()
+	tracks := mergeInterviewLaunchpadTracks(atomTracks, seedTracks)
 	domainCounts := map[string]int{}
 	difficulties := []string{}
 	questionTypes := []string{}
-	for _, seed := range interviewLaunchpadSeeds() {
-		question, ok := s.store.FindInterviewQuestion(seed.Domain, seed.Difficulty, seed.QuestionType)
-		if !ok {
-			continue
-		}
-		track := interviewLaunchpadTrack{
-			ID:                  seed.ID,
-			Title:               seed.Title,
-			Domain:              seed.Domain,
-			DomainLabel:         seed.DomainLabel,
-			Category:            seed.Domain,
-			Difficulty:          seed.Difficulty,
-			QuestionType:        seed.QuestionType,
-			QuestionRole:        seed.QuestionRole,
-			Tags:                []string{},
-			Summary:             firstNonEmpty(seed.Summary, question.Description),
-			Details:             append([]string{}, seed.Details...),
-			PublishedCount:      1,
-			IndexedCount:        0,
-			AvailabilityState:   "available",
-			VectorStatusSummary: "compatibility_seed",
-			LatestUpdatedAt:     question.CreatedAt,
-		}
-		tracks = append(tracks, track)
-		domainCounts[seed.Domain]++
-		difficulties = append(difficulties, seed.Difficulty)
-		questionTypes = append(questionTypes, seed.QuestionType)
+	for _, track := range tracks {
+		domainCounts[track.Domain]++
+		difficulties = append(difficulties, track.Difficulty)
+		questionTypes = append(questionTypes, track.QuestionType)
+	}
+	// 原子统计只来自正式题库轨道，避免兼容种子把 published/indexed 计数抬高。
+	publishedCount := 0
+	indexedCount := 0
+	for _, track := range atomTracks {
+		publishedCount += track.PublishedCount
+		indexedCount += track.IndexedCount
 	}
 	domains := make([]interviewLaunchpadDomain, 0, len(domainCounts))
 	for _, seed := range interviewLaunchpadDomainSeeds() {
@@ -301,18 +236,43 @@ func (s *Server) interviewLaunchpad(user *domain.User) map[string]interface{} {
 		if count == 0 {
 			continue
 		}
-		seed.OpenTrackCount = count
-		domains = append(domains, seed)
+			seed.OpenTrackCount = count
+			domains = append(domains, seed)
+		}
+	// 补充正式题库里但未进入种子域列表的领域（如临时导入的 java）。
+	for domainName, count := range domainCounts {
+		found := false
+		for _, domainItem := range domains {
+			if domainItem.Value == domainName {
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+		domains = append(domains, interviewLaunchpadDomain{
+			Value:          domainName,
+			Label:          interviewLaunchpadDomainLabel(domainName),
+			Group:          "题库开放",
+			Note:           fmt.Sprintf("%d 个训练入口", count),
+			OpenTrackCount: count,
+		})
 	}
+	sort.Slice(domains, func(i, j int) bool {
+		return domains[i].Value < domains[j].Value
+	})
 	recentSessions := s.interviewLaunchpadRecentSessions(user)
+	// 仅当没有正式原子、完全依赖种子题时才标记兼容模式。
+	fallbackMode := len(atomTracks) == 0
 	return map[string]interface{}{
 		"summary": map[string]interface{}{
 			"open_track_count":     len(tracks),
-			"published_atom_count": 0,
-			"indexed_atom_count":   0,
-			"fallback_mode":        true,
-			"state":                interviewLaunchpadSummaryState(true, len(tracks), 0, 0),
-			"message":              "当前使用兼容题库轨道；索引增强未就绪时仍可完成开场训练。",
+			"published_atom_count": publishedCount,
+			"indexed_atom_count":   indexedCount,
+			"fallback_mode":        fallbackMode,
+			"state":                interviewLaunchpadSummaryState(fallbackMode, len(tracks), publishedCount, indexedCount),
+			"message":              interviewLaunchpadSummaryMessage(fallbackMode),
 		},
 		"domains":            domains,
 		"open_tracks":        tracks,
@@ -326,7 +286,7 @@ func (s *Server) interviewLaunchpad(user *domain.User) map[string]interface{} {
 			"question_roles":        uniqueStrings(trackQuestionRoles(tracks)),
 			"vector_status_summary": uniqueStrings(trackVectorStatusSummaries(tracks)),
 		},
-		"fallback_mode": true,
+		"fallback_mode": fallbackMode,
 	}
 }
 
@@ -523,6 +483,13 @@ func interviewLaunchpadSummaryState(fallbackMode bool, openTrackCount, published
 	return "ready"
 }
 
+func interviewLaunchpadSummaryMessage(fallbackMode bool) string {
+	if fallbackMode {
+		return "当前使用兼容题库轨道；索引增强未就绪时仍可完成开场训练。"
+	}
+	return "当前训练轨道来自正式题库与可启动题；索引未命中的追问会自动回退规则链路。"
+}
+
 func (s *Server) recommendInterviewLaunchpadTracks(user *domain.User, tracks []interviewLaunchpadTrack, recentSessions []interviewLaunchpadRecentSession) []interviewLaunchpadRecommendation {
 	items := make([]interviewLaunchpadRecommendation, 0, 4)
 	seen := map[string]bool{}
@@ -592,6 +559,10 @@ func (s *Server) recommendInterviewLaunchpadTracks(user *domain.User, tracks []i
 	})
 	for _, track := range freshTracks {
 		if track.LatestUpdatedAt.IsZero() {
+			continue
+		}
+		// 兼容种子不参与“最近更新”推荐，避免压过正式题库新内容。
+		if track.VectorStatusSummary == "compatibility_seed" {
 			continue
 		}
 		add(track, fmt.Sprintf("%s / %s 题库最近更新，适合趁热进入一轮训练验证掌握情况。", track.DomainLabel, track.Difficulty), "fresh_content")
@@ -814,6 +785,68 @@ func (s *Server) interviewLaunchpadAtomTracks() []interviewLaunchpadTrack {
 	}
 	sort.Slice(tracks, func(i, j int) bool {
 		if tracks[i].Domain == tracks[j].Domain {
+			return tracks[i].Difficulty < tracks[j].Difficulty
+		}
+		return tracks[i].Domain < tracks[j].Domain
+	})
+	return tracks
+}
+
+func (s *Server) interviewLaunchpadSeedTracks() []interviewLaunchpadTrack {
+	tracks := []interviewLaunchpadTrack{}
+	for _, seed := range interviewLaunchpadSeeds() {
+		question, ok := s.store.FindInterviewQuestion(seed.Domain, seed.Difficulty, seed.QuestionType)
+		if !ok {
+			continue
+		}
+		tracks = append(tracks, interviewLaunchpadTrack{
+			ID:                  seed.ID,
+			Title:               seed.Title,
+			Domain:              seed.Domain,
+			DomainLabel:         seed.DomainLabel,
+			Category:            seed.Domain,
+			Difficulty:          seed.Difficulty,
+			QuestionType:        seed.QuestionType,
+			QuestionRole:        seed.QuestionRole,
+			Tags:                []string{},
+			Summary:             firstNonEmpty(seed.Summary, question.Description),
+			Details:             append([]string{}, seed.Details...),
+			PublishedCount:      1,
+			IndexedCount:        0,
+			AvailabilityState:   "available",
+			VectorStatusSummary: "compatibility_seed",
+			LatestUpdatedAt:     question.CreatedAt,
+		})
+	}
+	return tracks
+}
+
+func mergeInterviewLaunchpadTracks(atomTracks, seedTracks []interviewLaunchpadTrack) []interviewLaunchpadTrack {
+	// 同 domain+difficulty 优先正式原子轨道，避免重复卡片。
+	seenKeys := map[string]bool{}
+	tracks := make([]interviewLaunchpadTrack, 0, len(atomTracks)+len(seedTracks))
+	for _, track := range atomTracks {
+		key := interviewLaunchpadCoverageKey(track.Domain, track.Difficulty)
+		if key != "" {
+			seenKeys[key] = true
+		}
+		tracks = append(tracks, track)
+	}
+	for _, track := range seedTracks {
+		key := interviewLaunchpadCoverageKey(track.Domain, track.Difficulty)
+		if key != "" && seenKeys[key] {
+			continue
+		}
+		if key != "" {
+			seenKeys[key] = true
+		}
+		tracks = append(tracks, track)
+	}
+	sort.Slice(tracks, func(i, j int) bool {
+		if tracks[i].Domain == tracks[j].Domain {
+			if tracks[i].Difficulty == tracks[j].Difficulty {
+				return tracks[i].ID < tracks[j].ID
+			}
 			return tracks[i].Difficulty < tracks[j].Difficulty
 		}
 		return tracks[i].Domain < tracks[j].Domain
@@ -1236,8 +1269,10 @@ func evaluateIrrelevantInterviewAnswer(question *domain.InterviewQuestion, answe
 		return irrelevantInterviewDecision{}
 	}
 	relevance := interviewTopicRelevance(question, trimmed)
-	hits := len(interviewKeywordHits(question, trimmed))
-	if relevance >= 25 || hits > 0 {
+	hits := interviewSubstantialKeywordHits(question, trimmed)
+	// 门槛放宽：中文认真作答常命中技术结构词而非英文关键词，不能只靠 25 分词面相似。
+	// 领域名单独命中不算（“和数据库题无关”这类闲聊也会带上 domain）。
+	if relevance >= 18 || len(hits) > 0 || interviewLooksLikeTechnicalAnswer(trimmed) || interviewChinesePhraseOverlap(question, trimmed) >= 2 {
 		return irrelevantInterviewDecision{}
 	}
 	attempt := previousAttempts + 1

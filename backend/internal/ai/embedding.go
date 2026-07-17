@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	DefaultEmbeddingBaseURL       = "https://jeniya.top"
+	DefaultEmbeddingBaseURL       = "https://router.tumuer.me"
 	DefaultEmbeddingModel         = "text-embedding-3-small"
 	DefaultEmbeddingFallbackModel = ""
 )

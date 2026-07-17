@@ -91,3 +91,13 @@ func TestEmbeddingConfigFromEnvPrefersDedicatedJianyiEmbeddingKey(t *testing.T) 
 		t.Fatalf("expected dedicated embedding key, got %q", cfg.APIKey)
 	}
 }
+
+func TestEmbeddingConfigFromEnvUsesTumuerRouterByDefault(t *testing.T) {
+	t.Setenv("EMBEDDING_BASE_URL", "")
+
+	cfg := EmbeddingConfigFromEnv()
+
+	if cfg.BaseURL != "https://router.tumuer.me" {
+		t.Fatalf("expected Tumuer embedding router, got %q", cfg.BaseURL)
+	}
+}

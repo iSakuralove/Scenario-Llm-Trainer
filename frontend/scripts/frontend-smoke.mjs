@@ -146,30 +146,27 @@ async function main() {
 	})
 	await page.goto(`${baseURL}/interviews`, { waitUntil: 'domcontentloaded', timeout: 30_000 })
 	await page.waitForSelector('[data-testid="launchpad-track-loading-skeleton"]', { state: 'visible', timeout: 5_000 })
-	await page.waitForSelector('[data-testid="history-loading-skeleton"]', { state: 'visible', timeout: 5_000 })
-	await page.waitForFunction(() => document.body.innerText.includes('技术面试舱'), null, { timeout: 30_000 })
+	await page.waitForFunction(() => document.body.innerText.includes('load average 高但 CPU 不高怎么排查'), null, { timeout: 30_000 })
 	await assertText(page, '技术面试舱', '面试舱页面未渲染')
-	await assertText(page, '可面试题目', '面试舱未优先显示可面试题量')
-	await assertText(page, '历史面试', '面试舱历史区未前置渲染')
-	await assertText(page, '选择训练轨道', '面试舱开放轨道区未渲染')
-	await assertText(page, '专业领域', '面试舱领域筛选区未渲染')
+	await assertText(page, 'load average 高但 CPU 不高怎么排查', '面试舱未展示操作系统题目')
+	await assertText(page, '历史面试', '面试舱历史折叠区未渲染')
+	const questionCards = page.locator('[data-testid="interview-track-grid"] [role="radio"]')
+	if (await questionCards.count() !== 5) throw new Error('面试舱未展示五张题目卡片')
+	if (await page.locator('#interview-shared-setup').count() !== 0) throw new Error('未选题时不应展示面试设置')
+	await assertNoText(page, '兼容模式', '面试舱仍暴露兼容模式说明')
+	await assertNoText(page, '可启动组合', '面试舱仍展示内部启动组合统计')
+	await assertNoText(page, '五维评分维度', '面试舱仍展示评分说明')
 	await assertNoText(page, 'ANSWER PIPELINE', '面试舱仍包含说明型英文流程面板')
 	await assertNoText(page, '评分与报告产物', '面试舱仍包含说明型报告产物面板')
 	await assertNoText(page, '岗位级别模型', '面试舱仍包含说明型岗位模型面板')
 	await assertNoText(page, '面试流程', '面试舱仍包含说明型流程面板')
-	await page.waitForFunction(() => document.body.innerText.includes('读取历史面试失败'), null, { timeout: 30_000 })
-	await page.locator('[data-testid="interview-domain-java"]').click()
-    await page.waitForFunction(() => {
-      const select = document.querySelector('select[aria-label="按分类筛选开放轨道"]')
-      return select instanceof HTMLSelectElement && select.value === 'java'
-    }, null, { timeout: 30_000 })
-    await page.locator('[data-testid="interview-domain-java"]').click()
-	await page.waitForFunction(() => {
-		const select = document.querySelector('select[aria-label="按分类筛选开放轨道"]')
-		return select instanceof HTMLSelectElement && select.value === ''
-	}, null, { timeout: 30_000 })
+	await page.locator('select[aria-label="按领域筛选面试题"]').selectOption('os')
+	await page.waitForFunction(() => document.querySelectorAll('[data-testid="interview-track-grid"] [role="radio"]').length === 1, null, { timeout: 30_000 })
+	await page.locator('select[aria-label="按领域筛选面试题"]').selectOption('')
 	await page.locator('[data-testid="interview-track-grid"] [role="radio"]').filter({ hasText: '数据库' }).first().click()
-	await page.locator('.interview-track-start-button').click()
+	await page.waitForSelector('#interview-shared-setup', { state: 'visible', timeout: 5_000 })
+	if (await page.locator('#interview-shared-setup input[type="checkbox"]').count() !== 5) throw new Error('共享设置未展示可勾选的追问重点')
+	await page.locator('.interview-start-button').click()
     await page.waitForURL(/\/interviews\/session\/mock-interview-session$/, { timeout: 30_000 })
     await assertNoErrorFallback(page)
     await page.goto(`${baseURL}/mentor`, { waitUntil: 'domcontentloaded', timeout: 30_000 })
@@ -236,94 +233,66 @@ function delay(ms) {
 }
 
 function buildMockInterviewLaunchpadPayload() {
+  const trackSeeds = [
+    { id: 'mock-database-l3', domain: 'database', domainLabel: '数据库', difficulty: 'L3', questionType: 'scenario_analysis', summary: '如何定位 MySQL 慢查询' },
+    { id: 'mock-network-l3', domain: 'network', domainLabel: '网络', difficulty: 'L3', questionType: 'scenario_analysis', summary: '如何排查跨服务调用超时' },
+    { id: 'mock-os-l3', domain: 'os', domainLabel: '操作系统', difficulty: 'L3', questionType: 'principle', summary: 'load average 高但 CPU 不高怎么排查' },
+    { id: 'mock-security-l4', domain: 'security', domainLabel: '安全', difficulty: 'L4', questionType: 'scenario_analysis', summary: '访问密钥泄露后如何遏制风险' },
+    { id: 'mock-devops-l4', domain: 'devops', domainLabel: 'DevOps', difficulty: 'L4', questionType: 'scenario_analysis', summary: '发布失败后如何回滚并恢复流水线' },
+  ]
+  const openTracks = trackSeeds.map((track) => ({
+    id: track.id,
+    title: track.summary,
+    domain: track.domain,
+    domain_label: track.domainLabel,
+    category: track.domain,
+    difficulty: track.difficulty,
+    question_type: track.questionType,
+    question_role: 'opening',
+    tags: [],
+    summary: track.summary,
+    details: [track.questionType === 'principle' ? '原理问答' : '情景分析'],
+    published_count: 1,
+    indexed_count: 1,
+    availability_state: 'available',
+    vector_status_summary: 'indexed',
+  }))
   return {
     summary: {
-      open_track_count: 2,
-      published_atom_count: 4,
-      indexed_atom_count: 4,
+      open_track_count: 5,
+      published_atom_count: 5,
+      indexed_atom_count: 5,
       fallback_mode: false,
       state: 'ready',
       message: 'mock launchpad',
     },
-    domains: [
-      { value: 'java', label: 'Java', group: '后端开放', note: '1 个训练入口', open_track_count: 1 },
-      { value: 'database', label: '数据库', group: '后端开放', note: '1 个训练入口', open_track_count: 1 },
-    ],
-    open_tracks: [
-      {
-        id: 'mock-java-l3',
-        title: 'Java L3',
-        domain: 'java',
-        domain_label: 'Java',
-        category: 'java',
-        difficulty: 'L3',
-        question_type: 'scenario_analysis',
-        question_role: 'opening',
-        tags: ['jvm'],
-        summary: 'Java 进阶排查训练',
-        details: ['情景分析', '并发基础'],
-        published_count: 2,
-        indexed_count: 2,
-        availability_state: 'available',
-        vector_status_summary: 'indexed',
-      },
-      {
-        id: 'mock-database-l3',
-        title: '数据库 L3',
-        domain: 'database',
-        domain_label: '数据库',
-        category: 'database',
-        difficulty: 'L3',
-        question_type: 'scenario_analysis',
-        question_role: 'opening',
-        tags: ['mysql'],
-        summary: '数据库排障训练',
-        details: ['情景分析', '慢查询定位'],
-        published_count: 2,
-        indexed_count: 2,
-        availability_state: 'available',
-        vector_status_summary: 'indexed',
-      },
-    ],
+    domains: trackSeeds.map((track) => ({ value: track.domain, label: track.domainLabel, group: '面试题', note: '1 道题', open_track_count: 1 })),
+    open_tracks: openTracks,
     recommended_tracks: [
       {
-        id: 'mock-database-l3',
-        title: '数据库 L3',
-        domain: 'database',
-        domain_label: '数据库',
-        category: 'database',
-        difficulty: 'L3',
-        question_type: 'scenario_analysis',
-        question_role: 'opening',
-        tags: ['mysql'],
-        summary: '数据库排障训练',
-        details: ['情景分析', '慢查询定位'],
-        published_count: 2,
-        indexed_count: 2,
-        availability_state: 'available',
-        vector_status_summary: 'indexed',
-        reason: '你最近最常练的是数据库 / L3。',
+        ...openTracks[0],
+        reason: '你最近最常练的是数据库。',
         source_kind: 'habitual_track',
       },
     ],
     recent_sessions: [],
     coverage: {
-      domains: ['java', 'database'],
-      difficulties: ['L3'],
-      question_types: ['scenario_analysis'],
+      domains: trackSeeds.map((track) => track.domain),
+      difficulties: ['L3', 'L4'],
+      question_types: ['scenario_analysis', 'principle'],
       question_roles: ['opening'],
       vector_status_summary: ['indexed'],
     },
     coverage_stats: {
-      total_open_tracks: 2,
+      total_open_tracks: 5,
       practiced_open_tracks: 1,
-      coverage_percent: 50,
+      coverage_percent: 20,
       completed_sessions: 1,
       practiced_domains: ['database'],
       practiced_difficulties: ['L3'],
-      subject_count: 2,
-      top_subjects: ['慢查询定位', '索引下推'],
-      uncovered_track_ids: ['mock-java-l3'],
+      subject_count: 1,
+      top_subjects: ['慢查询定位'],
+      uncovered_track_ids: openTracks.slice(1).map((track) => track.id),
     },
     fallback_mode: false,
   }

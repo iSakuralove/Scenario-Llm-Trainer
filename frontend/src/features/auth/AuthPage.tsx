@@ -22,12 +22,41 @@ export function AuthPage() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [feedback, setFeedback] = useState<{ tone: 'error' | 'success'; message: string } | null>(null)
   const [isSubmitting, setSubmitting] = useState(false)
+  // 进入重置页时先向后端校验链接是否仍然有效（10 分钟过期 / 一次性失效），
+  // 避免用户填完新密码才发现链接已失效。初始态用惰性初始化：有 token 时进入
+  // 校验中，缺 token 时直接判定无效，避免在 effect 里同步 setState。
+  const [tokenStatus, setTokenStatus] = useState<'idle' | 'checking' | 'valid' | 'invalid'>(() => {
+    if (!(isResetRoute || resetToken)) return 'idle'
+    return resetToken ? 'checking' : 'invalid'
+  })
+  const [tokenError, setTokenError] = useState(() =>
+    (isResetRoute || resetToken) && !resetToken ? '重置链接缺少安全令牌，请返回登录页重新发送邮件。' : '',
+  )
   const aiStatus = useAIStatusStore((state) => state.status)
   const loadAIStatus = useAIStatusStore((state) => state.load)
 
   useEffect(() => {
     void loadAIStatus()
   }, [loadAIStatus])
+
+  // 仅在重置模式且带 token 时向后端异步核验；核验结果只在回调里落地。
+  useEffect(() => {
+    if (mode !== 'reset' || !resetToken) return
+    let cancelled = false
+    api
+      .verifyPasswordReset(resetToken)
+      .then(() => {
+        if (!cancelled) setTokenStatus('valid')
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        setTokenStatus('invalid')
+        setTokenError(err instanceof Error ? err.message : '重置链接无效或已过期')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [mode, resetToken])
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -190,6 +219,28 @@ export function AuthPage() {
           </p>
         </div>
 
+        {mode === 'reset' && tokenStatus === 'checking' && (
+          <div className="form-feedback" role="status" aria-live="polite">
+            正在校验重置链接…
+          </div>
+        )}
+
+        {mode === 'reset' && tokenStatus === 'invalid' && (
+          <div className="auth-reset-invalid">
+            <div className="form-feedback error" role="alert" aria-live="polite">
+              {tokenError || '重置链接无效或已过期，请返回登录页重新发送邮件。'}
+            </div>
+            <button className="primary-button" type="button" onClick={() => { setMode('forgot'); setFeedback(null) }}>
+              <Play size={18} />
+              重新发送重置邮件
+            </button>
+            <button className="ghost-button" type="button" onClick={() => { setMode('login'); navigate('/', { replace: true }) }}>
+              返回登录
+            </button>
+          </div>
+        )}
+
+        {!(mode === 'reset' && tokenStatus !== 'valid') && (
         <div className="auth-form-fields">
           {mode !== 'reset' && (
             <label>
@@ -234,6 +285,7 @@ export function AuthPage() {
             </label>
           )}
         </div>
+        )}
 
         {feedback && (
           <div className={`form-feedback ${feedback.tone}`} role={feedback.tone === 'error' ? 'alert' : 'status'} aria-live="polite">
@@ -241,10 +293,12 @@ export function AuthPage() {
           </div>
         )}
 
+        {!(mode === 'reset' && tokenStatus !== 'valid') && (
         <button className="primary-button" type="submit" disabled={isSubmitting}>
           <Play size={18} />
           {isSubmitting ? '处理中' : mode === 'login' ? '进入系统' : mode === 'register' ? '注册并进入' : mode === 'forgot' ? '发送重置邮件' : '确认新密码'}
         </button>
+        )}
         {mode === 'login' && <button className="ghost-button" type="button" onClick={() => setMode('forgot')}>忘记密码</button>}
         {mode !== 'reset' && <button className="ghost-button" type="button" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>{mode === 'login' ? '需要新账号' : '已有账号登录'}</button>}
         {mode === 'reset' && <button className="ghost-button" type="button" onClick={() => {

@@ -173,6 +173,32 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request, path string)
 			return
 		}
 		writeOK(w, map[string]bool{"accepted": true})
+	case "password-reset/verify":
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var req struct {
+			Token string `json:"token"`
+		}
+		if !decode(w, r, &req) {
+			return
+		}
+		if strings.TrimSpace(req.Token) == "" {
+			writeError(w, http.StatusBadRequest, "重置令牌不能为空")
+			return
+		}
+		claims, err := s.auth.Validate(req.Token)
+		if err != nil || claims.Type != "password_reset" {
+			writeError(w, http.StatusBadRequest, "重置链接无效或已过期")
+			return
+		}
+		user, ok := s.store.GetUser(claims.Subject)
+		if !ok || user.TokenVersion != claims.TokenVersion {
+			writeError(w, http.StatusBadRequest, "重置链接无效或已使用")
+			return
+		}
+		writeOK(w, map[string]bool{"valid": true})
 	case "refresh":
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
