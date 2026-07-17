@@ -77,11 +77,15 @@ func TestInterviewLaunchpadReturnsOpenTracksFromAvailableQuestions(t *testing.T)
 			FallbackMode       bool `json:"fallback_mode"`
 		} `json:"summary"`
 		OpenTracks []struct {
-			ID                string `json:"id"`
-			Domain            string `json:"domain"`
-			Difficulty        string `json:"difficulty"`
-			QuestionType      string `json:"question_type"`
-			AvailabilityState string `json:"availability_state"`
+			ID                string   `json:"id"`
+			Title             string   `json:"title"`
+			Domain            string   `json:"domain"`
+			DomainLabel       string   `json:"domain_label"`
+			Difficulty        string   `json:"difficulty"`
+			QuestionType      string   `json:"question_type"`
+			Summary           string   `json:"summary"`
+			Details           []string `json:"details"`
+			AvailabilityState string   `json:"availability_state"`
 		} `json:"open_tracks"`
 		FallbackMode bool `json:"fallback_mode"`
 	}
@@ -92,10 +96,21 @@ func TestInterviewLaunchpadReturnsOpenTracksFromAvailableQuestions(t *testing.T)
 	if payload.Summary.PublishedAtomCount != 0 || payload.Summary.IndexedAtomCount != 0 {
 		t.Fatalf("compatibility launchpad must not claim atom statistics: %+v", payload.Summary)
 	}
-	if payload.Summary.OpenTrackCount != len(payload.OpenTracks) || len(payload.OpenTracks) == 0 {
+	if payload.Summary.OpenTrackCount != len(payload.OpenTracks) || len(payload.OpenTracks) != 5 {
 		t.Fatalf("unexpected open track count: %+v", payload)
 	}
+	expectedTrackIDs := map[string]bool{
+		"database-l3-scenario": false,
+		"network-l3-scenario":  false,
+		"os-l3-principle":      false,
+		"security-l4-scenario": false,
+		"devops-l4-scenario":   false,
+	}
 	for _, track := range payload.OpenTracks {
+		if _, ok := expectedTrackIDs[track.ID]; !ok {
+			t.Fatalf("launchpad returned unexpected compatibility track: %+v", track)
+		}
+		expectedTrackIDs[track.ID] = true
 		if track.Domain == "" || track.Difficulty == "" || track.QuestionType == "" {
 			t.Fatalf("track must include launch parameters: %+v", track)
 		}
@@ -104,6 +119,19 @@ func TestInterviewLaunchpadReturnsOpenTracksFromAvailableQuestions(t *testing.T)
 		}
 		if _, ok := dataStore.FindInterviewQuestion(track.Domain, track.Difficulty, track.QuestionType); !ok {
 			t.Fatalf("launchpad returned non-startable track: %+v", track)
+		}
+		if track.ID == "os-l3-principle" {
+			if track.Title != "操作系统 L3" || track.DomainLabel != "操作系统" || track.Summary != "load average 高但 CPU 不高怎么排查" {
+				t.Fatalf("unexpected operating-system track copy: %+v", track)
+			}
+			if len(track.Details) == 0 || track.Details[0] != "原理问答" {
+				t.Fatalf("operating-system track must expose principle metadata: %+v", track)
+			}
+		}
+	}
+	for trackID, found := range expectedTrackIDs {
+		if !found {
+			t.Fatalf("launchpad omitted compatibility track %q", trackID)
 		}
 	}
 }

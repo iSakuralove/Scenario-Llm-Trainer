@@ -838,7 +838,11 @@ func interviewLaunchpadSeeds() []interviewLaunchpadSeed {
 		{ID: "java-l2-principle", Title: "Java L2", Domain: "java", DomainLabel: "Java", Difficulty: "L2", QuestionType: "principle", QuestionRole: "opening", Summary: "面向初级岗位的 Java 基础语法、集合和面向对象问答。", Details: []string{"原理问答", "基础表达", "适合校招和 0-1 年经验"}},
 		{ID: "java-l3-scenario", Title: "Java L3", Domain: "java", DomainLabel: "Java", Difficulty: "L3", QuestionType: "scenario_analysis", QuestionRole: "opening", Summary: "面向进阶岗位的对象创建、异常处理和并发问题排查。", Details: []string{"情景分析", "并发基础", "适合校招后与 1 年左右经验"}},
 		{ID: "database-l2-principle", Title: "数据库 L2", Domain: "database", DomainLabel: "数据库", Difficulty: "L2", QuestionType: "principle", QuestionRole: "opening", Summary: "面向初级岗位的索引、事务和表结构基础问答。", Details: []string{"原理问答", "事务基础", "适合 0-1 年经验"}},
-		{ID: "database-l3-scenario", Title: "数据库 L3", Domain: "database", DomainLabel: "数据库", Difficulty: "L3", QuestionType: "scenario_analysis", QuestionRole: "opening", Summary: "面向进阶岗位的慢查询、索引和回滚方案排查。", Details: []string{"情景分析", "慢查询定位", "回滚方案"}},
+		{ID: "database-l3-scenario", Title: "数据库 L3", Domain: "database", DomainLabel: "数据库", Difficulty: "L3", QuestionType: "scenario_analysis", QuestionRole: "opening", Summary: "如何定位 MySQL 慢查询", Details: []string{"情景分析", "慢查询定位", "回滚方案"}},
+		{ID: "network-l3-scenario", Title: "网络 L3", Domain: "network", DomainLabel: "网络", Difficulty: "L3", QuestionType: "scenario_analysis", QuestionRole: "opening", Summary: "如何排查跨服务调用超时", Details: []string{"情景分析", "DNS 与负载均衡", "超时与降级"}},
+		{ID: "os-l3-principle", Title: "操作系统 L3", Domain: "os", DomainLabel: "操作系统", Difficulty: "L3", QuestionType: "principle", QuestionRole: "opening", Summary: "load average 高但 CPU 不高怎么排查", Details: []string{"原理问答", "Linux 负载", "I/O 与 D 状态"}},
+		{ID: "security-l4-scenario", Title: "安全 L4", Domain: "security", DomainLabel: "安全", Difficulty: "L4", QuestionType: "scenario_analysis", QuestionRole: "opening", Summary: "访问密钥泄露后如何遏制风险", Details: []string{"情景分析", "密钥轮换", "影响面确认"}},
+		{ID: "devops-l4-scenario", Title: "DevOps L4", Domain: "devops", DomainLabel: "DevOps", Difficulty: "L4", QuestionType: "scenario_analysis", QuestionRole: "opening", Summary: "发布失败后如何回滚并恢复流水线", Details: []string{"情景分析", "发布回滚", "流水线恢复"}},
 		{ID: "cache-l2-principle", Title: "缓存 L2", Domain: "cache", DomainLabel: "缓存", Difficulty: "L2", QuestionType: "principle", QuestionRole: "opening", Summary: "面向初级岗位的缓存命中、过期和基础一致性问答。", Details: []string{"原理问答", "缓存基础", "适合 0-1 年经验"}},
 		{ID: "cache-l3-scenario", Title: "缓存 L3", Domain: "cache", DomainLabel: "缓存", Difficulty: "L3", QuestionType: "scenario_analysis", QuestionRole: "opening", Summary: "面向进阶岗位的缓存击穿、穿透、雪崩与一致性排查。", Details: []string{"情景分析", "缓存治理", "热点流量"}},
 		{ID: "ai-llm-l2-principle", Title: "AI / LLM L2", Domain: "ai_llm", DomainLabel: "AI / LLM", Difficulty: "L2", QuestionType: "principle", QuestionRole: "opening", Summary: "面向初级岗位的提示词、RAG 和模型使用基础问答。", Details: []string{"原理问答", "RAG 基础", "适合 0-1 年经验"}},
@@ -850,6 +854,10 @@ func interviewLaunchpadDomainSeeds() []interviewLaunchpadDomain {
 	return []interviewLaunchpadDomain{
 		{Value: "java", Label: "Java", Group: "首期开放", Note: "L2 / L3 训练入口"},
 		{Value: "database", Label: "数据库", Group: "首期开放", Note: "L2 / L3 训练入口"},
+		{Value: "network", Label: "网络", Group: "兼容题库", Note: "L3 训练入口"},
+		{Value: "os", Label: "操作系统", Group: "兼容题库", Note: "L3 训练入口"},
+		{Value: "security", Label: "安全", Group: "兼容题库", Note: "L4 训练入口"},
+		{Value: "devops", Label: "DevOps", Group: "兼容题库", Note: "L4 训练入口"},
 		{Value: "cache", Label: "缓存", Group: "首期开放", Note: "L2 / L3 训练入口"},
 		{Value: "ai_llm", Label: "AI / LLM", Group: "首期开放", Note: "L2 / L3 训练入口"},
 	}

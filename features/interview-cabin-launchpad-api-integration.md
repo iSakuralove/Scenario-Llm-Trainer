@@ -13,10 +13,12 @@
 - 面试舱页面优先消费接口轨道，接口失败或返回空列表时回退本地兼容轨道。
 - 面试舱页面新增顶部状态区、推荐训练区、覆盖区、开放组合筛选条，并保留现有开放轨道和历史区。
 - 增加启动台数据源状态提示，区分后端开放组合、兼容轨道和加载状态。
+- 兼容题库模式补齐数据库、网络、操作系统、安全和 DevOps 五道演示题，确保启动台不再只展示数据库 L3。
 
 ## 核心实现
 
 - 后端暂时基于首期开放组合与现有 `InterviewQuestion` 可用性生成 `open_tracks`，避免前端展示实际无法启动的组合。
+- 五道兼容轨道分别对应现有 `InterviewQuestion` 中可启动的 `database/L3/scenario_analysis`、`network/L3/scenario_analysis`、`os/L3/principle`、`security/L4/scenario_analysis` 和 `devops/L4/scenario_analysis`；卡片摘要直接展示题目标题，其中操作系统轨道显示“load average 高但 CPU 不高怎么排查”。
 - 后端基于“未完成会话 -> 用户偏好领域 -> 当前开放轨道”的确定性顺序生成 `recommended_tracks`，保证推荐项仍然可直接启动。
 - 后端返回 `recent_sessions` 轻量摘要，前端可直接渲染“继续训练 / 查看报告”入口，而不需要先额外取详情。
 - 后端扩展 `coverage.question_roles` 和 `coverage.vector_status_summary`，补足用户侧覆盖摘要所需维度。
@@ -42,6 +44,7 @@
 - `npm --prefix frontend run lint`
 - 启动本地前后端后，用普通用户登录 `/interviews`，确认“启动台状态 / 推荐训练 / 覆盖摘要 / 可启动训练轨道”四块都能渲染。
 - 普通用户登录 `/interviews` 后，确认筛选条存在、轨道卡显示可用性 badge，选择真实筛选项后页面不报错，清空筛选后轨道仍可见。
+- 兼容题库模式下确认开放轨道恰好显示上述五道题；选择“操作系统”后只保留“操作系统 L3 / 原理问答 / load average 高但 CPU 不高怎么排查”，并可正常开始面试。
 
 ## 已知限制
 

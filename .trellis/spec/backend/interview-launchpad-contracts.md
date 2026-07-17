@@ -44,6 +44,7 @@
 - `coverage_stats.uncovered_track_ids` only returns launch track IDs so the frontend can map them to visible labels without a second endpoint.
 - Every returned track must be startable by the current `POST /interviews/sessions` contract.
 - While the backend uses compatibility seed questions instead of formal `InterviewKnowledgeAtom`, it must return `fallback_mode=true` and must not claim non-zero atom/index statistics.
+- The memory/Postgres compatibility baseline exposes exactly five startable demo tracks: `database/L3/scenario_analysis`, `network/L3/scenario_analysis`, `os/L3/principle`, `security/L4/scenario_analysis`, and `devops/L4/scenario_analysis`. Their card summaries use the corresponding seeded question titles so users can distinguish the five questions before starting.
 - `launchpadConfig.ts` may remain as local fallback only; it must not be treated as the authoritative open-track source.
 
 ### 4. Validation & Error Matrix
@@ -53,6 +54,7 @@
 - No recommendation signal -> still return a non-empty `recommended_tracks` list built from current open tracks, unless `open_tracks=[]`.
 - Launchpad request fails -> frontend uses local fallback and shows a non-blocking compatibility notice.
 - Track returned by API but no matching session question -> invalid backend state; regression tests must prevent this.
+- Compatibility mapping exists but `FindInterviewQuestion(domain, difficulty, question_type)` misses -> omit that track instead of rendering an unstartable card; the five-track baseline test must fail until the mapping and seed are aligned.
 - Session page module load fails before create -> stay on `/interviews`, show a retryable error, and send no session-create request.
 
 ### 5. Good/Base/Bad Cases
@@ -68,7 +70,9 @@
 - Good: A user who only completed one of two open tracks receives `coverage_stats.total_open_tracks=2`, `practiced_open_tracks=1`, `coverage_percent=50`, and one `uncovered_track_id`.
 - Good: `coverage_stats.top_subjects` only contains report-safe subject names such as `慢查询定位`, not atom internals or retrieval payloads.
 - Base: Compatibility mode returns startable tracks, `fallback_mode=true`, `published_atom_count=0`, `indexed_atom_count=0`.
+- Good: The compatibility launchpad returns five tracks, and `os-l3-principle` displays `操作系统 L3 / load average 高但 CPU 不高怎么排查 / 原理问答` while remaining startable through the existing session API.
 - Bad: Frontend renders hard-coded tracks as the primary list after API integration.
+- Bad: A new `InterviewQuestion` is added to storage seeds but omitted from `interviewLaunchpadSeeds` or `interviewLaunchpadDomainSeeds`, leaving a startable question invisible in the user launchpad.
 - Bad: Compatibility API reports formal atom counts before the formal knowledge-bank source is connected.
 - Bad: Launchpad returns a recommendation for a track that is not present in `open_tracks`.
 - Bad: Frontend creates a session first and only then loads the session route chunk; a chunk failure leaves an unusable history record.
@@ -76,6 +80,7 @@
 ### 6. Tests Required
 
 - Backend: `GET /interviews/launchpad` returns startable tracks, tags, recommendation items, recent session summaries, coverage stats, and compatibility metadata.
+- Backend compatibility regression: assert the five exact track IDs, `open_track_count=5`, every track resolves through `FindInterviewQuestion`, and the operating-system track exposes its expected title, summary, role metadata, and launch parameters.
 - Frontend: `npm --prefix frontend run build` verifies response types and page adaptation.
 - Frontend: `npm --prefix frontend run lint` catches hook/data-fetching regressions.
 - Frontend E2E: abort `InterviewSessionRoute.tsx` loading, assert the page remains on `/interviews`, the error states that no record was created, and `POST /interviews/sessions` count remains zero.
@@ -117,3 +122,22 @@ navigate(`/interviews/session/${session.session_id}`)
 ```
 
 The session is persisted only after the required UI module is available.
+
+#### Wrong: seed exists but launchpad mapping is missing
+
+```go
+// Only adding the question makes direct POST /interviews/sessions work,
+// but users still cannot select it from the launchpad.
+seedInterviewQuestions(now)
+```
+
+#### Correct: keep the compatibility read model startable and visible
+
+```go
+interviewLaunchpadSeed{
+    ID: "os-l3-principle", Domain: "os", Difficulty: "L3", QuestionType: "principle",
+    Title: "操作系统 L3", Summary: "load average 高但 CPU 不高怎么排查",
+}
+```
+
+The launchpad seed and domain mapping must be added together and covered by a test that calls `FindInterviewQuestion` for the returned tuple.
