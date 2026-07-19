@@ -1,0 +1,41 @@
+{
+    "id":  "remaining-not-landed-backlog",
+    "name":  "remaining-not-landed-backlog",
+    "title":  "未落地事项 backlog 收口",
+    "description":  "盘点确认尚未落地的能力、仅代码未收口的验收项，以及文档账务过期问题；作为后续待办总账，不重复创建已有任务。",
+    "status":  "planning",
+    "dev_type":  null,
+    "scope":  null,
+    "package":  null,
+    "priority":  "P1",
+    "creator":  "Sakura",
+    "assignee":  "Sakura",
+    "createdAt":  "2026-07-18",
+    "completedAt":  null,
+    "branch":  null,
+    "base_branch":  "main",
+    "worktree_path":  null,
+    "commit":  null,
+    "pr_url":  null,
+    "subtasks":  [
+
+                 ],
+    "children":  [
+                     "07-18-topic-coverage-heatmap",
+                     "07-18-auth-refresh-token-rotation",
+                     "07-18-production-error-sanitization",
+                     "07-18-interview-history-filters",
+                     "07-18-interview-session-anchor-autohighlight",
+                     "07-18-frontend-graphics-chunk-splitting",
+                     "07-18-voice-stt-real-integration-acceptance",
+                     "07-18-ci-workflow-continuous-verification"
+                 ],
+    "parent":  null,
+    "relatedFiles":  [
+
+                     ],
+    "notes":  "2026-07-18 建账：8 个新子任务 + 7 个已有任务 notes 交叉引用。状态保持 planning 作待办总账，勿直接 task.py start 开工业务。",
+    "meta":  {
+
+             }
+}

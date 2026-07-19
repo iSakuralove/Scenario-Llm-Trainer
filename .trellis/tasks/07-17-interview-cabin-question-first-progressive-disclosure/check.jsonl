@@ -1,0 +1,5 @@
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"检查可访问性、渐进式披露和移动端行为"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"检查 lint、构建和测试覆盖"}
+{"file":".trellis/tasks/07-17-interview-cabin-question-first-progressive-disclosure/prd.md","reason":"逐项核对可测试验收标准"}
+{"file":".trellis/tasks/07-17-interview-cabin-question-first-progressive-disclosure/design.md","reason":"检查交互语义、数据流和兼容边界"}
+{"file":".trellis/tasks/07-17-interview-cabin-question-first-progressive-disclosure/implement.md","reason":"核对验证命令和风险文件"}

@@ -1,0 +1,7 @@
+{"file":".trellis/spec/frontend/index.md","reason":"前端开发入口与质量检查清单"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"面试交互组件与可访问性约定"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端测试和质量约束"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"复用现有启动配置与历史逻辑，避免重复实现"}
+{"file":".trellis/tasks/07-17-interview-cabin-question-first-progressive-disclosure/prd.md","reason":"本次功能目标与验收标准"}
+{"file":".trellis/tasks/07-17-interview-cabin-question-first-progressive-disclosure/design.md","reason":"渐进式披露的结构、状态和兼容设计"}
+{"file":".trellis/tasks/07-17-interview-cabin-question-first-progressive-disclosure/implement.md","reason":"实施顺序、验证命令和风险文件"}

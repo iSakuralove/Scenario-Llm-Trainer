@@ -1,26 +1,34 @@
 {
-  "id": "interview-cabin-domain-nav-coverage-view",
-  "name": "interview-cabin-domain-nav-coverage-view",
-  "title": "面试舱领域导航与覆盖查看交互",
-  "description": "",
-  "status": "in_progress",
-  "dev_type": null,
-  "scope": null,
-  "package": null,
-  "priority": "P2",
-  "creator": "Sakura",
-  "assignee": "Sakura",
-  "createdAt": "2026-07-06",
-  "completedAt": null,
-  "branch": null,
-  "base_branch": "main",
-  "worktree_path": null,
-  "commit": null,
-  "pr_url": null,
-  "subtasks": [],
-  "children": [],
-  "parent": null,
-  "relatedFiles": [],
-  "notes": "",
-  "meta": {}
+    "id":  "interview-cabin-domain-nav-coverage-view",
+    "name":  "interview-cabin-domain-nav-coverage-view",
+    "title":  "面试舱领域导航与覆盖查看交互",
+    "description":  "",
+    "status":  "in_progress",
+    "dev_type":  null,
+    "scope":  null,
+    "package":  null,
+    "priority":  "P2",
+    "creator":  "Sakura",
+    "assignee":  "Sakura",
+    "createdAt":  "2026-07-06",
+    "completedAt":  null,
+    "branch":  null,
+    "base_branch":  "main",
+    "worktree_path":  null,
+    "commit":  null,
+    "pr_url":  null,
+    "subtasks":  [
+
+                 ],
+    "children":  [
+
+                 ],
+    "parent":  null,
+    "relatedFiles":  [
+
+                     ],
+    "notes":  "2026-07-18 backlog: 用户侧领域导航；管理端热力图另见 07-18-topic-coverage-heatmap。",
+    "meta":  {
+
+             }
 }

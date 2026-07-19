@@ -1,26 +1,34 @@
 {
-  "id": "interview-cabin-learning-feedback-loop",
-  "name": "interview-cabin-learning-feedback-loop",
-  "title": "面试舱学习闭环回流",
-  "description": "",
-  "status": "in_progress",
-  "dev_type": null,
-  "scope": null,
-  "package": null,
-  "priority": "P2",
-  "creator": "Sakura",
-  "assignee": "Sakura",
-  "createdAt": "2026-07-06",
-  "completedAt": null,
-  "branch": null,
-  "base_branch": "main",
-  "worktree_path": null,
-  "commit": null,
-  "pr_url": null,
-  "subtasks": [],
-  "children": [],
-  "parent": null,
-  "relatedFiles": [],
-  "notes": "",
-  "meta": {}
+    "id":  "interview-cabin-learning-feedback-loop",
+    "name":  "interview-cabin-learning-feedback-loop",
+    "title":  "面试舱学习闭环回流",
+    "description":  "",
+    "status":  "in_progress",
+    "dev_type":  null,
+    "scope":  null,
+    "package":  null,
+    "priority":  "P2",
+    "creator":  "Sakura",
+    "assignee":  "Sakura",
+    "createdAt":  "2026-07-06",
+    "completedAt":  null,
+    "branch":  null,
+    "base_branch":  "main",
+    "worktree_path":  null,
+    "commit":  null,
+    "pr_url":  null,
+    "subtasks":  [
+
+                 ],
+    "children":  [
+
+                 ],
+    "parent":  null,
+    "relatedFiles":  [
+
+                     ],
+    "notes":  "2026-07-18 backlog: 报告复训回流仪表盘已有；仍缺全局覆盖趋势、轨道跳转与覆盖率统计收口。关联 07-18-remaining-not-landed-backlog。",
+    "meta":  {
+
+             }
 }

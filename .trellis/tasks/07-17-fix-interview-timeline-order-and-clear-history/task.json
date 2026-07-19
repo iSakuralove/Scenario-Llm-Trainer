@@ -1,7 +1,7 @@
 {
-    "id":  "interview-cabin-fresh-content-recommendations",
-    "name":  "interview-cabin-fresh-content-recommendations",
-    "title":  "面试舱新发布题库驱动推荐",
+    "id":  "fix-interview-timeline-order-and-clear-history",
+    "name":  "fix-interview-timeline-order-and-clear-history",
+    "title":  "fix interview timeline order and clear history",
     "description":  "",
     "status":  "in_progress",
     "dev_type":  null,
@@ -10,7 +10,7 @@
     "priority":  "P2",
     "creator":  "Sakura",
     "assignee":  "Sakura",
-    "createdAt":  "2026-07-06",
+    "createdAt":  "2026-07-17",
     "completedAt":  null,
     "branch":  null,
     "base_branch":  "main",
@@ -27,7 +27,7 @@
     "relatedFiles":  [
 
                      ],
-    "notes":  "2026-07-18 backlog: feature 明确「新发布题库」推荐源未实现；recommendInterviewLaunchpadTracks 仍主要靠未完成会话/弱项/画像/默认轨道。",
+    "notes":  "2026-07-18 backlog: 有代码与未提交改动；需 E2E/lint/build 与验收后 archive。",
     "meta":  {
 
              }

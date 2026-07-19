@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 19
-- **Last Active**: 2026-07-14
+- **Total Sessions**: 20
+- **Last Active**: 2026-07-20
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~676 | Active |
+| `journal-1.md` | ~709 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 20 | 2026-07-20 | 面试舱真实题目与简历深挖启动台上线 | `62be6f2` | `main` |
 | 19 | 2026-07-14 | 运营动作详情与状态闭环 | `c6b2afd` | `main` |
 | 18 | 2026-07-12 | 简历导入与结构化提取收口 | `a604fc4` | `main` |
 | 17 | 2026-07-05 | 面试题库运营动作候选选择保存 | `cbf7c9b` | `main` |

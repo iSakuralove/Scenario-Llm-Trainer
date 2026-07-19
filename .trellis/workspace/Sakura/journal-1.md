@@ -674,3 +674,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 20: 面试舱真实题目与简历深挖启动台上线
+
+**Date**: 2026-07-20
+**Task**: 面试舱真实题目与简历深挖启动台上线
+**Branch**: `main`
+
+### Summary
+
+完成真实单题启动台、三种面试模式、多份简历与质量门槛、简历优先推荐排序，更新本地 API 容器并通过后端、前端、Trellis 和真实浏览器验收。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `62be6f2` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
