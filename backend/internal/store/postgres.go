@@ -31,8 +31,9 @@ const promptTemplateListSelectSQL = `
 `
 
 const interviewKnowledgeAtomSelectSQL = `
-	SELECT id, title, subject, domain, difficulty, category, question_role, source_ref, tags,
-	       principles, pitfalls, follow_up_paths, status, current_version, vector_status,
+		SELECT id, title, subject, domain, difficulty, category, question_role,
+		       COALESCE(question_type, ''), COALESCE(opening_question, ''), COALESCE(stable_code, ''), source_ref, tags,
+		       principles, pitfalls, follow_up_paths, status, current_version, vector_status,
 	       last_indexed_at, created_at, updated_at
 	FROM interview_knowledge_atoms
 `
@@ -598,6 +599,7 @@ func (s *PostgresStore) CreateInterviewSession(userID string, question *domain.I
 		Status:       "question_presented",
 		CurrentRound: 1,
 		MaxRounds:    3,
+		SmartClose:   true,
 		Submissions:  []domain.InterviewSubmission{},
 		Evaluations:  []domain.InterviewEvaluation{},
 		StartedAt:    time.Now(),
@@ -608,7 +610,9 @@ func (s *PostgresStore) CreateInterviewSession(userID string, question *domain.I
 
 func (s *PostgresStore) GetInterviewSession(id string) (*domain.InterviewSession, bool) {
 	row := s.pool.QueryRow(context.Background(), `
-		SELECT id, user_id, question_id, status, current_round, max_rounds, difficulty_level, focus_areas, COALESCE(setup_notes, ''),
+			SELECT id, user_id, question_id, COALESCE(mode, ''), COALESCE(resume_document_ids, '{}'), COALESCE(candidate_context, ''),
+			       status, current_round, max_rounds, COALESCE(smart_close, TRUE), COALESCE(end_reason, ''),
+		       difficulty_level, focus_areas, COALESCE(setup_notes, ''),
 		       submissions,
 		       evaluations, follow_up_question, final_score, final_report,
 		       COALESCE(question_snapshot, '{}'::jsonb), COALESCE(selected_atom_snapshots, '[]'::jsonb),
@@ -625,7 +629,9 @@ func (s *PostgresStore) SaveInterviewSession(session *domain.InterviewSession) {
 
 func (s *PostgresStore) ListInterviewSessionsForUser(userID string) []domain.InterviewSession {
 	rows, err := s.pool.Query(context.Background(), `
-		SELECT id, user_id, question_id, status, current_round, max_rounds, difficulty_level, focus_areas, COALESCE(setup_notes, ''),
+			SELECT id, user_id, question_id, COALESCE(mode, ''), COALESCE(resume_document_ids, '{}'), COALESCE(candidate_context, ''),
+			       status, current_round, max_rounds, COALESCE(smart_close, TRUE), COALESCE(end_reason, ''),
+		       difficulty_level, focus_areas, COALESCE(setup_notes, ''),
 		       submissions,
 		       evaluations, follow_up_question, final_score, final_report,
 		       COALESCE(question_snapshot, '{}'::jsonb), COALESCE(selected_atom_snapshots, '[]'::jsonb),
@@ -1280,6 +1286,11 @@ func (s *PostgresStore) GetAsset(id string) (*domain.Asset, bool) {
 	return scanAsset(row)
 }
 
+func (s *PostgresStore) DeleteAsset(id string) bool {
+	tag, err := s.pool.Exec(context.Background(), `DELETE FROM assets WHERE id = $1`, id)
+	return err == nil && tag.RowsAffected() > 0
+}
+
 func (s *PostgresStore) ListAssetsForUser(userID string) []domain.Asset {
 	rows, err := s.pool.Query(context.Background(), `
 		SELECT id, user_id, kind, filename, mime_type, size, storage_key, url, COALESCE(checksum, ''), created_at
@@ -1683,18 +1694,21 @@ func upsertInterviewKnowledgeAtom(ctx context.Context, exec sqlExecutor, atom do
 	}
 	_, err = exec.Exec(ctx, `
 		INSERT INTO interview_knowledge_atoms
-		    (id, title, subject, domain, difficulty, category, question_role, source_ref, tags,
-		     principles, pitfalls, follow_up_paths, status, current_version, vector_status,
-		     last_indexed_at, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+			    (id, title, subject, domain, difficulty, category, question_role, question_type, opening_question, stable_code, source_ref, tags,
+			     principles, pitfalls, follow_up_paths, status, current_version, vector_status,
+			     last_indexed_at, created_at, updated_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
 		ON CONFLICT (id) DO UPDATE SET
 		    title = EXCLUDED.title,
 		    subject = EXCLUDED.subject,
 		    domain = EXCLUDED.domain,
 		    difficulty = EXCLUDED.difficulty,
 		    category = EXCLUDED.category,
-		    question_role = EXCLUDED.question_role,
-		    source_ref = EXCLUDED.source_ref,
+			    question_role = EXCLUDED.question_role,
+			    question_type = EXCLUDED.question_type,
+			    opening_question = EXCLUDED.opening_question,
+			    stable_code = EXCLUDED.stable_code,
+			    source_ref = EXCLUDED.source_ref,
 		    tags = EXCLUDED.tags,
 		    principles = EXCLUDED.principles,
 		    pitfalls = EXCLUDED.pitfalls,
@@ -1704,10 +1718,10 @@ func upsertInterviewKnowledgeAtom(ctx context.Context, exec sqlExecutor, atom do
 		    vector_status = EXCLUDED.vector_status,
 		    last_indexed_at = EXCLUDED.last_indexed_at,
 		    updated_at = EXCLUDED.updated_at
-	`, atom.ID, atom.Title, atom.Subject, atom.Domain, emptyToNil(atom.Difficulty), emptyToNil(atom.Category),
-		emptyToNil(atom.QuestionRole), emptyToNil(atom.SourceRef), atom.Tags, principlesJSON, pitfallsJSON,
-		followUpPathsJSON, atom.Status, atom.CurrentVersion, atom.VectorStatus, atom.LastIndexedAt,
-		atom.CreatedAt, atom.UpdatedAt)
+		`, atom.ID, atom.Title, atom.Subject, atom.Domain, emptyToNil(atom.Difficulty), emptyToNil(atom.Category),
+		emptyToNil(atom.QuestionRole), emptyToNil(atom.QuestionType), emptyToNil(atom.OpeningQuestion), emptyToNil(atom.StableCode),
+		emptyToNil(atom.SourceRef), atom.Tags, principlesJSON, pitfallsJSON, followUpPathsJSON, atom.Status,
+		atom.CurrentVersion, atom.VectorStatus, atom.LastIndexedAt, atom.CreatedAt, atom.UpdatedAt)
 	return err
 }
 
@@ -1813,14 +1827,19 @@ func (s *PostgresStore) upsertInterviewSession(ctx context.Context, session *dom
 	}
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO interview_sessions
-		    (id, user_id, question_id, status, current_round, max_rounds, difficulty_level, focus_areas, setup_notes, submissions,
-		     evaluations, follow_up_question, final_score, final_report, question_snapshot,
-		     selected_atom_snapshots, started_at, ended_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
-		ON CONFLICT (id) DO UPDATE SET
+			    (id, user_id, question_id, mode, resume_document_ids, candidate_context, status, current_round, max_rounds, smart_close, end_reason, difficulty_level, focus_areas, setup_notes, submissions,
+			     evaluations, follow_up_question, final_score, final_report, question_snapshot,
+			     selected_atom_snapshots, started_at, ended_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+			ON CONFLICT (id) DO UPDATE SET
+			    mode = EXCLUDED.mode,
+			    resume_document_ids = EXCLUDED.resume_document_ids,
+			    candidate_context = EXCLUDED.candidate_context,
 		    status = EXCLUDED.status,
 		    current_round = EXCLUDED.current_round,
 		    max_rounds = EXCLUDED.max_rounds,
+		    smart_close = EXCLUDED.smart_close,
+		    end_reason = EXCLUDED.end_reason,
 		    difficulty_level = EXCLUDED.difficulty_level,
 		    focus_areas = EXCLUDED.focus_areas,
 		    setup_notes = EXCLUDED.setup_notes,
@@ -1832,8 +1851,8 @@ func (s *PostgresStore) upsertInterviewSession(ctx context.Context, session *dom
 		    question_snapshot = EXCLUDED.question_snapshot,
 		    selected_atom_snapshots = EXCLUDED.selected_atom_snapshots,
 		    ended_at = EXCLUDED.ended_at
-	`, session.ID, session.UserID, session.QuestionID, session.Status, session.CurrentRound,
-		session.MaxRounds, emptyToNil(session.DifficultyLevel), session.FocusAreas, emptyToNil(session.SetupNotes),
+		`, session.ID, session.UserID, session.QuestionID, emptyToNil(session.Mode), session.ResumeDocumentIDs, emptyToNil(session.CandidateContext), session.Status, session.CurrentRound,
+		session.MaxRounds, session.SmartClose, emptyToNil(session.EndReason), emptyToNil(session.DifficultyLevel), session.FocusAreas, emptyToNil(session.SetupNotes),
 		submissionsJSON, evaluationsJSON, emptyToNil(session.FollowUpQuestion), zeroToNil(session.FinalScore),
 		emptyToNil(session.FinalReport), questionSnapshotJSON, selectedAtomSnapshotsJSON, session.StartedAt, session.EndedAt)
 	return err
@@ -2013,7 +2032,7 @@ func scanInterviewKnowledgeAtomScanner(row scanner) (domain.InterviewKnowledgeAt
 	var principlesJSON, pitfallsJSON, followUpPathsJSON []byte
 	var difficulty, category, questionRole, sourceRef *string
 	err := row.Scan(&item.ID, &item.Title, &item.Subject, &item.Domain, &difficulty, &category,
-		&questionRole, &sourceRef, &item.Tags, &principlesJSON, &pitfallsJSON, &followUpPathsJSON,
+		&questionRole, &item.QuestionType, &item.OpeningQuestion, &item.StableCode, &sourceRef, &item.Tags, &principlesJSON, &pitfallsJSON, &followUpPathsJSON,
 		&item.Status, &item.CurrentVersion, &item.VectorStatus, &item.LastIndexedAt, &item.CreatedAt,
 		&item.UpdatedAt)
 	if err != nil {
@@ -2136,8 +2155,8 @@ func scanInterviewSessionScanner(row scanner) (domain.InterviewSession, error) {
 	var followUpQuestion, finalReport *string
 	var finalScore *int
 	var endedAt *time.Time
-	err := row.Scan(&item.ID, &item.UserID, &item.QuestionID, &item.Status, &item.CurrentRound,
-		&item.MaxRounds, &item.DifficultyLevel, &item.FocusAreas, &item.SetupNotes, &submissionsJSON,
+	err := row.Scan(&item.ID, &item.UserID, &item.QuestionID, &item.Mode, &item.ResumeDocumentIDs, &item.CandidateContext, &item.Status, &item.CurrentRound,
+		&item.MaxRounds, &item.SmartClose, &item.EndReason, &item.DifficultyLevel, &item.FocusAreas, &item.SetupNotes, &submissionsJSON,
 		&evaluationsJSON, &followUpQuestion, &finalScore, &finalReport, &questionSnapshotJSON,
 		&selectedAtomSnapshotsJSON, &item.StartedAt, &endedAt)
 	if err != nil {

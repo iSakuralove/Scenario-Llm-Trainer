@@ -20,7 +20,7 @@
 - `current_version` starts at `1` for a new atom and increments by one for every version event.
 - Supported `version_type` values are `content_update`, `duplicate_import`, `manual_edit`, `archive`, `restore_archived`.
 - `duplicate_import` must still create a version row and advance `current_version`, even when content is unchanged.
-- `snapshot` must contain only stable content fields: `id`, `title`, `subject`, `domain`, `difficulty`, `category`, `question_role`, `sourceRef`, `tags`, `principles`, `pitfalls`, `followUpPaths`, `status`.
+- `snapshot` must contain only stable content fields: `id`, `title`, `subject`, `openingQuestion`, `questionType`, `stableCode`, `domain`, `difficulty`, `category`, `question_role`, `sourceRef`, `tags`, `principles`, `pitfalls`, `followUpPaths`, `status`.
 - `snapshot` must not contain runtime index fields such as `vector_status` or `last_indexed_at`.
 - `diff_summary` is display-only summary data and must not be required for restore.
 - `interview_sessions.question_snapshot` stores the opening-question snapshot.
@@ -300,8 +300,8 @@ Manual actions have a fixed source/status boundary, and future generated actions
 
 - All `/admin/interview-bank/*` routes require `domain.RoleAdmin`; non-admin users receive `403`.
 - Import payload accepts `items` or `atoms`.
-- Top-level defaults may include `batch_id`/`batchId`, `source_ref`/`sourceRef`, `domain`, `category`, `difficulty`, `question_role`/`questionRole`, `status`, `vector_status`/`vectorStatus`, and `tags`.
-- Each item must map to `InterviewKnowledgeAtom` fields and accepts snake_case/camelCase aliases for `question_role`, `source_ref`, `follow_up_paths`, and `vector_status`.
+- Top-level defaults may include `batch_id`/`batchId`, `source_ref`/`sourceRef`, `domain`, `category`, `difficulty`, `question_role`/`questionRole`, `question_type`/`questionType`, `status`, `vector_status`/`vectorStatus`, and `tags`.
+- Each item must map to `InterviewKnowledgeAtom` fields and accepts snake_case/camelCase aliases for `opening_question`, `question_type`, `stable_code`, `question_role`, `source_ref`, `follow_up_paths`, and `vector_status`.
 - `validate` must not write atoms, versions, or batches.
 - `publish` must reuse the same validation logic as `validate`.
 - Successful `publish` must call `SaveInterviewKnowledgeAtomVersioned` per valid atom and then save one `InterviewKnowledgeBatch`.
@@ -312,6 +312,9 @@ Manual actions have a fixed source/status boundary, and future generated actions
 
 - Missing `items`/`atoms` or empty list -> report error, no write.
 - Missing `id`, `title`, `subject`, `domain`, `category`, `difficulty`, `question_role`, or `source_ref` -> item error.
+- `opening|mixed` item missing `opening_question`, or opening question longer than 50 runes -> item error.
+- `question_type` outside `principle|troubleshooting|architecture|behavioral` -> item error.
+- `stable_code` outside `DOMAIN-001` style uppercase-domain-plus-number format, or duplicated by another atom -> item error.
 - `difficulty` not in `L1`-`L5` -> item error.
 - `category` not in `java`, `database`, `cache`, `middleware`, `system_design`, `frontend`, `ai_llm`, `hr_soft_skill` -> item error.
 - `question_role` not in `opening`, `followup`, `mixed` -> item error.
@@ -429,3 +432,70 @@ saved, err := store.UpdateInterviewKnowledgeAtomIndexStatus(atom.ID, "failed", n
 ```
 
 The runtime status changes without creating a version snapshot, and a failed rebuild keeps the previous `last_indexed_at`.
+
+## Scenario: Resume Documents In User Profile And Interview Snapshot
+
+### 1. Scope / Trigger
+
+- Trigger: 修改多份简历持久化、文件资产引用、简历深挖会话快照或候选人上下文。
+- Applies to: `backend/internal/domain/types.go`, `backend/internal/store/memory.go`, `backend/internal/store/postgres.go`, `backend/internal/store/schema.go`, `backend/migrations/001_schema.sql`。
+
+### 2. Signatures
+
+- Profile storage: `users.profile JSONB` contains `resume_documents: ResumeDocument[]` and `manual_resume_updated_at`.
+- Binary source storage: `assets(id, user_id, kind, filename, mime_type, size, storage_key, url, checksum, created_at)`.
+- Session columns: `interview_sessions.mode`, `resume_document_ids TEXT[]`, `candidate_context TEXT`.
+
+### 3. Contracts
+
+- Resume document metadata remains inside the owning user's profile JSONB; do not create a second resume table without a measured query need.
+- PDF/DOCX documents reference an owned asset; TXT/MD/manual documents keep editable text without duplicating binary storage.
+- Store cloning must deep-copy `ResumeDocuments` so callers cannot mutate persisted profile state through shared slices.
+- A resume-deep-dive session stores selected document IDs and the deduplicated candidate-context snapshot used at creation time.
+- Historical sessions must not silently change when the user later edits or removes a resume document.
+- `candidate_context` is session-private and must not be exposed in launchpad, history summary, retrieval logs, or admin analytics.
+- Runtime schema, legacy compatibility SQL, and Docker init migration must add the same session columns.
+
+### 4. Validation & Error Matrix
+
+| Condition | Behavior |
+|---|---|
+| Profile JSON lacks `resume_documents` | Decode as empty slice; legacy users remain valid |
+| Asset referenced by another user | Reject content access |
+| Session resume IDs do not belong to user | Reject before session persistence |
+| Session candidate context fails the shared quality gate | Reject before session persistence |
+| Existing database lacks new session columns | `LegacyCompatibilitySQL` adds them before reads/scans |
+
+### 5. Good/Base/Bad Cases
+
+- Good: User selects two documents; session stores both IDs plus one deduplicated context snapshot.
+- Base: Legacy profile has only summary/project fields; manual document projection supplies the list API.
+- Bad: Session reads live profile text on every round, so editing the profile rewrites historical interview context.
+- Bad: Retrieval logs persist the full candidate context.
+
+### 6. Tests Required
+
+- Memory/Postgres profile round-trip and clone safety for multiple documents.
+- Session create/read scans `mode`, `resume_document_ids`, and `candidate_context` consistently.
+- Schema text assertions cover runtime, compatibility, and migration SQL.
+- Resume session tests prove ownership, quality gate, deduplication, and snapshot stability.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```go
+session.CandidateContext = user.Profile.ResumeSummary
+```
+
+This ignores selected documents and allows unrelated live profile changes to affect the session.
+
+#### Correct
+
+```go
+context, ids, err := resumeInterviewContext(user.Profile, request.ResumeIDs)
+session.ResumeDocumentIDs = ids
+session.CandidateContext = context
+```
+
+The session records the exact validated context used to start the interview.

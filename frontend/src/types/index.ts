@@ -21,6 +21,8 @@ export interface UserProfile {
   preferred_domains: string[]
   resume_summary?: string
   project_summary?: string
+  resume_documents?: ResumeDocument[]
+  manual_resume_updated_at?: string
   capability_radar: Record<string, number>
   weak_points: WeakPoint[]
   total_stats: TotalStats
@@ -58,6 +60,23 @@ export interface ScenarioQuestion {
   creator_role?: UserRole | string
   version: number
   is_sanitized: boolean
+}
+
+export interface ResumeDocument {
+  id: string
+  name: string
+  source_type: 'manual' | 'upload' | string
+  format: string
+  asset_id?: string
+  content_url?: string
+  content?: string
+  extracted_text: string
+  parse_status: string
+  quality_status: 'passed' | 'rejected' | string
+  quality_reason?: string
+  editable: boolean
+  created_at: string
+  updated_at: string
 }
 
 export interface ScenarioGenerationConstraints {
@@ -501,6 +520,9 @@ export interface InterviewKnowledgeAtom {
   difficulty: string
   category: string
   question_role: string
+  question_type?: string
+  opening_question?: string
+  stable_code?: string
   source_ref: string
   tags: string[]
   principles: string[]
@@ -522,6 +544,9 @@ export interface InterviewKnowledgeAtomSnapshot {
   difficulty: string
   category: string
   question_role: string
+  question_type?: string
+  opening_question?: string
+  stable_code?: string
   sourceRef: string
   tags: string[]
   principles: string[]
@@ -552,6 +577,9 @@ export interface InterviewKnowledgeAtomUpdateRequest {
   difficulty: string
   category: string
   question_role: string
+  question_type: string
+  opening_question: string
+  stable_code: string
   source_ref: string
   tags: string[]
   principles: string[]
@@ -1034,9 +1062,13 @@ export interface InterviewSession {
   id: string
   user_id: string
   question_id: string
+  mode?: 'free' | 'role' | 'resume_deep_dive' | string
+  resume_document_ids?: string[]
   status: string
   current_round: number
   max_rounds: number
+  smart_close?: boolean
+  end_reason?: string
   difficulty_level?: InterviewDifficultyLevel | string
   focus_areas?: InterviewFocusArea[]
   setup_notes?: string
@@ -1050,6 +1082,7 @@ export interface InterviewSession {
   started_at?: string
   ended_at?: string
 }
+
 
 export interface InterviewQuestionSnapshot {
   id: string

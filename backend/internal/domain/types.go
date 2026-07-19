@@ -39,17 +39,36 @@ type User struct {
 }
 
 type UserProfile struct {
-	TargetLevel      string         `json:"target_level"`
-	TargetRole       string         `json:"target_role,omitempty"`
-	PreferredDomains []string       `json:"preferred_domains"`
-	ResumeSummary    string         `json:"resume_summary,omitempty"`
-	ProjectSummary   string         `json:"project_summary,omitempty"`
-	CapabilityRadar  map[string]int `json:"capability_radar"`
-	WeakPoints       []WeakPoint    `json:"weak_points"`
-	TotalStats       TotalStats     `json:"total_stats"`
-	CheckinDates     []string       `json:"checkin_dates,omitempty"`
-	LastCheckinDate  string         `json:"last_checkin_date,omitempty"`
-	UpdatedAt        time.Time      `json:"updated_at"`
+	TargetLevel           string           `json:"target_level"`
+	TargetRole            string           `json:"target_role,omitempty"`
+	PreferredDomains      []string         `json:"preferred_domains"`
+	ResumeSummary         string           `json:"resume_summary,omitempty"`
+	ProjectSummary        string           `json:"project_summary,omitempty"`
+	ResumeDocuments       []ResumeDocument `json:"resume_documents,omitempty"`
+	ManualResumeUpdatedAt *time.Time       `json:"manual_resume_updated_at,omitempty"`
+	CapabilityRadar       map[string]int   `json:"capability_radar"`
+	WeakPoints            []WeakPoint      `json:"weak_points"`
+	TotalStats            TotalStats       `json:"total_stats"`
+	CheckinDates          []string         `json:"checkin_dates,omitempty"`
+	LastCheckinDate       string           `json:"last_checkin_date,omitempty"`
+	UpdatedAt             time.Time        `json:"updated_at"`
+}
+
+type ResumeDocument struct {
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	SourceType    string    `json:"source_type"`
+	Format        string    `json:"format"`
+	AssetID       string    `json:"asset_id,omitempty"`
+	ContentURL    string    `json:"content_url,omitempty"`
+	Content       string    `json:"content,omitempty"`
+	ExtractedText string    `json:"extracted_text"`
+	ParseStatus   string    `json:"parse_status"`
+	QualityStatus string    `json:"quality_status"`
+	QualityReason string    `json:"quality_reason,omitempty"`
+	Editable      bool      `json:"editable"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type WeakPoint struct {
@@ -361,9 +380,14 @@ type InterviewSession struct {
 	ID                    string                                `json:"id"`
 	UserID                string                                `json:"user_id"`
 	QuestionID            string                                `json:"question_id"`
+	Mode                  string                                `json:"mode,omitempty"`
+	ResumeDocumentIDs     []string                              `json:"resume_document_ids,omitempty"`
+	CandidateContext      string                                `json:"-"`
 	Status                string                                `json:"status"`
 	CurrentRound          int                                   `json:"current_round"`
 	MaxRounds             int                                   `json:"max_rounds"`
+	SmartClose            bool                                  `json:"smart_close"`
+	EndReason             string                                `json:"end_reason,omitempty"`
 	DifficultyLevel       string                                `json:"difficulty_level,omitempty"`
 	FocusAreas            []string                              `json:"focus_areas,omitempty"`
 	SetupNotes            string                                `json:"setup_notes,omitempty"`

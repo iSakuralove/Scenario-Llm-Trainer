@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"net/http"
 	agentruntime "situational-teaching/backend/internal/agent"
 	"situational-teaching/backend/internal/ai"
@@ -10,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 func (s *Server) handleInterviews(w http.ResponseWriter, r *http.Request, user *domain.User, suffix string) {
@@ -20,23 +22,31 @@ func (s *Server) handleInterviews(w http.ResponseWriter, r *http.Request, user *
 	}
 	if len(parts) == 1 && parts[0] == "sessions" && r.Method == http.MethodPost {
 		var req struct {
+			Mode            string   `json:"mode"`
+			QuestionID      string   `json:"question_id"`
+			ResumeIDs       []string `json:"resume_ids"`
 			Domain          string   `json:"domain"`
 			Difficulty      string   `json:"difficulty"`
 			QuestionType    string   `json:"question_type"`
 			DifficultyLevel string   `json:"difficulty_level"`
 			FocusAreas      []string `json:"focus_areas"`
 			SetupNotes      string   `json:"setup_notes"`
+			MaxRounds       int      `json:"max_rounds"`
+			SmartClose      *bool    `json:"smart_close"`
 		}
 		if !decode(w, r, &req) {
 			return
 		}
+		req.Mode = firstNonEmpty(strings.TrimSpace(req.Mode), "free")
+		req.QuestionID = strings.TrimSpace(req.QuestionID)
 		req.Domain = strings.TrimSpace(req.Domain)
 		req.Difficulty = strings.TrimSpace(req.Difficulty)
 		req.QuestionType = strings.TrimSpace(req.QuestionType)
 		req.DifficultyLevel = strings.TrimSpace(req.DifficultyLevel)
 		req.SetupNotes = truncateText(req.SetupNotes, 2000)
-		if req.Domain == "" || req.Difficulty == "" || req.QuestionType == "" {
-			writeError(w, http.StatusBadRequest, "domain, difficulty and question_type are required")
+		maxRounds, err := normalizeInterviewMaxRounds(req.MaxRounds)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		focusAreas, err := normalizeInterviewFocusAreas(req.FocusAreas)
@@ -44,12 +54,51 @@ func (s *Server) handleInterviews(w http.ResponseWriter, r *http.Request, user *
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		question, questionSnapshot, ok := s.selectInterviewOpeningQuestion(req.Domain, req.Difficulty, req.QuestionType)
+		var question *domain.InterviewQuestion
+		var questionSnapshot domain.InterviewQuestionSnapshot
+		resumeDocumentIDs := []string{}
+		candidateContext := ""
+		ok := false
+		switch req.Mode {
+		case "resume_deep_dive":
+			var contextErr error
+			candidateContext, resumeDocumentIDs, contextErr = resumeInterviewContext(user.Profile, req.ResumeIDs)
+			if contextErr != nil {
+				writeError(w, http.StatusBadRequest, contextErr.Error())
+				return
+			}
+			question = resumeInterviewOpeningQuestion(candidateContext)
+			questionSnapshot = interviewQuestionSnapshotFromQuestion(question)
+			ok = true
+		case "free":
+			if req.QuestionID != "" {
+				question, questionSnapshot, ok = s.selectInterviewOpeningQuestionByID(req.QuestionID)
+			} else if req.Domain != "" && req.Difficulty != "" && req.QuestionType != "" {
+				question, questionSnapshot, ok = s.selectInterviewOpeningQuestion(req.Domain, req.Difficulty, req.QuestionType)
+			} else {
+				writeError(w, http.StatusBadRequest, "domain, difficulty and question_type are required")
+				return
+			}
+		case "role":
+			if req.Domain == "" || req.Difficulty == "" || req.QuestionType == "" {
+				writeError(w, http.StatusBadRequest, "domain, difficulty and question_type are required")
+				return
+			}
+			question, questionSnapshot, ok = s.selectInterviewOpeningQuestion(req.Domain, req.Difficulty, req.QuestionType)
+		default:
+			writeError(w, http.StatusBadRequest, "interview mode is invalid")
+			return
+		}
 		if !ok {
 			writeError(w, http.StatusNotFound, "interview question not found")
 			return
 		}
 		session := s.store.CreateInterviewSession(user.ID, question)
+		session.Mode = req.Mode
+		session.ResumeDocumentIDs = resumeDocumentIDs
+		session.CandidateContext = candidateContext
+		session.MaxRounds = maxRounds
+		session.SmartClose = req.SmartClose == nil || *req.SmartClose
 		session.DifficultyLevel = req.DifficultyLevel
 		session.FocusAreas = focusAreas
 		session.SetupNotes = req.SetupNotes
@@ -136,8 +185,97 @@ func (s *Server) handleInterviews(w http.ResponseWriter, r *http.Request, user *
 	writeError(w, http.StatusNotFound, "not found")
 }
 
+func resumeInterviewContext(profile domain.UserProfile, requestedIDs []string) (string, []string, error) {
+	documents := resumeDocumentsForProfile(profile)
+	documentByID := map[string]domain.ResumeDocument{}
+	for _, document := range documents {
+		documentByID[document.ID] = document
+	}
+	selectedIDs := uniqueStrings(requestedIDs)
+	if len(selectedIDs) == 0 {
+		return "", nil, fmt.Errorf("请至少选择一份可用简历")
+	}
+	lines := []string{}
+	seenLines := map[string]bool{}
+	for _, id := range selectedIDs {
+		document, ok := documentByID[id]
+		if !ok {
+			return "", nil, fmt.Errorf("所选简历不存在或无权访问")
+		}
+		if document.QualityStatus != "passed" {
+			return "", nil, fmt.Errorf("简历「%s」未通过内容检查，请先完善个人档案", document.Name)
+		}
+		for _, line := range strings.Split(strings.ReplaceAll(document.ExtractedText, "\r\n", "\n"), "\n") {
+			line = strings.TrimSpace(line)
+			key := strings.ToLower(line)
+			if line == "" || seenLines[key] {
+				continue
+			}
+			seenLines[key] = true
+			lines = append(lines, line)
+		}
+	}
+	contextText := strings.Join(lines, "\n")
+	_, resumeSummary, projectSummary := extractStructuredResumeFields(contextText)
+	if ok, reason := resumeContentQuality(resumeSummary, projectSummary); !ok {
+		return "", nil, fmt.Errorf("%s，请先完善个人档案", reason)
+	}
+	return contextText, selectedIDs, nil
+}
+
+func resumeInterviewOpeningQuestion(candidateContext string) *domain.InterviewQuestion {
+	project := resumeInterviewProjectAnchor(candidateContext)
+	hasResponsibility := strings.Contains(candidateContext, "负责") || strings.Contains(candidateContext, "职责") || strings.Contains(strings.ToLower(candidateContext), "responsible")
+	description := fmt.Sprintf("请先说明你在「%s」中实际负责的部分。", project)
+	if hasResponsibility {
+		description = fmt.Sprintf("在「%s」中，你做过的哪项技术决策最关键？", project)
+	}
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(candidateContext))
+	return &domain.InterviewQuestion{
+		ID:                   fmt.Sprintf("resume-deep-dive:%08x", hash.Sum32()),
+		Title:                "简历深挖",
+		Description:          description,
+		Domain:               "resume",
+		Difficulty:           "L3",
+		QuestionType:         "resume_deep_dive",
+		ReferenceKeywords:    []string{"个人职责", "技术决策", "结果复盘"},
+		EvaluationDimensions: defaultInterviewEvaluationDimensions(),
+		FollowUpStrategies:   []domain.FollowUpStrategy{},
+		CreatedAt:            time.Now(),
+	}
+}
+
+func resumeInterviewProjectAnchor(candidateContext string) string {
+	_, _, projectSummary := extractStructuredResumeFields(candidateContext)
+	if strings.TrimSpace(projectSummary) != "" {
+		for _, line := range normalizeResumeLines(projectSummary) {
+			parts := strings.FieldsFunc(line, func(r rune) bool {
+				return r == '，' || r == ',' || r == '。' || r == ';' || r == '；'
+			})
+			if len(parts) > 0 && strings.TrimSpace(parts[0]) != "" {
+				return truncateText(strings.TrimSpace(parts[0]), 28)
+			}
+		}
+	}
+	candidates := normalizeResumeLines(firstNonEmpty(projectSummary, candidateContext))
+	for _, line := range candidates {
+		cleaned := strings.TrimSpace(strings.TrimLeft(line, "#*-0123456789.、 "))
+		if cleaned == "" {
+			continue
+		}
+		if strings.Contains(cleaned, "项目") || strings.Contains(strings.ToLower(cleaned), "project") {
+			return truncateText(cleaned, 28)
+		}
+	}
+	return "最近一个项目"
+}
+
 type interviewLaunchpadTrack struct {
 	ID                  string    `json:"id"`
+	QuestionID          string    `json:"question_id"`
+	StableCode          string    `json:"stable_code"`
+	OpeningQuestion     string    `json:"opening_question"`
 	Title               string    `json:"title"`
 	Domain              string    `json:"domain"`
 	DomainLabel         string    `json:"domain_label"`
@@ -154,6 +292,7 @@ type interviewLaunchpadTrack struct {
 	UnavailableReason   string    `json:"unavailable_reason,omitempty"`
 	VectorStatusSummary string    `json:"vector_status_summary"`
 	LatestUpdatedAt     time.Time `json:"latest_updated_at,omitempty"`
+	Practiced           bool      `json:"practiced"`
 }
 
 type interviewLaunchpadDomain struct {
@@ -166,6 +305,9 @@ type interviewLaunchpadDomain struct {
 
 type interviewLaunchpadRecommendation struct {
 	ID                  string   `json:"id"`
+	QuestionID          string   `json:"question_id"`
+	StableCode          string   `json:"stable_code"`
+	OpeningQuestion     string   `json:"opening_question"`
 	Title               string   `json:"title"`
 	Domain              string   `json:"domain"`
 	DomainLabel         string   `json:"domain_label"`
@@ -182,6 +324,7 @@ type interviewLaunchpadRecommendation struct {
 	VectorStatusSummary string   `json:"vector_status_summary"`
 	Reason              string   `json:"reason"`
 	SourceKind          string   `json:"source_kind"`
+	Practiced           bool     `json:"practiced"`
 }
 
 type interviewLaunchpadRecentSession struct {
@@ -215,6 +358,10 @@ func (s *Server) interviewLaunchpad(user *domain.User) map[string]interface{} {
 	// 正式原子轨道与兼容种子题合并：少量正式题不应覆盖既有可开场题。
 	seedTracks := s.interviewLaunchpadSeedTracks()
 	tracks := mergeInterviewLaunchpadTracks(atomTracks, seedTracks)
+	if user != nil {
+		markInterviewLaunchpadPractice(tracks, s.store.ListInterviewSessionsForUser(user.ID))
+	}
+	sortInterviewLaunchpadTracks(user, tracks)
 	domainCounts := map[string]int{}
 	difficulties := []string{}
 	questionTypes := []string{}
@@ -236,9 +383,9 @@ func (s *Server) interviewLaunchpad(user *domain.User) map[string]interface{} {
 		if count == 0 {
 			continue
 		}
-			seed.OpenTrackCount = count
-			domains = append(domains, seed)
-		}
+		seed.OpenTrackCount = count
+		domains = append(domains, seed)
+	}
 	// 补充正式题库里但未进入种子域列表的领域（如临时导入的 java）。
 	for domainName, count := range domainCounts {
 		found := false
@@ -302,15 +449,13 @@ func (s *Server) interviewLaunchpadCoverageStats(user *domain.User, tracks []int
 		return stats
 	}
 
-	trackIDByKey := map[string]string{}
+	trackIDByQuestion := map[string]string{}
 	for _, track := range tracks {
-		key := interviewLaunchpadCoverageKey(track.Domain, track.Difficulty)
-		if key == "" {
+		questionID := strings.TrimSpace(track.QuestionID)
+		if questionID == "" {
 			continue
 		}
-		if _, exists := trackIDByKey[key]; !exists {
-			trackIDByKey[key] = track.ID
-		}
+		trackIDByQuestion[questionID] = track.ID
 	}
 	if user == nil {
 		for _, track := range tracks {
@@ -319,7 +464,7 @@ func (s *Server) interviewLaunchpadCoverageStats(user *domain.User, tracks []int
 		return stats
 	}
 
-	practicedTrackKeys := map[string]bool{}
+	practicedQuestionIDs := map[string]bool{}
 	practicedDomains := []string{}
 	practicedDifficulties := []string{}
 	subjectCounts := map[string]int{}
@@ -345,10 +490,15 @@ func (s *Server) interviewLaunchpadCoverageStats(user *domain.User, tracks []int
 			practicedDifficulties = append(practicedDifficulties, difficultyValue)
 		}
 
-		if key := interviewLaunchpadCoverageKey(domainValue, difficultyValue); key != "" {
-			if _, ok := trackIDByKey[key]; ok {
-				practicedTrackKeys[key] = true
+		questionID := session.QuestionID
+		if strings.HasPrefix(questionID, "interview-knowledge:") {
+			questionID = strings.TrimPrefix(questionID, "interview-knowledge:")
+			if versionIndex := strings.LastIndex(questionID, ":v"); versionIndex > 0 {
+				questionID = questionID[:versionIndex]
 			}
+		}
+		if _, ok := trackIDByQuestion[questionID]; ok {
+			practicedQuestionIDs[questionID] = true
 		}
 
 		reportSummary := buildInterviewReportRetrievalSummary(&session)
@@ -382,7 +532,7 @@ func (s *Server) interviewLaunchpadCoverageStats(user *domain.User, tracks []int
 		}
 	}
 
-	stats.PracticedOpenTracks = len(practicedTrackKeys)
+	stats.PracticedOpenTracks = len(practicedQuestionIDs)
 	stats.PracticedDomains = uniqueStrings(practicedDomains)
 	stats.PracticedDifficulties = uniqueStrings(practicedDifficulties)
 	stats.SubjectCount = len(subjectCounts)
@@ -412,8 +562,7 @@ func (s *Server) interviewLaunchpadCoverageStats(user *domain.User, tracks []int
 	}
 
 	for _, track := range tracks {
-		key := interviewLaunchpadCoverageKey(track.Domain, track.Difficulty)
-		if key != "" && practicedTrackKeys[key] {
+		if practicedQuestionIDs[track.QuestionID] {
 			continue
 		}
 		stats.UncoveredTrackIDs = append(stats.UncoveredTrackIDs, track.ID)
@@ -500,6 +649,9 @@ func (s *Server) recommendInterviewLaunchpadTracks(user *domain.User, tracks []i
 		seen[track.ID] = true
 		items = append(items, interviewLaunchpadRecommendation{
 			ID:                  track.ID,
+			QuestionID:          track.QuestionID,
+			StableCode:          track.StableCode,
+			OpeningQuestion:     track.OpeningQuestion,
 			Title:               track.Title,
 			Domain:              track.Domain,
 			DomainLabel:         track.DomainLabel,
@@ -516,6 +668,7 @@ func (s *Server) recommendInterviewLaunchpadTracks(user *domain.User, tracks []i
 			VectorStatusSummary: track.VectorStatusSummary,
 			Reason:              reason,
 			SourceKind:          sourceKind,
+			Practiced:           track.Practiced,
 		})
 	}
 	findTrack := func(domainValue, difficultyValue string) *interviewLaunchpadTrack {
@@ -709,18 +862,7 @@ func trackVectorStatusSummaries(tracks []interviewLaunchpadTrack) []string {
 
 func (s *Server) interviewLaunchpadAtomTracks() []interviewLaunchpadTrack {
 	atoms := s.store.ListInterviewKnowledgeAtoms(domain.InterviewKnowledgeAtomFilter{Status: "published"})
-	type bucket struct {
-		category     string
-		difficulty   string
-		domainLabel  string
-		published    int
-		indexed      int
-		roles        []string
-		tags         []string
-		subjects     []string
-		latestUpdate time.Time
-	}
-	buckets := map[string]*bucket{}
+	tracks := make([]interviewLaunchpadTrack, 0, len(atoms))
 	for _, atom := range atoms {
 		if atom.QuestionRole != "opening" && atom.QuestionRole != "mixed" {
 			continue
@@ -729,65 +871,42 @@ func (s *Server) interviewLaunchpadAtomTracks() []interviewLaunchpadTrack {
 		if category == "" || atom.Difficulty == "" {
 			continue
 		}
-		key := category + ":" + atom.Difficulty
-		item := buckets[key]
-		if item == nil {
-			item = &bucket{category: category, difficulty: atom.Difficulty, domainLabel: interviewLaunchpadDomainLabel(category)}
-			buckets[key] = item
+		questionType := normalizeLaunchpadQuestionType(atom.QuestionType)
+		openingQuestion := strings.TrimSpace(atom.OpeningQuestion)
+		if openingQuestion == "" {
+			openingQuestion = firstNonEmpty(atom.Title, atom.Subject)
 		}
-		item.published++
+		indexed := 0
 		if atom.VectorStatus == "indexed" {
-			item.indexed++
-		}
-		item.roles = append(item.roles, atom.QuestionRole)
-		item.tags = append(item.tags, atom.Tags...)
-		item.subjects = append(item.subjects, firstNonEmpty(atom.Subject, atom.Title))
-		if atom.UpdatedAt.After(item.latestUpdate) {
-			item.latestUpdate = atom.UpdatedAt
-		}
-	}
-	tracks := make([]interviewLaunchpadTrack, 0, len(buckets))
-	for _, item := range buckets {
-		vectorSummary := "pending_or_failed"
-		if item.indexed == item.published {
-			vectorSummary = "indexed"
-		} else if item.indexed > 0 {
-			vectorSummary = "partial_indexed"
-		}
-		subjects := uniqueStrings(item.subjects)
-		if len(subjects) > 3 {
-			subjects = subjects[:3]
-		}
-		details := []string{"题库开场题", fmt.Sprintf("published %d", item.published)}
-		if item.indexed > 0 {
-			details = append(details, fmt.Sprintf("indexed %d", item.indexed))
-		} else {
-			details = append(details, "追问检索可回退")
+			indexed = 1
 		}
 		tracks = append(tracks, interviewLaunchpadTrack{
-			ID:                  fmt.Sprintf("interview-bank-%s-%s", item.category, strings.ToLower(item.difficulty)),
-			Title:               fmt.Sprintf("%s %s", item.domainLabel, item.difficulty),
-			Domain:              item.category,
-			DomainLabel:         item.domainLabel,
-			Category:            item.category,
-			Difficulty:          item.difficulty,
-			QuestionType:        "principle",
-			QuestionRole:        "opening",
-			Tags:                uniqueStrings(item.tags),
-			Summary:             firstNonEmpty(strings.Join(subjects, " / "), "正式题库开放组合"),
-			Details:             details,
-			PublishedCount:      item.published,
-			IndexedCount:        item.indexed,
+			ID:                  atom.ID,
+			QuestionID:          atom.ID,
+			StableCode:          firstNonEmpty(atom.StableCode, legacyInterviewStableCode(category, atom.ID)),
+			OpeningQuestion:     openingQuestion,
+			Title:               firstNonEmpty(atom.Title, openingQuestion),
+			Domain:              category,
+			DomainLabel:         interviewLaunchpadDomainLabel(category),
+			Category:            category,
+			Difficulty:          atom.Difficulty,
+			QuestionType:        questionType,
+			QuestionRole:        atom.QuestionRole,
+			Tags:                uniqueStrings(atom.Tags),
+			Summary:             openingQuestion,
+			Details:             []string{},
+			PublishedCount:      1,
+			IndexedCount:        indexed,
 			AvailabilityState:   "available",
-			VectorStatusSummary: vectorSummary,
-			LatestUpdatedAt:     item.latestUpdate,
+			VectorStatusSummary: firstNonEmpty(atom.VectorStatus, "pending"),
+			LatestUpdatedAt:     atom.UpdatedAt,
 		})
 	}
 	sort.Slice(tracks, func(i, j int) bool {
-		if tracks[i].Domain == tracks[j].Domain {
-			return tracks[i].Difficulty < tracks[j].Difficulty
+		if tracks[i].LatestUpdatedAt.Equal(tracks[j].LatestUpdatedAt) {
+			return tracks[i].ID < tracks[j].ID
 		}
-		return tracks[i].Domain < tracks[j].Domain
+		return tracks[i].LatestUpdatedAt.After(tracks[j].LatestUpdatedAt)
 	})
 	return tracks
 }
@@ -801,15 +920,18 @@ func (s *Server) interviewLaunchpadSeedTracks() []interviewLaunchpadTrack {
 		}
 		tracks = append(tracks, interviewLaunchpadTrack{
 			ID:                  seed.ID,
+			QuestionID:          question.ID,
+			StableCode:          legacyInterviewStableCode(seed.Domain, question.ID),
+			OpeningQuestion:     question.Description,
 			Title:               seed.Title,
 			Domain:              seed.Domain,
 			DomainLabel:         seed.DomainLabel,
 			Category:            seed.Domain,
 			Difficulty:          seed.Difficulty,
-			QuestionType:        seed.QuestionType,
+			QuestionType:        normalizeLaunchpadQuestionType(seed.QuestionType),
 			QuestionRole:        seed.QuestionRole,
 			Tags:                []string{},
-			Summary:             firstNonEmpty(seed.Summary, question.Description),
+			Summary:             question.Description,
 			Details:             append([]string{}, seed.Details...),
 			PublishedCount:      1,
 			IndexedCount:        0,
@@ -822,24 +944,17 @@ func (s *Server) interviewLaunchpadSeedTracks() []interviewLaunchpadTrack {
 }
 
 func mergeInterviewLaunchpadTracks(atomTracks, seedTracks []interviewLaunchpadTrack) []interviewLaunchpadTrack {
-	// 同 domain+difficulty 优先正式原子轨道，避免重复卡片。
-	seenKeys := map[string]bool{}
+	seenQuestions := map[string]bool{}
 	tracks := make([]interviewLaunchpadTrack, 0, len(atomTracks)+len(seedTracks))
 	for _, track := range atomTracks {
-		key := interviewLaunchpadCoverageKey(track.Domain, track.Difficulty)
-		if key != "" {
-			seenKeys[key] = true
-		}
+		seenQuestions[track.QuestionID] = true
 		tracks = append(tracks, track)
 	}
 	for _, track := range seedTracks {
-		key := interviewLaunchpadCoverageKey(track.Domain, track.Difficulty)
-		if key != "" && seenKeys[key] {
+		if track.QuestionID != "" && seenQuestions[track.QuestionID] {
 			continue
 		}
-		if key != "" {
-			seenKeys[key] = true
-		}
+		seenQuestions[track.QuestionID] = true
 		tracks = append(tracks, track)
 	}
 	sort.Slice(tracks, func(i, j int) bool {
@@ -852,6 +967,109 @@ func mergeInterviewLaunchpadTracks(atomTracks, seedTracks []interviewLaunchpadTr
 		return tracks[i].Domain < tracks[j].Domain
 	})
 	return tracks
+}
+
+func normalizeLaunchpadQuestionType(value string) string {
+	switch strings.TrimSpace(value) {
+	case "principle", "troubleshooting", "architecture", "behavioral":
+		return strings.TrimSpace(value)
+	case "scenario_analysis":
+		return "troubleshooting"
+	default:
+		return "principle"
+	}
+}
+
+func legacyInterviewStableCode(domainValue, questionID string) string {
+	prefixes := map[string]string{
+		"java": "JAVA", "database": "DB", "cache": "CACHE", "middleware": "MID",
+		"system_design": "SYS", "frontend": "FE", "ai_llm": "AI", "hr_soft_skill": "HR",
+		"network": "NET", "os": "OS", "security": "SEC", "devops": "DEVOPS",
+	}
+	prefix := prefixes[strings.TrimSpace(domainValue)]
+	if prefix == "" {
+		prefix = "Q"
+	}
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(strings.TrimSpace(questionID)))
+	return fmt.Sprintf("%s-%09d", prefix, hash.Sum32())
+}
+
+func markInterviewLaunchpadPractice(tracks []interviewLaunchpadTrack, sessions []domain.InterviewSession) {
+	practiced := map[string]bool{}
+	for _, session := range sessions {
+		if session.Status == "invalidated" {
+			continue
+		}
+		questionID := session.QuestionID
+		if strings.HasPrefix(questionID, "interview-knowledge:") {
+			questionID = strings.TrimPrefix(questionID, "interview-knowledge:")
+			if versionIndex := strings.LastIndex(questionID, ":v"); versionIndex > 0 {
+				questionID = questionID[:versionIndex]
+			}
+		}
+		practiced[questionID] = true
+	}
+	for index := range tracks {
+		tracks[index].Practiced = practiced[tracks[index].QuestionID]
+	}
+}
+
+func sortInterviewLaunchpadTracks(user *domain.User, tracks []interviewLaunchpadTrack) {
+	resumeText := ""
+	targetRoleText := ""
+	if user != nil {
+		targetRoleText = strings.ToLower(strings.TrimSpace(user.Profile.TargetRole))
+		parts := make([]string, 0, len(user.Profile.ResumeDocuments)+1)
+		for _, document := range resumeDocumentsForProfile(user.Profile) {
+			if document.QualityStatus == "passed" {
+				parts = append(parts, document.ExtractedText)
+			}
+		}
+		resumeText = strings.ToLower(strings.Join(parts, "\n"))
+	}
+	sort.SliceStable(tracks, func(i, j int) bool {
+		leftScore := interviewLaunchpadResumeScore(resumeText, tracks[i])
+		rightScore := interviewLaunchpadResumeScore(resumeText, tracks[j])
+		if leftScore != rightScore {
+			return leftScore > rightScore
+		}
+		leftScore = interviewLaunchpadResumeScore(targetRoleText, tracks[i])
+		rightScore = interviewLaunchpadResumeScore(targetRoleText, tracks[j])
+		if leftScore != rightScore {
+			return leftScore > rightScore
+		}
+		if tracks[i].Practiced != tracks[j].Practiced {
+			return !tracks[i].Practiced
+		}
+		if !tracks[i].LatestUpdatedAt.Equal(tracks[j].LatestUpdatedAt) {
+			return tracks[i].LatestUpdatedAt.After(tracks[j].LatestUpdatedAt)
+		}
+		return tracks[i].ID < tracks[j].ID
+	})
+}
+
+func interviewLaunchpadResumeScore(resumeText string, track interviewLaunchpadTrack) int {
+	if strings.TrimSpace(resumeText) == "" {
+		return 0
+	}
+	score := 0
+	seen := map[string]bool{}
+	terms := append([]string{track.Domain, track.DomainLabel, track.Category}, track.Tags...)
+	terms = append(terms, strings.FieldsFunc(track.Title+" "+track.OpeningQuestion, func(r rune) bool {
+		return unicode.IsSpace(r) || strings.ContainsRune("，。！？、：:,.!?/()（）[]【】", r)
+	})...)
+	for _, term := range terms {
+		term = strings.ToLower(strings.TrimSpace(term))
+		if len([]rune(term)) < 2 || seen[term] {
+			continue
+		}
+		seen[term] = true
+		if strings.Contains(resumeText, term) {
+			score++
+		}
+	}
+	return score
 }
 
 type interviewLaunchpadSeed struct {

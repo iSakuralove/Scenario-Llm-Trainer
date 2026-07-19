@@ -60,6 +60,7 @@ type Store interface {
 	CreateAsset(asset domain.Asset) (domain.Asset, error)
 	GetAsset(id string) (*domain.Asset, bool)
 	ListAssetsForUser(userID string) []domain.Asset
+	DeleteAsset(id string) bool
 
 	CreateAIJob(job domain.AIJob) (domain.AIJob, error)
 	GetAIJob(id string) (*domain.AIJob, bool)

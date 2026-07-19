@@ -89,7 +89,7 @@
 - `interview_bank_ops_action_history`
   保存运营动作每次状态变更的独立审计记录，记录 `from_status`、`to_status`、备注、操作者和时间；主表只保留当前状态，不把历史塞进 `evidence`。
 
-版本快照只包含稳定内容字段：`id`、`title`、`subject`、`domain`、`difficulty`、`category`、`question_role`、`sourceRef`、`tags`、`principles`、`pitfalls`、`followUpPaths`、`status`。`vector_status` 和 `last_indexed_at` 属于运行时索引状态，不进入版本快照。
+版本快照只包含稳定内容字段：`id`、`title`、`subject`、`openingQuestion`、`questionType`、`stableCode`、`domain`、`difficulty`、`category`、`question_role`、`sourceRef`、`tags`、`principles`、`pitfalls`、`followUpPaths`、`status`。`vector_status` 和 `last_indexed_at` 属于运行时索引状态，不进入版本快照。
 
 ## 面试题库治理管理端
 
@@ -153,19 +153,22 @@
 
 面试运行时在旧题库兼容链路上接入正式题库原子，但保持“开场题选择”和“追问增强”两个阶段分离：
 
-- 创建面试会话仍以启动轨道的 `domain`、`difficulty`、`question_type` 决定开场题；优先选择 `status=published` 且 `question_role=opening|mixed` 的题库原子，未命中时回退旧 `InterviewQuestion`。
+- 自由选题通过 `question_id` 精确启动一个 `status=published` 且 `question_role=opening|mixed` 的题库原子；岗位专项继续通过受控的 `domain + difficulty + question_type` 选择题库原子，未命中时回退兼容 `InterviewQuestion`。
 - 会话级输入首期只包含 `difficulty_level`、`focus_areas[]`、`setup_notes`，不参与开场题选择，只进入追问检索和反馈生成。
-- 长期个人档案只保存 `resume_summary` 与 `project_summary`，前端可把它们合成为本场 `setup_notes` 的默认输入，但不会把本场输入回写到个人档案。
+- 个人档案在 `users.profile` JSONB 内保存多份 `resume_documents`；手动 `resume_summary` 与 `project_summary` 投影成一份可编辑文档，PDF/DOCX 通过现有 `assets` 保存原文件并只读展示，TXT/MD 保存可编辑文本。
+- 简历深挖会话保存所选 `resume_document_ids` 与创建时的去重候选人上下文快照 `candidate_context`。后续修改个人档案不会改写历史会话，候选人上下文也不会进入启动台、历史摘要或检索日志。
 - Agent 评分链路在五维评分之后增加追问检索步骤：检索 `followup|mixed` 且 `vector_status=indexed` 的题库原子；检索不可用、未命中或索引未就绪时回退规则追问，面试流程不中断。
 - 每次真实追问检索结束后写入 `InterviewRetrievalLog`，命中和回退路径都记录；写入失败只降级记录内部错误，不中断面试提交。日志 query 使用脱敏逻辑并截断到 500 字，不保存用户身份、完整回答、完整简历或项目背景。
 - 面试报告展示聚合摘要、每轮 `subject`、`fallback_used`、`follow_up_type`，并基于会话评价数据生成知识点覆盖分布与规则复训建议；不展示原子正文、内部检索 query、命中片段、管理端标题细节或 selected atom 快照。复训建议首期只作为报告展示内容，不自动写入长期学习计划或个人画像。
 - 学习仪表盘当前已开始消费面试报告中的复训建议：`learningPlan()` 会把低分/回退会话里的 `retraining_suggestions` 映射成 `kind=interview` 推荐和 `source_kind=interview_retraining` 复习条目，仪表盘前端会把它们显式展示为“面试专项建议”。
-- `GET /api/v1/interviews/launchpad` 现在不仅返回 `open_tracks`，还返回 `recommended_tracks`、`recent_sessions`、`coverage.question_roles`、`coverage.vector_status_summary` 和 `coverage_stats`，并在 `open_tracks[*]` 中提供 `tags`，供前端启动台渲染状态区、推荐训练区、覆盖摘要、训练覆盖率和开放组合轻量筛选；其中推荐来源已覆盖未完成会话、最低维度补强、常用训练轨道、最近更新题库和用户偏好领域；接口失败时前端仍可回退到本地兼容轨道。
-- 启动台前端当前把 `Domain chip` 作为开放轨道主导航入口，实际复用 `category` 过滤状态驱动轨道列表；推荐卡额外提供“查看覆盖”动作，用于切到对应领域并聚焦现有覆盖摘要，而不是打开独立覆盖页。
-- 启动台推荐卡当前已升级为显式双动作：主体内容点击只负责选中轨道，主按钮“开始训练”直接复用现有会话创建流程，次按钮“查看覆盖”切到对应领域并聚焦覆盖区域。
-- 启动台推荐卡当前还会显式展示“适合对象 / 预计耗时 / 题库状态”，这些信息完全由前端基于现有难度、题型和轨道状态推导，不依赖新的后端字段。
-- 启动台页面当前已具备分区加载态和错误态：launchpad 加载时状态区/推荐区/覆盖区/轨道区显示骨架，history 加载时历史区单独显示骨架；launchpad 接口失败会回退兼容轨道并给出分区降级提示，history 接口失败只影响历史区，不阻塞启动台主体交互。
-- 启动台准备区当前会显式展示用户的目标职级与偏好领域，并用中性提示说明简历摘要/项目摘要是否已接入；当档案摘要为空时，只显示“补充后更精准”，不作为错误或阻断条件。
+- `GET /api/v1/interviews/launchpad` 的 `open_tracks` 现在是一题一记录，每条包含 `question_id`、`stable_code`、`opening_question`、领域、难度、题型、练习状态和更新时间；不再按领域/难度聚合成“等 N 题”。
+- 启动台默认按个人简历与项目经历匹配排序，再参考目标岗位、历史薄弱项、未练习状态和更新时间；推荐只重排已发布题目，不临时生成或修改题目。
+- `/interviews` 共用自由选题、岗位专项、简历深挖三种模式。题目卡片点击只改变选择状态；只有页头“开始面试”按钮才创建会话，并且会先加载会话页面模块。
+- 自由选题卡片只展示真实开场题干、稳定题号、领域、难度和题型；选中时右上角只显示勾选标记。搜索覆盖题干、领域、标签和稳定题号，筛选覆盖领域、难度和题型。
+- 岗位专项的岗位列表支持按岗位名称和受控技术范围搜索；具体开场题在用户开始面试时确定。
+- 简历深挖桌面端使用 `260px + 1fr` 的文件栏/阅读区，移动端使用文件选择菜单；预览文档与本场勾选状态分离，正文只在阅读区内部滚动。
+- 桌面端常用设置固定为紧凑栏；移动端只显示设置摘要和“调整”，面板中再提供常用设置与当前模式的高级设置。320px 宽度与浏览器缩放下不得产生页面级横向滚动。
+- 启动台请求失败，或成功响应仍是旧聚合结构时，前端显示五道可启动兼容题与中性更新提示，不能把版本错配渲染成空题库。
 - 题库治理侧当前已补充本地导入包脚本 `scripts/interview_bank_import.py`，可把单个 atom、atom 数组或包结构 JSON 规范化为当前 admin `import/validate` 与 `import/publish` 可直接消费的标准导入包；PDF/DOCX/TXT 自动抽取仍属于后续增强。
 - 导入包脚本 `scripts/interview_bank_import.py` 现已进一步支持 `TXT / MD` 原始文档输入，以及依赖存在时的 `PDF / DOCX` 解析入口；文档型输入会先切块，再通过 OpenAI 兼容 `chat/completions` 生成标准题库原子，最后统一输出当前 admin 导入接口可消费的标准导入包。
 - 当前前端已新增独立 `/mentor` 路由和 `AI Mentor` 侧边导航入口。首版 Mentor 页不再直接并发拼 `dashboard + launchpad`，而是优先读取后端聚合接口 `GET /api/v1/users/me/mentor`；该接口在后端复用 `learningPlan()` 与 `interviewLaunchpad()` 生成 overview / strengths / weaknesses / risks / actions / coverage / profile / sample_ready，不依赖新的 LLM 洞察接口。

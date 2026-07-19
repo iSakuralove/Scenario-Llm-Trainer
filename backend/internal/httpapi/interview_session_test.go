@@ -78,6 +78,9 @@ func TestInterviewLaunchpadReturnsOpenTracksFromAvailableQuestions(t *testing.T)
 		} `json:"summary"`
 		OpenTracks []struct {
 			ID                string   `json:"id"`
+			QuestionID        string   `json:"question_id"`
+			StableCode        string   `json:"stable_code"`
+			OpeningQuestion   string   `json:"opening_question"`
 			Title             string   `json:"title"`
 			Domain            string   `json:"domain"`
 			DomainLabel       string   `json:"domain_label"`
@@ -111,17 +114,17 @@ func TestInterviewLaunchpadReturnsOpenTracksFromAvailableQuestions(t *testing.T)
 			t.Fatalf("launchpad returned unexpected compatibility track: %+v", track)
 		}
 		expectedTrackIDs[track.ID] = true
-		if track.Domain == "" || track.Difficulty == "" || track.QuestionType == "" {
+		if track.QuestionID == "" || track.StableCode == "" || track.OpeningQuestion == "" || track.Domain == "" || track.Difficulty == "" || track.QuestionType == "" {
 			t.Fatalf("track must include launch parameters: %+v", track)
 		}
 		if track.AvailabilityState != "available" {
 			t.Fatalf("unexpected track availability: %+v", track)
 		}
-		if _, ok := dataStore.FindInterviewQuestion(track.Domain, track.Difficulty, track.QuestionType); !ok {
+		if _, ok := dataStore.GetInterviewQuestion(track.QuestionID); !ok {
 			t.Fatalf("launchpad returned non-startable track: %+v", track)
 		}
 		if track.ID == "os-l3-principle" {
-			if track.Title != "操作系统 L3" || track.DomainLabel != "操作系统" || track.Summary != "load average 高但 CPU 不高怎么排查" {
+			if track.Title != "操作系统 L3" || track.DomainLabel != "操作系统" || !strings.Contains(track.OpeningQuestion, "load average") {
 				t.Fatalf("unexpected operating-system track copy: %+v", track)
 			}
 			if len(track.Details) == 0 || track.Details[0] != "原理问答" {
@@ -133,6 +136,90 @@ func TestInterviewLaunchpadReturnsOpenTracksFromAvailableQuestions(t *testing.T)
 		if !found {
 			t.Fatalf("launchpad omitted compatibility track %q", trackID)
 		}
+	}
+}
+
+func TestInterviewSessionStartsExactSelectedAtom(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	atom := validInterviewBankAtomForRebuild("atom-exact-opening", "published", "indexed")
+	atom.Title = "Redis 热点 Key 治理"
+	atom.Subject = "热点 Key"
+	atom.Domain = "cache"
+	atom.Category = "cache"
+	atom.Difficulty = "L3"
+	atom.QuestionRole = "opening"
+	atom.QuestionType = "troubleshooting"
+	atom.OpeningQuestion = "热点 Key 导致缓存节点过载时，你第一步会确认什么？"
+	atom.StableCode = "CACHE-027"
+	if _, _, err := dataStore.SaveInterviewKnowledgeAtomVersioned(atom, domain.InterviewKnowledgeVersionContentUpdate, "admin-1", "exact opening"); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/interviews/sessions", token, map[string]any{
+		"mode":        "free",
+		"question_id": atom.ID,
+		"max_rounds":  3,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("create exact interview status=%d message=%s", status, env.Message)
+	}
+	var payload struct {
+		Question domain.InterviewQuestion `json:"question"`
+		Session  domain.InterviewSession  `json:"session"`
+	}
+	mustDecodeData(t, env, &payload)
+	if payload.Question.Description != atom.OpeningQuestion || payload.Session.Mode != "free" {
+		t.Fatalf("unexpected exact session payload: %+v", payload)
+	}
+}
+
+func TestInterviewSessionStartsResumeDeepDiveFromSelectedDocuments(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	user, ok := dataStore.FindUserByIdentifier("demo")
+	if !ok || user == nil {
+		t.Fatal("expected demo user")
+	}
+	now := time.Now()
+	profile := user.Profile
+	profile.ResumeDocuments = []domain.ResumeDocument{{
+		ID:            "resume-project-a",
+		Name:          "后端简历.md",
+		SourceType:    "upload",
+		Format:        "md",
+		Content:       "后端开发工程师，具备三年 Java 项目经验，熟悉 MySQL、Redis 和 Kafka。项目经历：订单平台重构，负责缓存一致性方案，将接口延迟降低 30%，并完善监控告警和回滚流程。",
+		ExtractedText: "后端开发工程师，具备三年 Java 项目经验，熟悉 MySQL、Redis 和 Kafka。\n项目经历：订单平台重构，负责缓存一致性方案，将接口延迟降低 30%，并完善监控告警和回滚流程。",
+		ParseStatus:   "parsed",
+		QualityStatus: "passed",
+		Editable:      true,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}}
+	if _, err := dataStore.SaveUserProfile(user.ID, profile); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/interviews/sessions", token, map[string]any{
+		"mode":       "resume_deep_dive",
+		"resume_ids": []string{"resume-project-a"},
+		"max_rounds": 3,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("create resume interview status=%d message=%s", status, env.Message)
+	}
+	var payload struct {
+		Question domain.InterviewQuestion `json:"question"`
+		Session  domain.InterviewSession  `json:"session"`
+	}
+	mustDecodeData(t, env, &payload)
+	if payload.Session.Mode != "resume_deep_dive" || len(payload.Session.ResumeDocumentIDs) != 1 {
+		t.Fatalf("unexpected resume session: %+v", payload.Session)
+	}
+	if !strings.Contains(payload.Question.Description, "订单平台重构") {
+		t.Fatalf("resume opening did not anchor project: %+v", payload.Question)
 	}
 }
 
@@ -247,6 +334,7 @@ func TestCreateInterviewSessionPersistsSessionInputs(t *testing.T) {
 		"difficulty_level": "challenge",
 		"focus_areas":      []string{"technical_accuracy", "technical_accuracy", "solution_feasibility"},
 		"setup_notes":      "简历摘要：做过慢查询治理。",
+		"max_rounds":       5,
 	})
 	if status != http.StatusOK || env.Code != http.StatusOK {
 		t.Fatalf("create interview status=%d env=%+v", status, env)
@@ -258,11 +346,30 @@ func TestCreateInterviewSessionPersistsSessionInputs(t *testing.T) {
 	if payload.Session.DifficultyLevel != "challenge" {
 		t.Fatalf("expected difficulty_level persisted, got %+v", payload.Session)
 	}
+	if payload.Session.MaxRounds != 5 {
+		t.Fatalf("expected max_rounds=5, got %+v", payload.Session)
+	}
 	if got := payload.Session.FocusAreas; len(got) != 2 || got[0] != "technical_accuracy" || got[1] != "solution_feasibility" {
 		t.Fatalf("expected normalized focus areas, got %+v", got)
 	}
 	if payload.Session.SetupNotes != "简历摘要：做过慢查询治理。" {
 		t.Fatalf("expected setup notes persisted, got %q", payload.Session.SetupNotes)
+	}
+}
+
+func TestCreateInterviewSessionRejectsInvalidMaxRounds(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/interviews/sessions", token, map[string]interface{}{
+		"domain":        "database",
+		"difficulty":    "L3",
+		"question_type": "scenario_analysis",
+		"max_rounds":    16,
+	})
+	if status == http.StatusOK || env.Code == http.StatusOK {
+		t.Fatalf("expected invalid max_rounds rejected, status=%d env=%+v", status, env)
 	}
 }
 
@@ -734,15 +841,15 @@ func TestInterviewLaunchpadCoverageStatsSummarizeCompletedTrackCoverage(t *testi
 
 	var payload struct {
 		CoverageStats struct {
-			TotalOpenTracks      int      `json:"total_open_tracks"`
-			PracticedOpenTracks  int      `json:"practiced_open_tracks"`
-			CoveragePercent      int      `json:"coverage_percent"`
-			CompletedSessions    int      `json:"completed_sessions"`
-			PracticedDomains     []string `json:"practiced_domains"`
+			TotalOpenTracks       int      `json:"total_open_tracks"`
+			PracticedOpenTracks   int      `json:"practiced_open_tracks"`
+			CoveragePercent       int      `json:"coverage_percent"`
+			CompletedSessions     int      `json:"completed_sessions"`
+			PracticedDomains      []string `json:"practiced_domains"`
 			PracticedDifficulties []string `json:"practiced_difficulties"`
-			SubjectCount         int      `json:"subject_count"`
-			TopSubjects          []string `json:"top_subjects"`
-			UncoveredTrackIDs    []string `json:"uncovered_track_ids"`
+			SubjectCount          int      `json:"subject_count"`
+			TopSubjects           []string `json:"top_subjects"`
+			UncoveredTrackIDs     []string `json:"uncovered_track_ids"`
 		} `json:"coverage_stats"`
 	}
 	mustDecodeData(t, env, &payload)
@@ -771,7 +878,7 @@ func TestInterviewLaunchpadCoverageStatsSummarizeCompletedTrackCoverage(t *testi
 		t.Fatalf("unexpected top subjects: %+v", stats)
 	}
 	// 兼容种子并入后，未覆盖轨道会多于正式原子；至少应包含 cache 正式轨道。
-	if !containsString(stats.UncoveredTrackIDs, "interview-bank-cache-l2") {
+	if !containsString(stats.UncoveredTrackIDs, "atom-launchpad-coverage-cache") {
 		t.Fatalf("unexpected uncovered tracks: %+v", stats)
 	}
 }

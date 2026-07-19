@@ -46,6 +46,17 @@ func normalizeInterviewFocusAreas(values []string) ([]string, error) {
 	return out, nil
 }
 
+// normalizeInterviewMaxRounds: 0/缺省 → 3；合法范围 1–15。
+func normalizeInterviewMaxRounds(value int) (int, error) {
+	if value == 0 {
+		return 3, nil
+	}
+	if value < 1 || value > 15 {
+		return 0, fmt.Errorf("max_rounds must be between 1 and 15")
+	}
+	return value, nil
+}
+
 func validInterviewFocusArea(value string) bool {
 	_, ok := interviewFocusAreaLabels[strings.TrimSpace(value)]
 	return ok
@@ -101,6 +112,27 @@ func (s *Server) selectInterviewOpeningQuestion(domainName, difficulty, question
 		return nil, domain.InterviewQuestionSnapshot{}, false
 	}
 	return question, interviewQuestionSnapshotFromQuestion(question), true
+}
+
+func (s *Server) selectInterviewOpeningQuestionByID(questionID string) (*domain.InterviewQuestion, domain.InterviewQuestionSnapshot, bool) {
+	questionID = strings.TrimSpace(questionID)
+	if questionID == "" {
+		return nil, domain.InterviewQuestionSnapshot{}, false
+	}
+	if atom, ok := s.store.GetInterviewKnowledgeAtom(questionID); ok && atom.Status == "published" && (atom.QuestionRole == "opening" || atom.QuestionRole == "mixed") {
+		question := interviewQuestionFromAtom(*atom, normalizeLaunchpadQuestionType(atom.QuestionType))
+		question.Description = firstNonEmpty(strings.TrimSpace(atom.OpeningQuestion), strings.TrimSpace(atom.Title), strings.TrimSpace(atom.Subject))
+		snapshot := interviewQuestionSnapshotFromAtom(*atom, question.QuestionType)
+		snapshot.Description = question.Description
+		return question, snapshot, true
+	}
+	question, ok := s.store.GetInterviewQuestion(questionID)
+	if !ok {
+		return nil, domain.InterviewQuestionSnapshot{}, false
+	}
+	normalized := *question
+	normalized.Description = firstNonEmpty(strings.TrimSpace(normalized.Description), strings.TrimSpace(normalized.Title))
+	return &normalized, interviewQuestionSnapshotFromQuestion(&normalized), true
 }
 
 func (s *Server) selectInterviewOpeningAtom(domainName, difficulty string) (*domain.InterviewKnowledgeAtom, bool) {
@@ -165,12 +197,7 @@ func interviewQuestionFromAtom(atom domain.InterviewKnowledgeAtom, questionType 
 	}
 	domainName := firstNonEmpty(atom.Category, atom.Domain)
 	subject := firstNonEmpty(atom.Subject, atom.Title, domainName)
-	description := strings.TrimSpace(atom.Title)
-	if description == "" {
-		description = fmt.Sprintf("请围绕%s说明你的理解、关键判断依据和落地处理路径。", subject)
-	} else if !strings.Contains(description, "请") {
-		description = fmt.Sprintf("请回答：%s。说明你的关键判断依据、风险点和落地处理路径。", description)
-	}
+	description := firstNonEmpty(strings.TrimSpace(atom.OpeningQuestion), strings.TrimSpace(atom.Title), subject)
 	createdAt := atom.CreatedAt
 	if createdAt.IsZero() {
 		createdAt = time.Now()
@@ -512,23 +539,27 @@ func firstFollowUpPath(atom domain.InterviewKnowledgeAtom) string {
 }
 
 type interviewSessionResponse struct {
-	ID               string                             `json:"id"`
-	UserID           string                             `json:"user_id"`
-	QuestionID       string                             `json:"question_id"`
-	Status           string                             `json:"status"`
-	CurrentRound     int                                `json:"current_round"`
-	MaxRounds        int                                `json:"max_rounds"`
-	DifficultyLevel  string                             `json:"difficulty_level,omitempty"`
-	FocusAreas       []string                           `json:"focus_areas,omitempty"`
-	SetupNotes       string                             `json:"setup_notes,omitempty"`
-	Submissions      []domain.InterviewSubmission       `json:"submissions"`
-	Evaluations      []domain.InterviewEvaluation       `json:"evaluations"`
-	FollowUpQuestion string                             `json:"follow_up_question,omitempty"`
-	FinalScore       int                                `json:"final_score,omitempty"`
-	FinalReport      string                             `json:"final_report,omitempty"`
-	QuestionSnapshot *interviewQuestionSnapshotResponse `json:"question_snapshot,omitempty"`
-	StartedAt        time.Time                          `json:"started_at"`
-	EndedAt          *time.Time                         `json:"ended_at,omitempty"`
+	ID                string                             `json:"id"`
+	UserID            string                             `json:"user_id"`
+	QuestionID        string                             `json:"question_id"`
+	Mode              string                             `json:"mode,omitempty"`
+	ResumeDocumentIDs []string                           `json:"resume_document_ids,omitempty"`
+	Status            string                             `json:"status"`
+	CurrentRound      int                                `json:"current_round"`
+	MaxRounds         int                                `json:"max_rounds"`
+	SmartClose        bool                               `json:"smart_close"`
+	EndReason         string                             `json:"end_reason,omitempty"`
+	DifficultyLevel   string                             `json:"difficulty_level,omitempty"`
+	FocusAreas        []string                           `json:"focus_areas,omitempty"`
+	SetupNotes        string                             `json:"setup_notes,omitempty"`
+	Submissions       []domain.InterviewSubmission       `json:"submissions"`
+	Evaluations       []domain.InterviewEvaluation       `json:"evaluations"`
+	FollowUpQuestion  string                             `json:"follow_up_question,omitempty"`
+	FinalScore        int                                `json:"final_score,omitempty"`
+	FinalReport       string                             `json:"final_report,omitempty"`
+	QuestionSnapshot  *interviewQuestionSnapshotResponse `json:"question_snapshot,omitempty"`
+	StartedAt         time.Time                          `json:"started_at"`
+	EndedAt           *time.Time                         `json:"ended_at,omitempty"`
 }
 
 type interviewQuestionSnapshotResponse struct {
@@ -550,23 +581,27 @@ func interviewSessionView(session *domain.InterviewSession) interviewSessionResp
 		return interviewSessionResponse{}
 	}
 	return interviewSessionResponse{
-		ID:               session.ID,
-		UserID:           session.UserID,
-		QuestionID:       session.QuestionID,
-		Status:           session.Status,
-		CurrentRound:     session.CurrentRound,
-		MaxRounds:        session.MaxRounds,
-		DifficultyLevel:  session.DifficultyLevel,
-		FocusAreas:       append([]string{}, session.FocusAreas...),
-		SetupNotes:       session.SetupNotes,
-		Submissions:      append([]domain.InterviewSubmission{}, session.Submissions...),
-		Evaluations:      append([]domain.InterviewEvaluation{}, session.Evaluations...),
-		FollowUpQuestion: session.FollowUpQuestion,
-		FinalScore:       session.FinalScore,
-		FinalReport:      session.FinalReport,
-		QuestionSnapshot: interviewQuestionSnapshotView(session.QuestionSnapshot),
-		StartedAt:        session.StartedAt,
-		EndedAt:          session.EndedAt,
+		ID:                session.ID,
+		UserID:            session.UserID,
+		QuestionID:        session.QuestionID,
+		Mode:              session.Mode,
+		ResumeDocumentIDs: append([]string{}, session.ResumeDocumentIDs...),
+		Status:            session.Status,
+		CurrentRound:      session.CurrentRound,
+		MaxRounds:         session.MaxRounds,
+		SmartClose:        session.SmartClose,
+		EndReason:         session.EndReason,
+		DifficultyLevel:   session.DifficultyLevel,
+		FocusAreas:        append([]string{}, session.FocusAreas...),
+		SetupNotes:        session.SetupNotes,
+		Submissions:       append([]domain.InterviewSubmission{}, session.Submissions...),
+		Evaluations:       append([]domain.InterviewEvaluation{}, session.Evaluations...),
+		FollowUpQuestion:  session.FollowUpQuestion,
+		FinalScore:        session.FinalScore,
+		FinalReport:       session.FinalReport,
+		QuestionSnapshot:  interviewQuestionSnapshotView(session.QuestionSnapshot),
+		StartedAt:         session.StartedAt,
+		EndedAt:           session.EndedAt,
 	}
 }
 

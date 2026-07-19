@@ -1,0 +1,2526 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>面试舱交互原型</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #071118;
+      --sidebar: #0a151c;
+      --surface: #0e1b24;
+      --surface-raised: #13242d;
+      --surface-soft: #172a34;
+      --border: #29404b;
+      --border-strong: #3b5964;
+      --text: #f2f7f6;
+      --muted: #a9bbc0;
+      --quiet: #7f959c;
+      --accent: #38d7b7;
+      --accent-ink: #032c25;
+      --accent-soft: #123b36;
+      --amber: #f4c76b;
+      --blue: #7dc9f2;
+      --danger: #ff8e80;
+      --focus: #9debdc;
+      --shadow: 0 18px 48px rgba(0, 0, 0, 0.24);
+      font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      font-synthesis: none;
+    }
+
+    * {
+      box-sizing: border-box;
+      letter-spacing: 0;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    html {
+      min-width: 320px;
+      background: var(--bg);
+    }
+
+    body {
+      min-width: 320px;
+      min-height: 100vh;
+      margin: 0;
+      overflow-x: hidden;
+      color: var(--text);
+      background: var(--bg);
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    button,
+    select,
+    input[type="checkbox"] {
+      cursor: pointer;
+    }
+
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible {
+      outline: 3px solid var(--focus);
+      outline-offset: 2px;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+    }
+
+    .app-shell {
+      display: grid;
+      grid-template-columns: 224px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      padding: 22px 16px;
+      border-right: 1px solid #1e323b;
+      background: var(--sidebar);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      min-width: 0;
+      padding: 2px 6px 22px;
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      flex: 0 0 auto;
+      border: 1px solid #2e7065;
+      border-radius: 7px;
+      color: var(--accent);
+      background: #0d2926;
+      font-family: Consolas, monospace;
+      font-weight: 800;
+    }
+
+    .brand strong,
+    .brand small {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .brand strong {
+      font-size: 0.96rem;
+    }
+
+    .brand small {
+      margin-top: 3px;
+      color: var(--quiet);
+      font-size: 0.72rem;
+    }
+
+    .sidebar nav {
+      display: grid;
+      gap: 4px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      min-height: 42px;
+      padding: 0 12px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: var(--muted);
+      text-decoration: none;
+    }
+
+    .nav-item.active {
+      border-color: #285a53;
+      color: var(--text);
+      background: #102823;
+    }
+
+    .profile {
+      display: grid;
+      gap: 3px;
+      margin-top: auto;
+      padding: 15px 12px 4px;
+      border-top: 1px solid #1e323b;
+    }
+
+    .profile span {
+      color: var(--quiet);
+      font-size: 0.76rem;
+    }
+
+    .mobile-bar {
+      display: none;
+    }
+
+    main {
+      min-width: 0;
+      padding: 26px 30px 46px;
+    }
+
+    .workspace {
+      width: min(100%, 1480px);
+      margin: 0 auto;
+    }
+
+    .command-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      min-width: 0;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .mode-tabs,
+    .sort-tabs,
+    .pursuit-control {
+      display: inline-grid;
+      grid-auto-flow: column;
+      grid-auto-columns: max-content;
+      gap: 4px;
+      min-width: 0;
+      padding: 4px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #0b1820;
+    }
+
+    .mode-tab,
+    .sort-tab,
+    .pursuit-button {
+      min-height: 38px;
+      padding: 0 15px;
+      border: 0;
+      border-radius: 5px;
+      color: var(--muted);
+      background: transparent;
+      font-weight: 700;
+      transition: color 180ms ease, background-color 180ms ease;
+    }
+
+    .mode-tab[aria-selected="true"],
+    .sort-tab[aria-pressed="true"],
+    .pursuit-button[aria-pressed="true"] {
+      color: var(--text);
+      background: var(--surface-soft);
+    }
+
+    .start-button {
+      min-width: 144px;
+      min-height: 46px;
+      padding: 0 22px;
+      border: 1px solid #47e3c4;
+      border-radius: 6px;
+      color: var(--accent-ink);
+      background: var(--accent);
+      box-shadow: 0 10px 28px rgba(56, 215, 183, 0.16);
+      font-weight: 800;
+      transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, opacity 180ms ease;
+    }
+
+    .start-button:disabled {
+      border-color: #33464f;
+      color: #72858b;
+      background: #1c2b33;
+      box-shadow: none;
+      opacity: 0.8;
+    }
+
+    .settings-bar {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      min-width: 0;
+      margin: 16px 0;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+
+    .setting-group {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-width: 0;
+    }
+
+    .setting-label {
+      flex: 0 0 auto;
+      color: var(--quiet);
+      font-size: 0.78rem;
+      font-weight: 700;
+    }
+
+    .round-control {
+      display: inline-grid;
+      grid-template-columns: 34px 42px 34px;
+      align-items: center;
+      height: 36px;
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .round-control button,
+    .round-control output {
+      display: grid;
+      height: 100%;
+      place-items: center;
+      border: 0;
+      color: var(--text);
+      background: #0a171f;
+    }
+
+    .round-control button:hover {
+      background: var(--surface-soft);
+    }
+
+    .round-control output {
+      border-right: 1px solid var(--border);
+      border-left: 1px solid var(--border);
+      font-family: Consolas, monospace;
+      font-weight: 800;
+    }
+
+    .switch-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--muted);
+      font-size: 0.86rem;
+      font-weight: 700;
+    }
+
+    .switch-label input {
+      width: 36px;
+      height: 20px;
+      margin: 0;
+      accent-color: var(--accent);
+    }
+
+    .smart-close-copy {
+      display: grid;
+      min-width: 90px;
+      line-height: 1.25;
+    }
+
+    .smart-close-copy strong {
+      color: var(--text);
+      font-size: 0.76rem;
+    }
+
+    .more-button,
+    .filter-button,
+    .clear-button,
+    .dialog-close {
+      min-height: 36px;
+      padding: 0 13px;
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      color: var(--text);
+      background: #0b1820;
+      font-weight: 700;
+    }
+
+    .more-button {
+      margin-left: auto;
+    }
+
+    .mobile-settings-summary {
+      display: none;
+    }
+
+    .free-toolbar {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(132px, 0.42fr)) auto;
+      gap: 10px;
+      align-items: end;
+      margin: 16px 0 12px;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .field span {
+      color: var(--quiet);
+      font-size: 0.75rem;
+      font-weight: 700;
+    }
+
+    .field input,
+    .field select {
+      width: 100%;
+      height: 42px;
+      min-width: 0;
+      padding: 0 12px;
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      color: var(--text);
+      background: #0a171f;
+    }
+
+    .field input::placeholder {
+      color: #6f858c;
+    }
+
+    .mobile-filter-row {
+      display: none;
+    }
+
+    .list-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-width: 0;
+      margin-bottom: 14px;
+    }
+
+    .result-count {
+      color: var(--quiet);
+      font-family: Consolas, monospace;
+      font-size: 0.8rem;
+    }
+
+    .question-grid,
+    .role-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .question-card,
+    .role-card {
+      position: relative;
+      display: grid;
+      min-width: 0;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      background: var(--surface);
+      text-align: left;
+      transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
+    }
+
+    .question-card:hover,
+    .role-card:hover {
+      border-color: var(--border-strong);
+      background: var(--surface-raised);
+    }
+
+    .question-card[aria-checked="true"],
+    .role-card[aria-checked="true"] {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      box-shadow: 0 0 0 1px rgba(56, 215, 183, 0.2);
+    }
+
+    .question-card {
+      grid-template-rows: auto minmax(78px, auto) auto;
+      min-height: 184px;
+      padding: 17px;
+    }
+
+    .card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 23px;
+      gap: 10px;
+    }
+
+    .question-code {
+      color: var(--accent);
+      font-family: Consolas, monospace;
+      font-size: 0.78rem;
+      font-weight: 800;
+    }
+
+    .selected-check {
+      display: grid;
+      width: 22px;
+      height: 22px;
+      place-items: center;
+      border-radius: 50%;
+      color: var(--accent-ink);
+      background: var(--accent);
+      font-size: 0.8rem;
+      font-weight: 900;
+      visibility: hidden;
+    }
+
+    [aria-checked="true"] .selected-check {
+      visibility: visible;
+    }
+
+    .question-text {
+      display: -webkit-box;
+      align-self: center;
+      margin: 14px 0 16px;
+      overflow: hidden;
+      font-size: 1rem;
+      font-weight: 800;
+      line-height: 1.55;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 3;
+    }
+
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      align-self: end;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 27px;
+      padding: 0 9px;
+      border: 1px solid var(--border-strong);
+      border-radius: 5px;
+      color: var(--muted);
+      background: #0b1820;
+      font-size: 0.73rem;
+      font-weight: 700;
+    }
+
+    .tag.domain {
+      border-color: #2a6d61;
+      color: #77e4cf;
+    }
+
+    .tag.level {
+      border-color: #6a5931;
+      color: var(--amber);
+    }
+
+    .tag.type {
+      border-color: #31566a;
+      color: var(--blue);
+    }
+
+    .mode-panel[hidden] {
+      display: none;
+    }
+
+    .role-grid {
+      margin-top: 18px;
+    }
+
+    .role-card {
+      min-height: 150px;
+      padding: 18px;
+    }
+
+    .role-card strong {
+      align-self: end;
+      margin: 28px 0 12px;
+      font-size: 1.05rem;
+    }
+
+    .role-card small {
+      color: var(--quiet);
+      line-height: 1.5;
+    }
+
+    .role-code {
+      color: var(--accent);
+      font-family: Consolas, monospace;
+      font-size: 0.74rem;
+      font-weight: 800;
+    }
+
+    .resume-context {
+      display: grid;
+      grid-template-columns: clamp(220px, 19vw, 274px) minmax(0, 1fr);
+      height: clamp(500px, calc(100dvh - 230px), 850px);
+      min-width: 0;
+      margin-top: 16px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+
+    .resume-mobile-picker {
+      display: none;
+    }
+
+    .resume-mobile-selection input {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      accent-color: var(--accent);
+    }
+
+    .resume-mobile-count {
+      margin-left: auto;
+      color: var(--accent);
+      font-size: 0.7rem;
+    }
+
+    .resume-library {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      min-width: 0;
+      border-right: 1px solid var(--border);
+      background: #09161d;
+    }
+
+    .resume-library-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 64px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .resume-library-copy {
+      display: grid;
+      min-width: 0;
+      gap: 3px;
+    }
+
+    .resume-library-copy strong {
+      font-size: 0.9rem;
+    }
+
+    .resume-library-copy span {
+      color: var(--quiet);
+      font-size: 0.72rem;
+      font-weight: 700;
+    }
+
+    .resume-profile-button {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      flex: 0 0 auto;
+      padding: 0;
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      color: var(--muted);
+      background: #0d1d25;
+      font-size: 1.12rem;
+      font-weight: 400;
+    }
+
+    .resume-file-list {
+      min-height: 0;
+      padding: 7px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-color: var(--border-strong) transparent;
+    }
+
+    .resume-file-row {
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr);
+      align-items: stretch;
+      min-width: 0;
+      margin-bottom: 4px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      transition: border-color 180ms ease, background-color 180ms ease;
+    }
+
+    .resume-file-row:hover {
+      background: #10212a;
+    }
+
+    .resume-file-row.is-active {
+      border-color: #356357;
+      background: #102823;
+    }
+
+    .resume-file-row.is-selected:not(.is-active) {
+      background: #0c211f;
+    }
+
+    .resume-file-check {
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+    }
+
+    .resume-file-check input {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      accent-color: var(--accent);
+    }
+
+    .resume-file-button {
+      display: grid;
+      min-width: 0;
+      padding: 10px 10px 10px 2px;
+      border: 0;
+      color: var(--text);
+      background: transparent;
+      text-align: left;
+    }
+
+    .resume-file-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.82rem;
+      font-weight: 800;
+    }
+
+    .resume-file-meta {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      margin-top: 6px;
+      color: var(--quiet);
+      font-size: 0.69rem;
+    }
+
+    .resume-format {
+      display: inline-flex;
+      align-items: center;
+      min-height: 20px;
+      padding: 0 6px;
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+      color: var(--blue);
+      font-family: Consolas, monospace;
+      font-size: 0.65rem;
+      font-weight: 800;
+    }
+
+    .resume-file-status {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .resume-file-status::before {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      margin-right: 5px;
+      border-radius: 50%;
+      background: var(--accent);
+      content: "";
+      vertical-align: 1px;
+    }
+
+    .resume-reader {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      min-width: 0;
+      min-height: 0;
+      background: #0b171e;
+    }
+
+    .resume-reader-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      min-width: 0;
+      min-height: 64px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      background: #0e1c24;
+    }
+
+    .resume-reader-identity {
+      min-width: 0;
+    }
+
+    .resume-reader-title-line {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      gap: 9px;
+    }
+
+    .resume-reader-title-line h2 {
+      margin: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.96rem;
+    }
+
+    .resume-reader-meta {
+      margin: 4px 0 0;
+      overflow: hidden;
+      color: var(--quiet);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.72rem;
+    }
+
+    .resume-reader-actions {
+      display: flex;
+      flex: 0 0 auto;
+      gap: 8px;
+    }
+
+    .resume-reader-actions .more-button {
+      margin-left: 0;
+    }
+
+    .resume-reader-body {
+      min-width: 0;
+      min-height: 0;
+      padding: 22px clamp(18px, 4vw, 54px) 42px;
+      overflow: auto;
+      overscroll-behavior: contain;
+      scrollbar-color: var(--border-strong) transparent;
+      scroll-behavior: smooth;
+    }
+
+    .resume-document-stack {
+      display: grid;
+      gap: 22px;
+      width: min(100%, 850px);
+      margin: 0 auto;
+    }
+
+    .document-page,
+    .markdown-document,
+    .resume-editor-shell {
+      width: min(100%, 850px);
+      margin: 0 auto;
+      border: 1px solid #d4dce0;
+      border-radius: 3px;
+      color: #19252b;
+      background: #f7f9fa;
+      box-shadow: 0 16px 38px rgba(0, 0, 0, 0.2);
+    }
+
+    .document-page {
+      min-height: 720px;
+      padding: clamp(30px, 5vw, 62px);
+    }
+
+    .document-page-head {
+      padding-bottom: 20px;
+      border-bottom: 2px solid #1b7468;
+    }
+
+    .document-page-head h1 {
+      margin: 0;
+      color: #102c31;
+      font-size: clamp(1.45rem, 2.4vw, 2rem);
+    }
+
+    .document-page-head p {
+      margin: 7px 0 0;
+      color: #4d626a;
+      line-height: 1.5;
+    }
+
+    .document-section {
+      margin-top: 28px;
+    }
+
+    .document-section h2 {
+      margin: 0 0 10px;
+      color: #1b7468;
+      font-size: 0.86rem;
+      text-transform: uppercase;
+    }
+
+    .document-section h3 {
+      margin: 18px 0 5px;
+      color: #17333a;
+      font-size: 0.96rem;
+    }
+
+    .document-section p,
+    .document-section li {
+      color: #354a52;
+      font-size: 0.89rem;
+      line-height: 1.75;
+    }
+
+    .document-section p {
+      margin: 7px 0;
+    }
+
+    .document-section ul {
+      margin: 7px 0 0;
+      padding-left: 20px;
+    }
+
+    .markdown-document {
+      min-height: 100%;
+      padding: clamp(28px, 5vw, 58px);
+    }
+
+    .markdown-content {
+      max-width: 72ch;
+      margin: 0 auto;
+      color: #2c4047;
+      font-size: 0.94rem;
+      line-height: 1.82;
+    }
+
+    .markdown-content h1,
+    .markdown-content h2,
+    .markdown-content h3 {
+      color: #102c31;
+      line-height: 1.35;
+    }
+
+    .markdown-content h1 {
+      margin: 0 0 26px;
+      padding-bottom: 16px;
+      border-bottom: 2px solid #1b7468;
+      font-size: 1.72rem;
+    }
+
+    .markdown-content h2 {
+      margin: 30px 0 10px;
+      font-size: 1.12rem;
+    }
+
+    .markdown-content h3 {
+      margin: 22px 0 8px;
+      font-size: 0.98rem;
+    }
+
+    .markdown-content p,
+    .markdown-content ul {
+      margin: 0 0 14px;
+    }
+
+    .markdown-content ul {
+      padding-left: 22px;
+    }
+
+    .markdown-content code {
+      padding: 2px 5px;
+      border-radius: 3px;
+      color: #075e54;
+      background: #e2eeeb;
+      font-family: Consolas, monospace;
+    }
+
+    .resume-editor-shell {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) auto;
+      min-height: 100%;
+      padding: 14px;
+      color: var(--text);
+      background: #0e1b24;
+      border-color: var(--border-strong);
+    }
+
+    .resume-editor {
+      width: 100%;
+      min-height: 420px;
+      resize: vertical;
+      padding: 18px;
+      border: 1px solid var(--border-strong);
+      border-radius: 5px;
+      outline: 0;
+      color: var(--text);
+      background: #071118;
+      font: 0.9rem/1.75 Consolas, "Microsoft YaHei", monospace;
+    }
+
+    .resume-editor:focus-visible {
+      border-color: var(--focus);
+      box-shadow: 0 0 0 2px rgba(157, 235, 220, 0.24);
+    }
+
+    .resume-editor-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding-top: 12px;
+    }
+
+    .resume-save-button {
+      min-height: 36px;
+      padding: 0 15px;
+      border: 1px solid #47e3c4;
+      border-radius: 6px;
+      color: var(--accent-ink);
+      background: var(--accent);
+      font-weight: 800;
+    }
+
+    .empty-state {
+      padding: 42px 20px;
+      border: 1px dashed var(--border-strong);
+      border-radius: 8px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    dialog {
+      width: min(92vw, 520px);
+      padding: 0;
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      color: var(--text);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    dialog::backdrop {
+      background: rgba(0, 0, 0, 0.66);
+    }
+
+    .dialog-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .dialog-head h2 {
+      margin: 0;
+      font-size: 1rem;
+    }
+
+    .dialog-body {
+      display: grid;
+      gap: 15px;
+      padding: 18px;
+    }
+
+    .mobile-common-settings,
+    .advanced-settings {
+      display: grid;
+      gap: 15px;
+    }
+
+    .mobile-common-settings {
+      display: none;
+    }
+
+    .advanced-settings[hidden] {
+      display: none;
+    }
+
+    .advanced-group {
+      display: grid;
+      gap: 8px;
+    }
+
+    .advanced-group > span {
+      color: var(--quiet);
+      font-size: 0.75rem;
+      font-weight: 700;
+    }
+
+    .advanced-options {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 9px;
+    }
+
+    .focus-options {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 9px;
+    }
+
+    .check-option {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 44px;
+      padding: 0 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--muted);
+      background: #0a171f;
+    }
+
+    .check-option input {
+      accent-color: var(--accent);
+    }
+
+    .check-option input:disabled {
+      cursor: not-allowed;
+      opacity: 0.65;
+    }
+
+    .toast {
+      position: fixed;
+      right: 24px;
+      bottom: 24px;
+      z-index: 10;
+      max-width: min(420px, calc(100vw - 32px));
+      padding: 13px 16px;
+      border: 1px solid #2a6d61;
+      border-radius: 7px;
+      color: var(--text);
+      background: #10332e;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(8px);
+      transition: opacity 180ms ease, transform 180ms ease;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 1180px) {
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        display: none;
+      }
+
+      .mobile-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 58px;
+        padding: 0 20px;
+        border-bottom: 1px solid #1e323b;
+        background: var(--sidebar);
+      }
+
+      .mobile-bar strong {
+        font-size: 0.92rem;
+      }
+
+      .mobile-bar span {
+        color: var(--accent);
+        font-size: 0.8rem;
+        font-weight: 800;
+      }
+
+      .question-grid,
+      .role-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 860px) {
+      main {
+        padding: 18px 18px 36px;
+      }
+
+      .command-bar {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .mode-tabs {
+        grid-auto-columns: minmax(0, 1fr);
+        width: 100%;
+      }
+
+      .mode-tab {
+        padding: 0 8px;
+      }
+
+      .start-button {
+        width: 100%;
+      }
+
+      .settings-bar {
+        justify-content: space-between;
+      }
+
+      .settings-bar > .setting-group,
+      .settings-bar > .switch-label,
+      .settings-bar > .smart-close-copy,
+      .settings-bar > .more-button {
+        display: none;
+      }
+
+      .mobile-common-settings {
+        display: grid;
+      }
+
+      .mobile-settings-summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        gap: 12px;
+      }
+
+      .settings-summary-text {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--muted);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 0.84rem;
+        font-weight: 700;
+      }
+
+      .free-toolbar {
+        display: none;
+      }
+
+      .mobile-filter-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 9px;
+        margin: 16px 0 12px;
+      }
+
+      .mobile-filter-row input {
+        width: 100%;
+        min-width: 0;
+        height: 42px;
+        padding: 0 12px;
+        border: 1px solid var(--border-strong);
+        border-radius: 6px;
+        color: var(--text);
+        background: #0a171f;
+      }
+
+      .list-toolbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .sort-tabs {
+        width: 100%;
+        overflow-x: auto;
+        overscroll-behavior-inline: contain;
+      }
+
+      .question-grid,
+      .role-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .resume-context {
+        display: block;
+        height: auto;
+        overflow: visible;
+        border: 0;
+        background: transparent;
+      }
+
+      .resume-library {
+        display: none;
+      }
+
+      .resume-mobile-picker {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: end;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+
+      .resume-mobile-picker label {
+        display: grid;
+        min-width: 0;
+        gap: 6px;
+        color: var(--quiet);
+        font-size: 0.72rem;
+        font-weight: 700;
+      }
+
+      .resume-mobile-picker select {
+        width: 100%;
+        min-width: 0;
+        height: 42px;
+        padding: 0 11px;
+        border: 1px solid var(--border-strong);
+        border-radius: 6px;
+        color: var(--text);
+        background: #0a171f;
+      }
+
+      .resume-mobile-selection {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        min-height: 42px;
+        padding: 0 10px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--muted);
+        background: var(--surface);
+        font-size: 0.75rem;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .resume-reader {
+        height: min(64vh, 610px);
+        min-height: 500px;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+      }
+
+      .resume-reader-body {
+        padding: 16px 14px 30px;
+      }
+
+      .document-page {
+        min-height: 650px;
+      }
+
+      .resume-editor {
+        min-height: 360px;
+      }
+    }
+
+    @media (max-width: 420px) {
+      .mobile-bar {
+        padding: 0 14px;
+      }
+
+      main {
+        padding: 14px 12px 30px;
+      }
+
+      .mode-tabs {
+        gap: 2px;
+        padding: 3px;
+      }
+
+      .mode-tab {
+        min-height: 42px;
+        font-size: 0.78rem;
+      }
+
+      .settings-bar {
+        padding: 10px;
+      }
+
+      .question-card {
+        min-height: 174px;
+        padding: 15px;
+      }
+
+      .focus-options {
+        grid-template-columns: 1fr;
+      }
+
+      .resume-mobile-picker {
+        grid-template-columns: 1fr;
+      }
+
+      .resume-reader {
+        height: 66vh;
+        min-height: 480px;
+      }
+
+      .resume-reader-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: start;
+        justify-content: stretch;
+        gap: 9px;
+        padding: 11px 12px;
+      }
+
+      .resume-reader-title-line h2 {
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+
+      .resume-reader-meta {
+        white-space: normal;
+      }
+
+      .resume-reader-actions {
+        width: auto;
+      }
+
+      .resume-reader-actions .more-button {
+        width: auto;
+        min-width: 62px;
+      }
+
+      .document-page,
+      .markdown-document {
+        padding: 24px 20px;
+      }
+
+      .document-page {
+        min-height: 600px;
+      }
+
+      .document-page-head h1 {
+        font-size: 1.4rem;
+      }
+
+      .markdown-content h1 {
+        font-size: 1.42rem;
+      }
+
+      .resume-editor-shell {
+        padding: 10px;
+      }
+
+      .resume-editor-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .resume-editor-actions button {
+        width: 100%;
+      }
+
+      .toast {
+        right: 16px;
+        bottom: 16px;
+        left: 16px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="全局导航">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">AI</div>
+        <div>
+          <strong>情景式教学系统</strong>
+          <small>比赛 MVP</small>
+        </div>
+      </div>
+      <nav>
+        <a class="nav-item" href="#">仪表盘</a>
+        <a class="nav-item" href="#">排查工坊</a>
+        <a class="nav-item active" href="#" aria-current="page">面试舱</a>
+        <a class="nav-item" href="#">AI Mentor</a>
+        <a class="nav-item" href="#">案例工坊</a>
+        <a class="nav-item" href="#">个人档案</a>
+        <a class="nav-item" href="#">面试题库</a>
+      </nav>
+      <div class="profile">
+        <strong>admin</strong>
+        <span>管理员</span>
+      </div>
+    </aside>
+
+    <div>
+      <header class="mobile-bar">
+        <strong>面试舱</strong>
+        <span>情景式教学系统</span>
+      </header>
+
+      <main>
+        <div class="workspace">
+          <section class="command-bar" aria-label="面试模式与启动">
+            <div class="mode-tabs" role="tablist" aria-label="面试模式">
+              <button class="mode-tab" type="button" role="tab" aria-selected="false" aria-controls="free-panel" data-mode="free">自由选题</button>
+              <button class="mode-tab" type="button" role="tab" aria-selected="false" aria-controls="role-panel" data-mode="role">岗位专项</button>
+              <button class="mode-tab" type="button" role="tab" aria-selected="true" aria-controls="resume-panel" data-mode="resume">简历深挖</button>
+            </div>
+            <button class="start-button" id="start-button" type="button" disabled>开始面试</button>
+          </section>
+
+          <section class="settings-bar" aria-label="本场面试设置">
+            <div class="setting-group">
+              <span class="setting-label">面试方式</span>
+              <div class="pursuit-control" aria-label="选择面试方式">
+                <button class="pursuit-button" type="button" aria-pressed="false" data-pursuit="从基础聊起">从基础聊起</button>
+                <button class="pursuit-button" type="button" aria-pressed="true" data-pursuit="平衡追问">平衡追问</button>
+                <button class="pursuit-button" type="button" aria-pressed="false" data-pursuit="高压深挖">高压深挖</button>
+              </div>
+            </div>
+
+            <div class="setting-group">
+              <span class="setting-label">最多作答</span>
+              <div class="round-control">
+                <button id="round-down" type="button" aria-label="减少作答轮数">−</button>
+                <output id="round-output" aria-live="polite">3</output>
+                <button id="round-up" type="button" aria-label="增加作答轮数">+</button>
+              </div>
+            </div>
+
+            <label class="switch-label">
+              <input id="smart-close" type="checkbox" checked>
+              智能收束
+            </label>
+            <span class="smart-close-copy">
+              <strong>由面试官判断</strong>
+            </span>
+
+            <button class="more-button" id="more-settings" type="button">更多设置</button>
+
+            <div class="mobile-settings-summary">
+              <span class="settings-summary-text" id="settings-summary">平衡追问 · 3 轮 · 智能收束</span>
+              <button class="more-button" id="mobile-more-settings" type="button">调整</button>
+            </div>
+          </section>
+
+          <section class="mode-panel" id="free-panel" role="tabpanel" hidden>
+            <div class="free-toolbar">
+              <label class="field">
+                <span>搜索</span>
+                <input id="search-input" type="search" placeholder="题号 / 题干 / 知识点" autocomplete="off">
+              </label>
+              <label class="field">
+                <span>领域</span>
+                <select id="domain-filter">
+                  <option value="">全部领域</option>
+                  <option value="AI / LLM">AI / LLM</option>
+                  <option value="Java">Java</option>
+                  <option value="缓存">缓存</option>
+                  <option value="系统设计">系统设计</option>
+                  <option value="前端">前端</option>
+                  <option value="数据库">数据库</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>难度</span>
+                <select id="difficulty-filter">
+                  <option value="">全部难度</option>
+                  <option value="L2">L2</option>
+                  <option value="L3">L3</option>
+                  <option value="L4">L4</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>题型</span>
+                <select id="type-filter">
+                  <option value="">全部题型</option>
+                  <option value="原理问答">原理问答</option>
+                  <option value="架构设计">架构设计</option>
+                  <option value="故障排查">故障排查</option>
+                </select>
+              </label>
+              <button class="clear-button" id="clear-filters" type="button" hidden>清空筛选</button>
+            </div>
+
+            <div class="mobile-filter-row">
+              <input id="mobile-search-input" type="search" placeholder="题号 / 题干 / 知识点" aria-label="搜索题目" autocomplete="off">
+              <button class="filter-button" id="open-filters" type="button">筛选</button>
+            </div>
+
+            <div class="list-toolbar">
+              <div class="sort-tabs" aria-label="题目排序">
+                <button class="sort-tab" type="button" aria-pressed="true" data-sort="recommended">推荐</button>
+                <button class="sort-tab" type="button" aria-pressed="false" data-sort="unpracticed">未练过</button>
+                <button class="sort-tab" type="button" aria-pressed="false" data-sort="latest">最新</button>
+                <button class="sort-tab" type="button" aria-pressed="false" data-sort="all">全部</button>
+              </div>
+              <span class="result-count" id="result-count"></span>
+            </div>
+
+            <div class="question-grid" id="question-grid" role="radiogroup" aria-label="选择一道面试题"></div>
+            <div class="empty-state" id="question-empty" hidden>没有符合当前条件的题目</div>
+          </section>
+
+          <section class="mode-panel" id="role-panel" role="tabpanel" hidden>
+            <div class="role-grid" id="role-grid" role="radiogroup" aria-label="选择岗位方向"></div>
+          </section>
+
+          <section class="mode-panel" id="resume-panel" role="tabpanel">
+            <div class="resume-context" id="resume-context">
+              <div class="resume-mobile-picker">
+                <label for="resume-mobile-select">
+                  查看简历
+                  <select id="resume-mobile-select"></select>
+                </label>
+                <label class="resume-mobile-selection">
+                  <input id="resume-mobile-check" type="checkbox">
+                  <span>加入本场</span>
+                  <span class="resume-mobile-count" id="resume-mobile-count"></span>
+                </label>
+              </div>
+              <aside class="resume-library" aria-label="简历文件">
+                <div class="resume-library-head">
+                  <div class="resume-library-copy">
+                    <strong>我的简历</strong>
+                    <span id="resume-selection-count"></span>
+                  </div>
+                  <button class="resume-profile-button profile-entry" type="button" aria-label="管理个人档案" title="管理个人档案">+</button>
+                </div>
+                <div class="resume-file-list" id="resume-file-list"></div>
+              </aside>
+              <section class="resume-reader" id="resume-reader" aria-labelledby="resume-reader-title">
+                <header class="resume-reader-head">
+                  <div class="resume-reader-identity">
+                    <div class="resume-reader-title-line">
+                      <span class="resume-format" id="resume-reader-format"></span>
+                      <h2 id="resume-reader-title"></h2>
+                    </div>
+                    <p class="resume-reader-meta" id="resume-reader-meta"></p>
+                  </div>
+                  <div class="resume-reader-actions" id="resume-reader-actions"></div>
+                </header>
+                <div class="resume-reader-body" id="resume-reader-body" tabindex="0"></div>
+                <span class="sr-only" id="resume-reader-announcer" aria-live="polite"></span>
+              </section>
+            </div>
+            <div class="empty-state" id="resume-empty" hidden>
+              <strong>简历内容不足，请先完善个人档案</strong>
+              <button class="more-button profile-entry" type="button">完善个人档案</button>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <dialog id="settings-dialog" aria-labelledby="settings-dialog-title">
+    <div class="dialog-head">
+      <h2 id="settings-dialog-title">更多设置</h2>
+      <button class="dialog-close" type="button" data-close-dialog="settings-dialog">关闭</button>
+    </div>
+    <div class="dialog-body">
+      <div class="mobile-common-settings">
+        <label class="field">
+          <span>面试方式</span>
+          <select id="mobile-pursuit">
+            <option>从基础聊起</option>
+            <option selected>平衡追问</option>
+            <option>高压深挖</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>最多作答轮数</span>
+          <input id="mobile-rounds" type="number" min="1" max="15" value="3" inputmode="numeric">
+        </label>
+        <label class="switch-label">
+          <input id="mobile-smart-close" type="checkbox" checked>
+          智能收束
+        </label>
+      </div>
+
+      <div class="advanced-settings" id="generic-advanced-settings">
+        <div class="advanced-group">
+          <span>希望面试官重点追问</span>
+          <div class="focus-options">
+            <label class="check-option"><input type="checkbox" checked>技术与原理</label>
+            <label class="check-option"><input type="checkbox" checked>排查路径</label>
+            <label class="check-option"><input type="checkbox" checked>验证与回滚</label>
+            <label class="check-option"><input type="checkbox">边界与权衡</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="advanced-settings" id="role-advanced-settings" hidden>
+        <label class="field">
+          <span>目标级别</span>
+          <select id="target-level">
+            <option>实习</option>
+            <option>初级</option>
+            <option selected>中级</option>
+            <option>高级</option>
+          </select>
+        </label>
+        <div class="advanced-group">
+          <span>技术范围</span>
+          <div class="advanced-options" id="role-topic-options"></div>
+        </div>
+        <div class="advanced-group">
+          <span>面试重点</span>
+          <div class="advanced-options" id="role-focus-options">
+            <label class="check-option"><input type="checkbox" value="基础原理" checked>基础原理</label>
+            <label class="check-option"><input type="checkbox" value="项目实战" checked>项目实战</label>
+            <label class="check-option"><input type="checkbox" value="故障排查">故障排查</label>
+            <label class="check-option"><input type="checkbox" value="架构设计">架构设计</label>
+          </div>
+        </div>
+        <label class="field">
+          <span>岗位要求</span>
+          <input id="job-keywords" type="text" maxlength="120" placeholder="高并发、支付系统、Spring Cloud" autocomplete="off">
+        </label>
+      </div>
+
+      <div class="advanced-settings" id="resume-advanced-settings" hidden>
+        <div class="advanced-group">
+          <span>深挖重点</span>
+          <div class="advanced-options" id="resume-focus-options">
+            <label class="check-option"><input type="checkbox" value="项目职责" checked>项目职责</label>
+            <label class="check-option"><input type="checkbox" value="技术决策" checked>技术决策</label>
+            <label class="check-option"><input type="checkbox" value="难点与故障" checked>难点与故障</label>
+            <label class="check-option"><input type="checkbox" value="性能与优化" checked>性能与优化</label>
+            <label class="check-option"><input type="checkbox" value="协作与推动" checked>协作与推动</label>
+            <label class="check-option"><input type="checkbox" value="结果与复盘" checked>结果与复盘</label>
+          </div>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="filter-dialog" aria-labelledby="filter-dialog-title">
+    <div class="dialog-head">
+      <h2 id="filter-dialog-title">筛选题目</h2>
+      <button class="dialog-close" type="button" data-close-dialog="filter-dialog">完成</button>
+    </div>
+    <div class="dialog-body">
+      <label class="field">
+        <span>领域</span>
+        <select id="mobile-domain-filter">
+          <option value="">全部领域</option>
+          <option value="AI / LLM">AI / LLM</option>
+          <option value="Java">Java</option>
+          <option value="缓存">缓存</option>
+          <option value="系统设计">系统设计</option>
+          <option value="前端">前端</option>
+          <option value="数据库">数据库</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>难度</span>
+        <select id="mobile-difficulty-filter">
+          <option value="">全部难度</option>
+          <option value="L2">L2</option>
+          <option value="L3">L3</option>
+          <option value="L4">L4</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>题型</span>
+        <select id="mobile-type-filter">
+          <option value="">全部题型</option>
+          <option value="原理问答">原理问答</option>
+          <option value="架构设计">架构设计</option>
+          <option value="故障排查">故障排查</option>
+        </select>
+      </label>
+      <button class="clear-button" id="mobile-clear-filters" type="button">清空筛选</button>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const questions = [
+      { code: 'AI-027', question: '线上检索结果相关性正常，但模型仍频繁产生幻觉，你会先验证哪个环节？', domain: 'AI / LLM', difficulty: 'L4', type: '原理问答', subject: 'RAG 幻觉治理', score: 98, practiced: false, updated: 8 },
+      { code: 'JAVA-014', question: '一个 Java 接口在流量升高后响应时间突然翻倍，你会先确认哪项指标？', domain: 'Java', difficulty: 'L3', type: '故障排查', subject: 'Java 性能定位', score: 94, practiced: false, updated: 5 },
+      { code: 'CACHE-018', question: '线上 Redis 重启后出现部分数据丢失，你会先检查什么？', domain: '缓存', difficulty: 'L3', type: '原理问答', subject: 'Redis 持久化', score: 91, practiced: true, updated: 4 },
+      { code: 'SYS-031', question: '订单系统需要支持异地多活，你会先确定哪一条一致性边界？', domain: '系统设计', difficulty: 'L4', type: '架构设计', subject: '异地多活', score: 88, practiced: false, updated: 7 },
+      { code: 'FRONT-009', question: '首屏性能指标正常，但用户仍反馈页面打开很慢，你会先验证什么？', domain: '前端', difficulty: 'L2', type: '故障排查', subject: '前端真实体验', score: 82, practiced: true, updated: 2 },
+      { code: 'DB-033', question: '慢查询只在高并发时出现，你会先确认哪一个数据库信号？', domain: '数据库', difficulty: 'L3', type: '故障排查', subject: '数据库并发性能', score: 79, practiced: false, updated: 6 },
+      { code: 'AI-041', question: 'RAG 已召回包含答案的文档，但最终回复仍然答非所问，你会先检查什么？', domain: 'AI / LLM', difficulty: 'L3', type: '故障排查', subject: 'RAG 生成链路', score: 76, practiced: false, updated: 9 },
+      { code: 'SYS-044', question: '一个任务系统需要保证消息至少处理一次，你会如何设计去重边界？', domain: '系统设计', difficulty: 'L4', type: '架构设计', subject: '消息幂等', score: 70, practiced: true, updated: 3 }
+    ];
+
+    const roles = [
+      { id: 'java-fullstack', code: 'JAVA', title: 'Java 全栈工程师', meta: 'Java · 数据库 · 系统设计', topics: ['Java 基础', 'Spring', 'JVM', 'MySQL', 'Redis', '并发', '微服务', '前端工程'] },
+      { id: 'python-engineer', code: 'PY', title: 'Python 工程师', meta: 'Python · 服务端 · 数据处理', topics: ['Python 基础', 'Web 框架', '异步任务', '数据库', '缓存', '测试', '性能优化', '数据处理'] },
+      { id: 'crawler-engineer', code: 'CRAWLER', title: '爬虫工程师', meta: '网络 · 反爬 · 数据管道', topics: ['网络协议', '页面解析', '反爬策略', '代理调度', '任务队列', '数据清洗', '稳定性', '合规边界'] },
+      { id: 'llm-engineer', code: 'LLM', title: '大模型算法工程师', meta: '模型 · RAG · Agent', topics: ['模型原理', 'Prompt', 'RAG', 'Agent', '评测', '微调', '推理优化', '安全治理'] }
+    ];
+
+    const resumeDocuments = [
+      {
+        id: 'resume-pdf',
+        name: 'Java后端_2026.pdf',
+        format: 'PDF',
+        editable: false,
+        status: '通过检测',
+        meta: '2 页 · 7 月 18 日更新',
+        pages: [
+          {
+            title: '陈墨',
+            subtitle: 'Java 后端开发工程师 · 4 年经验',
+            sections: [
+              {
+                title: '个人概况',
+                paragraphs: [
+                  '专注交易与履约系统，熟悉 Java、Spring Boot、MySQL、Redis 与消息队列。能够从业务约束出发完成领域建模、接口设计、性能排查和上线复盘。'
+                ]
+              },
+              {
+                title: '核心能力',
+                items: [
+                  'Java 并发、JVM 调优、Spring 生态与微服务治理',
+                  'MySQL 索引设计、Redis 缓存策略、Kafka 消息可靠性',
+                  'Prometheus、Grafana、链路追踪与容器化交付'
+                ]
+              },
+              {
+                title: '工作经历',
+                entries: [
+                  {
+                    heading: '星海科技 · 后端开发工程师',
+                    body: '负责订单履约与库存链路，推动核心接口 P99 从 780ms 降至 260ms，并完善容量评估、灰度发布和异常回滚流程。'
+                  },
+                  {
+                    heading: '云桥网络 · Java 开发工程师',
+                    body: '参与会员、营销和统一认证平台建设，负责权限模型、异步任务和审计链路。'
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            title: '项目经历',
+            subtitle: '代表项目与个人职责',
+            sections: [
+              {
+                title: '订单履约平台',
+                entries: [
+                  {
+                    heading: '背景与职责',
+                    body: '业务大促期间出现库存重复扣减和消费延迟。负责问题定位、幂等边界设计、压测验证与上线复盘。'
+                  },
+                  {
+                    heading: '技术方案',
+                    body: '以业务幂等键约束重复请求，引入本地消息表保证状态变更与事件投递一致，并按分区积压量动态扩容消费者。'
+                  },
+                  {
+                    heading: '结果',
+                    body: '重复扣减降为 0，峰值吞吐提升 2.3 倍，故障恢复时间从 45 分钟缩短至 12 分钟。'
+                  }
+                ]
+              },
+              {
+                title: '教育训练平台',
+                paragraphs: [
+                  '负责题库导入、动态追问和学习结果回流，设计稳定题号与内容校验规则，并优化高并发检索链路。'
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        id: 'resume-docx',
+        name: '校园项目经历.docx',
+        format: 'DOCX',
+        editable: false,
+        status: '通过检测',
+        meta: '2 页 · 7 月 16 日更新',
+        pages: [
+          {
+            title: '项目经历补充',
+            subtitle: '计算机科学与技术 · 2026 届',
+            sections: [
+              {
+                title: '情景式教学系统',
+                paragraphs: [
+                  '面向计算机专业学生的排查与面试训练平台，包含面试舱、排查工坊、案例沉淀和学习结果回流。'
+                ],
+                entries: [
+                  {
+                    heading: '个人职责',
+                    body: '负责面试舱题库数据模型、题目导入规范、简历深挖流程和前后端接口联调。'
+                  },
+                  {
+                    heading: '关键难点',
+                    body: '解决题目展示同质化、动态追问上下文失焦和用户简历垃圾数据进入训练链路的问题。'
+                  }
+                ]
+              },
+              {
+                title: '技术栈',
+                items: [
+                  'React、TypeScript、Spring Boot、PostgreSQL',
+                  'Redis、pgvector、Docker、Prometheus'
+                ]
+              }
+            ]
+          },
+          {
+            title: '比赛与实践',
+            subtitle: '成果、协作与复盘',
+            sections: [
+              {
+                title: '团队协作',
+                paragraphs: [
+                  '制定题库 JSON 导入规范，协调前端展示、后端校验与内容清洗节奏；通过任务文档记录决策、验收标准和已知限制。'
+                ]
+              },
+              {
+                title: '阶段成果',
+                items: [
+                  '完成主流岗位方向题库与稳定题号规则',
+                  '形成排查工坊和面试舱独立指标证据',
+                  '建立简历写入校验与面试启动兜底规则'
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        id: 'resume-markdown',
+        name: '比赛项目补充.md',
+        format: 'MD',
+        editable: true,
+        status: '通过检测',
+        meta: 'Markdown · 7 月 19 日更新',
+        content: `# 情景式教学系统
+
+## 我的职责
+
+负责 **面试舱** 与 **排查工坊** 的产品梳理和实现，覆盖题库导入、动态追问、学习结果回流与模型指标验证。
+
+## 关键技术决策
+
+- 题库使用稳定题号，避免排序后题目序号变化
+- 简历只用于推荐排序和深挖上下文，不即时生成题库题目
+- 写入个人档案前执行内容质量校验，开始面试时复用同一规则兜底
+- 面试设置与题目选择解耦，切换题目不重置设置
+
+## 难点与结果
+
+针对高并发检索链路补充 pgvector 固定维度校验、降级边界和独立指标脚本。完成后，题库、模型评测和答辩证据能够按模块独立复现。
+
+## 复盘
+
+早期页面把聚合训练轨道展示成单道题，用户无法理解“等 28 题”的含义。后续改为直接展示真实开场题，并使用领域、难度、题型三个标签辅助判断。`
+      },
+      {
+        id: 'resume-text',
+        name: '实习经历补充.txt',
+        format: 'TXT',
+        editable: true,
+        status: '通过检测',
+        meta: '纯文本 · 7 月 14 日更新',
+        content: `实习经历
+
+2025.06 - 2025.10  云桥网络  Java 开发实习生
+
+负责统一认证中心的登录态迁移与审计日志。梳理旧系统 Cookie、Token 和权限模型的兼容边界，参与灰度发布方案设计。
+
+发现批量迁移任务在高峰期占用数据库连接，补充批次限流、失败重试和监控告警，将迁移失败率从 3.8% 降至 0.4%。
+
+协助前端完成接口迁移，整理联调清单与回滚步骤，并在上线后一周持续跟踪错误率和用户反馈。`
+      },
+      {
+        id: 'resume-manual',
+        name: '手动填写',
+        format: '手动',
+        editable: true,
+        status: '通过检测',
+        meta: '个人档案 · 7 月 19 日更新',
+        content: `# 简历摘要
+
+具备 Java 后端与 React 前端开发经验，熟悉 Spring、MySQL、Redis、消息队列与容器化部署。能够说明个人职责、技术选择、验证过程和最终结果。
+
+# 项目经历
+
+## 电商订单平台
+
+参与订单状态机、库存扣减和消息幂等设计，处理流量突增时的延迟与重复消费问题。
+
+## 数据采集平台
+
+负责代理调度、任务队列和数据清洗，补充失败重试、监控告警与资源隔离。`
+      }
+    ];
+
+    const state = {
+      mode: 'resume',
+      selectedQuestion: '',
+      selectedRole: '',
+      activeResumeId: 'resume-pdf',
+      selectedResumeIds: new Set(['resume-pdf', 'resume-markdown']),
+      editingResumeId: '',
+      sort: 'recommended',
+      pursuit: '平衡追问',
+      rounds: 3,
+      smartClose: true,
+      targetLevel: '中级',
+      roleTopics: new Set(),
+      roleFocus: new Set(['基础原理', '项目实战']),
+      resumeFocus: new Set(['项目职责', '技术决策', '难点与故障', '性能与优化', '协作与推动', '结果与复盘']),
+      jobKeywords: '',
+      filters: { query: '', domain: '', difficulty: '', type: '' }
+    };
+
+    const startButton = document.querySelector('#start-button');
+    const questionGrid = document.querySelector('#question-grid');
+    const roleGrid = document.querySelector('#role-grid');
+    const questionEmpty = document.querySelector('#question-empty');
+    const resultCount = document.querySelector('#result-count');
+    const clearFiltersButton = document.querySelector('#clear-filters');
+    const toast = document.querySelector('#toast');
+    const resumeFileList = document.querySelector('#resume-file-list');
+    const resumeMobileSelect = document.querySelector('#resume-mobile-select');
+    const resumeMobileCheck = document.querySelector('#resume-mobile-check');
+    const resumeReader = document.querySelector('#resume-reader');
+    const resumeReaderBody = document.querySelector('#resume-reader-body');
+
+    function currentSelection() {
+      if (state.mode === 'free') return state.selectedQuestion;
+      if (state.mode === 'role') return state.selectedRole;
+      return resumeDocuments.some((document) => state.selectedResumeIds.has(document.id)) ? 'resume' : '';
+    }
+
+    function updateStartButton() {
+      startButton.disabled = !currentSelection();
+    }
+
+    function switchMode(mode) {
+      state.mode = mode;
+      document.querySelectorAll('.mode-tab').forEach((button) => {
+        const selected = button.dataset.mode === mode;
+        button.setAttribute('aria-selected', String(selected));
+        document.querySelector(`#${button.getAttribute('aria-controls')}`).hidden = !selected;
+      });
+      renderAdvancedSettings();
+      updateStartButton();
+    }
+
+    function visibleQuestions() {
+      const query = state.filters.query.trim().toLowerCase();
+      let items = questions.filter((item) => {
+        const haystack = `${item.code} ${item.question} ${item.subject} ${item.domain}`.toLowerCase();
+        return (!query || haystack.includes(query))
+          && (!state.filters.domain || item.domain === state.filters.domain)
+          && (!state.filters.difficulty || item.difficulty === state.filters.difficulty)
+          && (!state.filters.type || item.type === state.filters.type);
+      });
+
+      if (state.sort === 'unpracticed') items = items.filter((item) => !item.practiced);
+      if (state.sort === 'recommended') items.sort((a, b) => b.score - a.score);
+      if (state.sort === 'latest') items.sort((a, b) => b.updated - a.updated);
+      if (state.sort === 'all') items.sort((a, b) => a.code.localeCompare(b.code));
+      return items;
+    }
+
+    function renderQuestions() {
+      const items = visibleQuestions();
+      if (state.selectedQuestion && !items.some((item) => item.code === state.selectedQuestion)) {
+        state.selectedQuestion = '';
+      }
+
+      questionGrid.innerHTML = items.map((item) => `
+        <button class="question-card" type="button" role="radio" aria-checked="${item.code === state.selectedQuestion}" data-question="${item.code}">
+          <span class="card-head">
+            <span class="question-code">${item.code}</span>
+            <span class="selected-check" aria-hidden="true">✓</span>
+          </span>
+          <span class="question-text">${item.question}</span>
+          <span class="meta-row">
+            <span class="tag domain">${item.domain}</span>
+            <span class="tag level">${item.difficulty}</span>
+            <span class="tag type">${item.type}</span>
+          </span>
+        </button>
+      `).join('');
+
+      resultCount.textContent = `${items.length} 道题`;
+      questionEmpty.hidden = items.length > 0;
+      questionGrid.hidden = items.length === 0;
+      clearFiltersButton.hidden = !hasActiveFilters();
+      updateStartButton();
+    }
+
+    function renderRoles() {
+      roleGrid.innerHTML = roles.map((item) => `
+        <button class="role-card" type="button" role="radio" aria-checked="${item.id === state.selectedRole}" data-role="${item.id}">
+          <span class="card-head">
+            <span class="role-code">${item.code}</span>
+            <span class="selected-check" aria-hidden="true">✓</span>
+          </span>
+          <strong>${item.title}</strong>
+          <small>${item.meta}</small>
+        </button>
+      `).join('');
+    }
+
+    function renderAdvancedSettings() {
+      const isRoleMode = state.mode === 'role';
+      const isResumeMode = state.mode === 'resume';
+      document.querySelector('#generic-advanced-settings').hidden = isRoleMode || isResumeMode;
+      document.querySelector('#role-advanced-settings').hidden = !isRoleMode;
+      document.querySelector('#resume-advanced-settings').hidden = !isResumeMode;
+      document.querySelector('#settings-dialog-title').textContent = isRoleMode ? '岗位专项设置' : (isResumeMode ? '简历深挖设置' : '更多设置');
+      document.querySelectorAll('#resume-focus-options input').forEach((input) => {
+        input.checked = state.resumeFocus.has(input.value);
+        input.disabled = input.checked && state.resumeFocus.size === 1;
+      });
+      if (!isRoleMode) return;
+
+      const role = roles.find((item) => item.id === state.selectedRole);
+      const options = role?.topics ?? [];
+      document.querySelector('#role-topic-options').innerHTML = options.length > 0
+        ? options.map((topic) => `<label class="check-option"><input type="checkbox" value="${topic}" ${state.roleTopics.has(topic) ? 'checked' : ''}>${topic}</label>`).join('')
+        : '<div class="empty-state">选择岗位后显示技术范围</div>';
+      document.querySelector('#target-level').value = state.targetLevel;
+      document.querySelector('#job-keywords').value = state.jobKeywords;
+      document.querySelectorAll('#role-focus-options input').forEach((input) => {
+        input.checked = state.roleFocus.has(input.value);
+      });
+    }
+
+    function escapeHtml(value) {
+      /*
+      const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#039;' };
+      return String(value).replace(/[&<>\"']/g, (character) => entities[character]);
+      */
+      const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+      return String(value).replace(/[&<>"']/g, (character) => entities[character]);
+    }
+
+    function renderInlineMarkdown(value) {
+      return escapeHtml(value)
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    }
+
+    function renderMarkdown(source) {
+      const lines = source.replace(/\r\n/g, '\n').split('\n');
+      const output = [];
+      let inList = false;
+
+      lines.forEach((line) => {
+        const heading = line.match(/^(#{1,3})\s+(.+)$/);
+        const listItem = line.match(/^\s*-\s+(.+)$/);
+
+        if (listItem) {
+          if (!inList) {
+            output.push('<ul>');
+            inList = true;
+          }
+          output.push(`<li>${renderInlineMarkdown(listItem[1])}</li>`);
+          return;
+        }
+
+        if (inList) {
+          output.push('</ul>');
+          inList = false;
+        }
+
+        if (heading) {
+          const level = heading[1].length;
+          output.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+        } else if (line.trim()) {
+          output.push(`<p>${renderInlineMarkdown(line)}</p>`);
+        }
+      });
+
+      if (inList) output.push('</ul>');
+      return output.join('');
+    }
+
+    function renderReadOnlyDocument(resume) {
+      return `
+        <div class="resume-document-stack">
+          ${resume.pages.map((page) => `
+            <article class="document-page">
+              <header class="document-page-head">
+                <h1>${escapeHtml(page.title)}</h1>
+                <p>${escapeHtml(page.subtitle)}</p>
+              </header>
+              ${page.sections.map((section) => `
+                <section class="document-section">
+                  <h2>${escapeHtml(section.title)}</h2>
+                  ${(section.paragraphs ?? []).map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`).join('')}
+                  ${section.items?.length ? `<ul>${section.items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
+                  ${(section.entries ?? []).map((entry) => `
+                    <h3>${escapeHtml(entry.heading)}</h3>
+                    <p>${escapeHtml(entry.body)}</p>
+                  `).join('')}
+                </section>
+              `).join('')}
+            </article>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    function activeResume() {
+      return resumeDocuments.find((resume) => resume.id === state.activeResumeId) ?? resumeDocuments[0];
+    }
+
+    function renderResumeFiles() {
+      const selectedCount = resumeDocuments.filter((resume) => state.selectedResumeIds.has(resume.id)).length;
+      document.querySelector('#resume-selection-count').textContent = `本场已选 ${selectedCount} 份`;
+      document.querySelector('#resume-mobile-count').textContent = `已选 ${selectedCount} 份`;
+
+      resumeFileList.innerHTML = resumeDocuments.map((resume) => {
+        const selected = state.selectedResumeIds.has(resume.id);
+        const active = resume.id === state.activeResumeId;
+        return `
+          <div class="resume-file-row${active ? ' is-active' : ''}${selected ? ' is-selected' : ''}">
+            <label class="resume-file-check">
+              <input type="checkbox" data-resume-select="${escapeHtml(resume.id)}" ${selected ? 'checked' : ''} aria-label="${selected ? '从本场移除' : '加入本场'}：${escapeHtml(resume.name)}">
+            </label>
+            <button class="resume-file-button" type="button" data-resume-id="${escapeHtml(resume.id)}" aria-current="${active ? 'true' : 'false'}">
+              <span class="resume-file-name">${escapeHtml(resume.name)}</span>
+              <span class="resume-file-meta">
+                <span class="resume-format">${escapeHtml(resume.format)}</span>
+                <span class="resume-file-status">可用</span>
+              </span>
+            </button>
+          </div>
+        `;
+      }).join('');
+
+      resumeMobileSelect.innerHTML = resumeDocuments
+        .map((resume) => `<option value="${escapeHtml(resume.id)}">${escapeHtml(resume.name)}</option>`)
+        .join('');
+      resumeMobileSelect.value = state.activeResumeId;
+      resumeMobileCheck.checked = state.selectedResumeIds.has(state.activeResumeId);
+      resumeMobileCheck.setAttribute('aria-label', `${resumeMobileCheck.checked ? '从本场移除' : '加入本场'}：${activeResume().name}`);
+    }
+
+    function renderResumeReader(resetScroll = false) {
+      const resume = activeResume();
+      const editing = state.editingResumeId === resume.id;
+      document.querySelector('#resume-reader-format').textContent = resume.format;
+      document.querySelector('#resume-reader-title').textContent = resume.name;
+      document.querySelector('#resume-reader-meta').textContent = `${resume.status} · ${resume.meta}`;
+      document.querySelector('#resume-reader-actions').innerHTML = resume.editable && !editing
+        ? '<button class="more-button" type="button" data-resume-action="edit">编辑</button>'
+        : '';
+
+      if (editing) {
+        resumeReaderBody.innerHTML = `
+          <div class="resume-editor-shell">
+            <textarea class="resume-editor" id="resume-editor" aria-label="编辑 ${escapeHtml(resume.name)}"></textarea>
+            <div class="resume-editor-actions">
+              <button class="more-button" type="button" data-resume-action="cancel">取消</button>
+              <button class="resume-save-button" type="button" data-resume-action="save">保存</button>
+            </div>
+          </div>
+        `;
+        const editor = document.querySelector('#resume-editor');
+        editor.value = resume.content;
+        window.requestAnimationFrame(() => editor.focus());
+      } else if (resume.pages) {
+        resumeReaderBody.innerHTML = renderReadOnlyDocument(resume);
+      } else {
+        resumeReaderBody.innerHTML = `
+          <article class="markdown-document">
+            <div class="markdown-content">${renderMarkdown(resume.content)}</div>
+          </article>
+        `;
+      }
+
+      if (resetScroll) resumeReaderBody.scrollTop = 0;
+      document.querySelector('#resume-reader-announcer').textContent = `已切换到 ${resume.name}，${resume.editable ? '可编辑' : '只读'}`;
+    }
+
+    function changeActiveResume(resumeId) {
+      if (state.editingResumeId) {
+        showToast('请先保存或取消当前修改');
+        renderResumeFiles();
+        return;
+      }
+      state.activeResumeId = resumeId;
+      renderResumeFiles();
+      renderResumeReader(true);
+    }
+
+    function setResumeSelected(resumeId, selected) {
+      if (selected) state.selectedResumeIds.add(resumeId);
+      else state.selectedResumeIds.delete(resumeId);
+      renderResumeFiles();
+      updateStartButton();
+    }
+
+    function renderResumeContext() {
+      const hasResume = resumeDocuments.length > 0;
+      document.querySelector('#resume-context').hidden = !hasResume;
+      document.querySelector('#resume-empty').hidden = hasResume;
+      if (!hasResume) return;
+      if (!activeResume()) state.activeResumeId = resumeDocuments[0].id;
+      renderResumeFiles();
+      renderResumeReader(true);
+    }
+
+    function hasActiveFilters() {
+      return Boolean(state.filters.query || state.filters.domain || state.filters.difficulty || state.filters.type);
+    }
+
+    function syncFilters() {
+      document.querySelector('#search-input').value = state.filters.query;
+      document.querySelector('#mobile-search-input').value = state.filters.query;
+      document.querySelector('#domain-filter').value = state.filters.domain;
+      document.querySelector('#mobile-domain-filter').value = state.filters.domain;
+      document.querySelector('#difficulty-filter').value = state.filters.difficulty;
+      document.querySelector('#mobile-difficulty-filter').value = state.filters.difficulty;
+      document.querySelector('#type-filter').value = state.filters.type;
+      document.querySelector('#mobile-type-filter').value = state.filters.type;
+    }
+
+    function clearFilters() {
+      state.filters = { query: '', domain: '', difficulty: '', type: '' };
+      syncFilters();
+      renderQuestions();
+    }
+
+    function updateSettingsSummary() {
+      const summary = `${state.pursuit} · ${state.rounds} 轮${state.smartClose ? ' · 智能收束' : ''}`;
+      document.querySelector('#settings-summary').textContent = summary;
+      document.querySelector('#round-output').textContent = String(state.rounds);
+      document.querySelector('#mobile-rounds').value = String(state.rounds);
+      document.querySelector('#smart-close').checked = state.smartClose;
+      document.querySelector('#mobile-smart-close').checked = state.smartClose;
+      document.querySelector('#mobile-pursuit').value = state.pursuit;
+      document.querySelectorAll('.pursuit-button').forEach((button) => {
+        button.setAttribute('aria-pressed', String(button.dataset.pursuit === state.pursuit));
+      });
+    }
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add('show');
+      window.clearTimeout(showToast.timer);
+      showToast.timer = window.setTimeout(() => toast.classList.remove('show'), 2600);
+    }
+
+    document.querySelectorAll('.mode-tab').forEach((button) => {
+      button.addEventListener('click', () => switchMode(button.dataset.mode));
+    });
+
+    document.querySelectorAll('.sort-tab').forEach((button) => {
+      button.addEventListener('click', () => {
+        state.sort = button.dataset.sort;
+        document.querySelectorAll('.sort-tab').forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
+        renderQuestions();
+      });
+    });
+
+    questionGrid.addEventListener('click', (event) => {
+      const card = event.target.closest('[data-question]');
+      if (!card) return;
+      state.selectedQuestion = card.dataset.question;
+      renderQuestions();
+    });
+
+    roleGrid.addEventListener('click', (event) => {
+      const card = event.target.closest('[data-role]');
+      if (!card) return;
+      if (state.selectedRole !== card.dataset.role) {
+        const role = roles.find((item) => item.id === card.dataset.role);
+        state.roleTopics = new Set(role?.topics ?? []);
+      }
+      state.selectedRole = card.dataset.role;
+      renderRoles();
+      renderAdvancedSettings();
+      updateStartButton();
+    });
+
+    resumeFileList.addEventListener('click', (event) => {
+      const fileButton = event.target.closest('[data-resume-id]');
+      if (!fileButton) return;
+      changeActiveResume(fileButton.dataset.resumeId);
+    });
+
+    resumeFileList.addEventListener('change', (event) => {
+      if (!event.target.matches('[data-resume-select]')) return;
+      setResumeSelected(event.target.dataset.resumeSelect, event.target.checked);
+    });
+
+    resumeMobileSelect.addEventListener('change', (event) => {
+      changeActiveResume(event.target.value);
+    });
+
+    resumeMobileCheck.addEventListener('change', (event) => {
+      setResumeSelected(state.activeResumeId, event.target.checked);
+    });
+
+    resumeReader.addEventListener('click', (event) => {
+      const actionButton = event.target.closest('[data-resume-action]');
+      if (!actionButton) return;
+      const resume = activeResume();
+      const action = actionButton.dataset.resumeAction;
+
+      if (action === 'edit' && resume.editable) {
+        state.editingResumeId = resume.id;
+        renderResumeReader();
+      }
+
+      if (action === 'cancel') {
+        state.editingResumeId = '';
+        renderResumeReader();
+      }
+
+      if (action === 'save') {
+        const editor = document.querySelector('#resume-editor');
+        resume.content = editor.value;
+        state.editingResumeId = '';
+        renderResumeReader(true);
+        showToast('简历内容已保存');
+      }
+    });
+
+    questionGrid.addEventListener('keydown', (event) => {
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+      const cards = Array.from(questionGrid.querySelectorAll('.question-card'));
+      const current = cards.indexOf(document.activeElement);
+      if (current < 0 || cards.length === 0) return;
+      event.preventDefault();
+      const delta = ['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 1;
+      const next = (current + delta + cards.length) % cards.length;
+      cards[next].focus();
+    });
+
+    ['search-input', 'mobile-search-input'].forEach((id) => {
+      document.querySelector(`#${id}`).addEventListener('input', (event) => {
+        state.filters.query = event.target.value;
+        syncFilters();
+        renderQuestions();
+      });
+    });
+
+    [
+      ['domain-filter', 'domain'],
+      ['mobile-domain-filter', 'domain'],
+      ['difficulty-filter', 'difficulty'],
+      ['mobile-difficulty-filter', 'difficulty'],
+      ['type-filter', 'type'],
+      ['mobile-type-filter', 'type']
+    ].forEach(([id, key]) => {
+      document.querySelector(`#${id}`).addEventListener('change', (event) => {
+        state.filters[key] = event.target.value;
+        syncFilters();
+        renderQuestions();
+      });
+    });
+
+    clearFiltersButton.addEventListener('click', clearFilters);
+    document.querySelector('#mobile-clear-filters').addEventListener('click', clearFilters);
+
+    document.querySelectorAll('.pursuit-button').forEach((button) => {
+      button.addEventListener('click', () => {
+        state.pursuit = button.dataset.pursuit;
+        updateSettingsSummary();
+      });
+    });
+
+    document.querySelector('#round-down').addEventListener('click', () => {
+      state.rounds = Math.max(1, state.rounds - 1);
+      updateSettingsSummary();
+    });
+
+    document.querySelector('#round-up').addEventListener('click', () => {
+      state.rounds = Math.min(15, state.rounds + 1);
+      updateSettingsSummary();
+    });
+
+    document.querySelector('#smart-close').addEventListener('change', (event) => {
+      state.smartClose = event.target.checked;
+      updateSettingsSummary();
+    });
+
+    document.querySelector('#mobile-pursuit').addEventListener('change', (event) => {
+      state.pursuit = event.target.value;
+      updateSettingsSummary();
+    });
+
+    document.querySelector('#mobile-rounds').addEventListener('change', (event) => {
+      state.rounds = Math.max(1, Math.min(15, Number(event.target.value) || 3));
+      updateSettingsSummary();
+    });
+
+    document.querySelector('#mobile-smart-close').addEventListener('change', (event) => {
+      state.smartClose = event.target.checked;
+      updateSettingsSummary();
+    });
+
+    const settingsDialog = document.querySelector('#settings-dialog');
+    const filterDialog = document.querySelector('#filter-dialog');
+    document.querySelector('#more-settings').addEventListener('click', () => {
+      renderAdvancedSettings();
+      settingsDialog.showModal();
+    });
+    document.querySelector('#mobile-more-settings').addEventListener('click', () => {
+      renderAdvancedSettings();
+      settingsDialog.showModal();
+    });
+    document.querySelector('#open-filters').addEventListener('click', () => filterDialog.showModal());
+    document.querySelectorAll('[data-close-dialog]').forEach((button) => {
+      button.addEventListener('click', () => document.querySelector(`#${button.dataset.closeDialog}`).close());
+    });
+
+    startButton.addEventListener('click', () => {
+      if (!currentSelection()) return;
+      const labels = { free: '自由面试', role: '岗位专项面试', resume: '简历深挖面试' };
+      showToast(`${labels[state.mode]}已就绪`);
+    });
+
+    document.querySelector('#target-level').addEventListener('change', (event) => {
+      state.targetLevel = event.target.value;
+    });
+
+    document.querySelector('#job-keywords').addEventListener('input', (event) => {
+      state.jobKeywords = event.target.value;
+    });
+
+    document.querySelector('#role-topic-options').addEventListener('change', (event) => {
+      if (!event.target.matches('input[type="checkbox"]')) return;
+      if (event.target.checked) state.roleTopics.add(event.target.value);
+      else state.roleTopics.delete(event.target.value);
+    });
+
+    document.querySelector('#role-focus-options').addEventListener('change', (event) => {
+      if (!event.target.matches('input[type="checkbox"]')) return;
+      if (event.target.checked) state.roleFocus.add(event.target.value);
+      else state.roleFocus.delete(event.target.value);
+    });
+
+    document.querySelector('#resume-focus-options').addEventListener('change', (event) => {
+      if (!event.target.matches('input[type="checkbox"]')) return;
+      if (event.target.checked) state.resumeFocus.add(event.target.value);
+      else if (state.resumeFocus.size > 1) state.resumeFocus.delete(event.target.value);
+      renderAdvancedSettings();
+    });
+
+    document.querySelectorAll('.profile-entry').forEach((button) => {
+      button.addEventListener('click', () => showToast('请在个人档案中更新简历'));
+    });
+
+    renderQuestions();
+    renderRoles();
+    renderResumeContext();
+    renderAdvancedSettings();
+    updateSettingsSummary();
+    updateStartButton();
+  </script>
+</body>
+</html>

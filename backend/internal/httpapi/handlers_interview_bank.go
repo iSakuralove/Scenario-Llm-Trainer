@@ -33,6 +33,13 @@ var interviewKnowledgeAllowedQuestionRoles = map[string]bool{
 	"mixed":    true,
 }
 
+var interviewKnowledgeAllowedQuestionTypes = map[string]bool{
+	"principle":       true,
+	"troubleshooting": true,
+	"architecture":    true,
+	"behavioral":      true,
+}
+
 var interviewKnowledgeAllowedStatuses = map[string]bool{
 	"draft":     true,
 	"published": true,
@@ -46,36 +53,42 @@ var interviewKnowledgeAllowedVectorStatuses = map[string]bool{
 }
 
 type interviewKnowledgeImportRequest struct {
-	BatchID      string
-	SourceRef    string
-	PublishNote  string
-	Domain       string
-	Category     string
-	Difficulty   string
-	QuestionRole string
-	Status       string
-	VectorStatus string
-	Tags         []string
-	Items        []interviewKnowledgeImportRawItem
+	BatchID         string
+	SourceRef       string
+	PublishNote     string
+	Domain          string
+	Category        string
+	Difficulty      string
+	QuestionRole    string
+	QuestionType    string
+	OpeningQuestion string
+	StableCode      string
+	Status          string
+	VectorStatus    string
+	Tags            []string
+	Items           []interviewKnowledgeImportRawItem
 }
 
 type interviewKnowledgeImportRawItem struct {
-	Index         int
-	Raw           map[string]json.RawMessage
-	ID            string
-	Title         string
-	Subject       string
-	Domain        string
-	Difficulty    string
-	Category      string
-	QuestionRole  string
-	SourceRef     string
-	Tags          []string
-	Principles    []string
-	Pitfalls      []string
-	FollowUpPaths []string
-	Status        string
-	VectorStatus  string
+	Index           int
+	Raw             map[string]json.RawMessage
+	ID              string
+	Title           string
+	Subject         string
+	Domain          string
+	Difficulty      string
+	Category        string
+	QuestionRole    string
+	QuestionType    string
+	OpeningQuestion string
+	StableCode      string
+	SourceRef       string
+	Tags            []string
+	Principles      []string
+	Pitfalls        []string
+	FollowUpPaths   []string
+	Status          string
+	VectorStatus    string
 }
 
 type interviewKnowledgeImportItemResult struct {
@@ -123,19 +136,22 @@ type interviewKnowledgeIndexRebuildResponse struct {
 }
 
 type interviewKnowledgeAtomUpdateRequest struct {
-	BaseVersion   int      `json:"base_version"`
-	ChangeNote    string   `json:"change_note"`
-	Title         string   `json:"title"`
-	Subject       string   `json:"subject"`
-	Domain        string   `json:"domain"`
-	Difficulty    string   `json:"difficulty"`
-	Category      string   `json:"category"`
-	QuestionRole  string   `json:"question_role"`
-	SourceRef     string   `json:"source_ref"`
-	Tags          []string `json:"tags"`
-	Principles    []string `json:"principles"`
-	Pitfalls      []string `json:"pitfalls"`
-	FollowUpPaths []string `json:"follow_up_paths"`
+	BaseVersion     int      `json:"base_version"`
+	ChangeNote      string   `json:"change_note"`
+	Title           string   `json:"title"`
+	Subject         string   `json:"subject"`
+	Domain          string   `json:"domain"`
+	Difficulty      string   `json:"difficulty"`
+	Category        string   `json:"category"`
+	QuestionRole    string   `json:"question_role"`
+	QuestionType    string   `json:"question_type"`
+	OpeningQuestion string   `json:"opening_question"`
+	StableCode      string   `json:"stable_code"`
+	SourceRef       string   `json:"source_ref"`
+	Tags            []string `json:"tags"`
+	Principles      []string `json:"principles"`
+	Pitfalls        []string `json:"pitfalls"`
+	FollowUpPaths   []string `json:"follow_up_paths"`
 }
 
 type interviewKnowledgeAtomArchiveRequest struct {
@@ -1062,6 +1078,13 @@ func (s *Server) updateInterviewKnowledgeAtom(atomID string, req interviewKnowle
 	updated.Difficulty = strings.ToUpper(strings.TrimSpace(req.Difficulty))
 	updated.Category = strings.TrimSpace(req.Category)
 	updated.QuestionRole = strings.TrimSpace(req.QuestionRole)
+	updated.QuestionType = strings.TrimSpace(req.QuestionType)
+	updated.OpeningQuestion = strings.TrimSpace(req.OpeningQuestion)
+	if strings.TrimSpace(current.StableCode) == "" {
+		updated.StableCode = strings.ToUpper(strings.TrimSpace(req.StableCode))
+	} else {
+		updated.StableCode = current.StableCode
+	}
 	updated.SourceRef = strings.TrimSpace(req.SourceRef)
 	updated.Tags = normalizeImportStringList(req.Tags, true)
 	updated.Principles = normalizeImportStringList(req.Principles, false)
@@ -1069,11 +1092,11 @@ func (s *Server) updateInterviewKnowledgeAtom(atomID string, req interviewKnowle
 	updated.FollowUpPaths = normalizeImportStringList(req.FollowUpPaths, false)
 	updated.Status = current.Status
 	// 内容变更后旧向量不再可信，等待管理员手动重建索引。
-		updated.VectorStatus = "pending"
+	updated.VectorStatus = "pending"
 
-		if errors := validateInterviewKnowledgeAtomFields(updated); len(errors) > 0 {
-			return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf("%s", strings.Join(errors, "; "))
-		}
+	if errors := validateInterviewKnowledgeAtomFields(updated); len(errors) > 0 {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf("%s", strings.Join(errors, "; "))
+	}
 	return s.store.SaveInterviewKnowledgeAtomVersioned(updated, domain.InterviewKnowledgeVersionManualEdit, user.ID, changeNote)
 }
 
@@ -1112,11 +1135,11 @@ func (s *Server) restoreInterviewKnowledgeAtom(atomID string, user *domain.User)
 		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf("only archived interview knowledge atoms can be restored")
 	}
 	restored := *current
-		restored.Status = "published"
-		restored.VectorStatus = "pending"
-		if errors := validateInterviewKnowledgeAtomFields(restored); len(errors) > 0 {
-			return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf("%s", strings.Join(errors, "; "))
-		}
+	restored.Status = "published"
+	restored.VectorStatus = "pending"
+	if errors := validateInterviewKnowledgeAtomFields(restored); len(errors) > 0 {
+		return domain.InterviewKnowledgeAtom{}, domain.InterviewKnowledgeAtomVersion{}, fmt.Errorf("%s", strings.Join(errors, "; "))
+	}
 	return s.store.SaveInterviewKnowledgeAtomVersioned(restored, domain.InterviewKnowledgeVersionRestoreArchived, user.ID, "恢复归档")
 }
 
@@ -1628,16 +1651,19 @@ func decodeInterviewKnowledgeImportRequest(w http.ResponseWriter, r *http.Reques
 		return interviewKnowledgeImportRequest{}, false
 	}
 	req := interviewKnowledgeImportRequest{
-		BatchID:      rawStringAlias(raw, "batch_id", "batchId"),
-		SourceRef:    rawStringAlias(raw, "source_ref", "sourceRef"),
-		PublishNote:  rawStringAlias(raw, "publish_note", "publishNote"),
-		Domain:       rawStringAlias(raw, "domain"),
-		Category:     rawStringAlias(raw, "category"),
-		Difficulty:   rawStringAlias(raw, "difficulty"),
-		QuestionRole: rawStringAlias(raw, "question_role", "questionRole"),
-		Status:       rawStringAlias(raw, "status"),
-		VectorStatus: rawStringAlias(raw, "vector_status", "vectorStatus"),
-		Tags:         normalizeImportStringList(rawStringSliceAlias(raw, "tags"), true),
+		BatchID:         rawStringAlias(raw, "batch_id", "batchId"),
+		SourceRef:       rawStringAlias(raw, "source_ref", "sourceRef"),
+		PublishNote:     rawStringAlias(raw, "publish_note", "publishNote"),
+		Domain:          rawStringAlias(raw, "domain"),
+		Category:        rawStringAlias(raw, "category"),
+		Difficulty:      rawStringAlias(raw, "difficulty"),
+		QuestionRole:    rawStringAlias(raw, "question_role", "questionRole"),
+		QuestionType:    rawStringAlias(raw, "question_type", "questionType"),
+		OpeningQuestion: rawStringAlias(raw, "opening_question", "openingQuestion"),
+		StableCode:      strings.ToUpper(rawStringAlias(raw, "stable_code", "stableCode")),
+		Status:          rawStringAlias(raw, "status"),
+		VectorStatus:    rawStringAlias(raw, "vector_status", "vectorStatus"),
+		Tags:            normalizeImportStringList(rawStringSliceAlias(raw, "tags"), true),
 	}
 	itemRaw, ok := rawAlias(raw, "items", "atoms")
 	if ok {
@@ -1656,22 +1682,25 @@ func parseInterviewKnowledgeImportItem(index int, raw map[string]json.RawMessage
 	itemTags := normalizeImportStringList(rawStringSliceAlias(raw, "tags"), true)
 	tags := uniqueStrings(append(append([]string{}, req.Tags...), itemTags...))
 	return interviewKnowledgeImportRawItem{
-		Index:         index,
-		Raw:           raw,
-		ID:            rawStringAlias(raw, "id"),
-		Title:         rawStringAlias(raw, "title"),
-		Subject:       rawStringAlias(raw, "subject"),
-		Domain:        firstNonEmpty(rawStringAlias(raw, "domain"), req.Domain),
-		Difficulty:    firstNonEmpty(rawStringAlias(raw, "difficulty"), req.Difficulty),
-		Category:      firstNonEmpty(rawStringAlias(raw, "category"), req.Category),
-		QuestionRole:  firstNonEmpty(rawStringAlias(raw, "question_role", "questionRole"), req.QuestionRole),
-		SourceRef:     firstNonEmpty(rawStringAlias(raw, "source_ref", "sourceRef"), req.SourceRef),
-		Tags:          tags,
-		Principles:    normalizeImportStringList(rawStringSliceAlias(raw, "principles"), false),
-		Pitfalls:      normalizeImportStringList(rawStringSliceAlias(raw, "pitfalls"), false),
-		FollowUpPaths: normalizeImportStringList(rawStringSliceAlias(raw, "follow_up_paths", "followUpPaths"), false),
-		Status:        firstNonEmpty(rawStringAlias(raw, "status"), req.Status, "published"),
-		VectorStatus:  firstNonEmpty(rawStringAlias(raw, "vector_status", "vectorStatus"), req.VectorStatus, "pending"),
+		Index:           index,
+		Raw:             raw,
+		ID:              rawStringAlias(raw, "id"),
+		Title:           rawStringAlias(raw, "title"),
+		Subject:         rawStringAlias(raw, "subject"),
+		Domain:          firstNonEmpty(rawStringAlias(raw, "domain"), req.Domain),
+		Difficulty:      firstNonEmpty(rawStringAlias(raw, "difficulty"), req.Difficulty),
+		Category:        firstNonEmpty(rawStringAlias(raw, "category"), req.Category),
+		QuestionRole:    firstNonEmpty(rawStringAlias(raw, "question_role", "questionRole"), req.QuestionRole),
+		QuestionType:    firstNonEmpty(rawStringAlias(raw, "question_type", "questionType"), req.QuestionType),
+		OpeningQuestion: firstNonEmpty(rawStringAlias(raw, "opening_question", "openingQuestion"), req.OpeningQuestion),
+		StableCode:      strings.ToUpper(firstNonEmpty(rawStringAlias(raw, "stable_code", "stableCode"), req.StableCode)),
+		SourceRef:       firstNonEmpty(rawStringAlias(raw, "source_ref", "sourceRef"), req.SourceRef),
+		Tags:            tags,
+		Principles:      normalizeImportStringList(rawStringSliceAlias(raw, "principles"), false),
+		Pitfalls:        normalizeImportStringList(rawStringSliceAlias(raw, "pitfalls"), false),
+		FollowUpPaths:   normalizeImportStringList(rawStringSliceAlias(raw, "follow_up_paths", "followUpPaths"), false),
+		Status:          firstNonEmpty(rawStringAlias(raw, "status"), req.Status, "published"),
+		VectorStatus:    firstNonEmpty(rawStringAlias(raw, "vector_status", "vectorStatus"), req.VectorStatus, "pending"),
 	}
 }
 
@@ -1746,20 +1775,23 @@ func (s *Server) validateInterviewKnowledgeImportItem(rawItem interviewKnowledge
 		Errors:   []string{},
 		Warnings: []string{},
 		Atom: domain.InterviewKnowledgeAtom{
-			ID:            rawItem.ID,
-			Title:         rawItem.Title,
-			Subject:       rawItem.Subject,
-			Domain:        rawItem.Domain,
-			Difficulty:    strings.ToUpper(rawItem.Difficulty),
-			Category:      rawItem.Category,
-			QuestionRole:  rawItem.QuestionRole,
-			SourceRef:     rawItem.SourceRef,
-			Tags:          rawItem.Tags,
-			Principles:    rawItem.Principles,
-			Pitfalls:      rawItem.Pitfalls,
-			FollowUpPaths: rawItem.FollowUpPaths,
-			Status:        rawItem.Status,
-			VectorStatus:  rawItem.VectorStatus,
+			ID:              rawItem.ID,
+			Title:           rawItem.Title,
+			Subject:         rawItem.Subject,
+			Domain:          rawItem.Domain,
+			Difficulty:      strings.ToUpper(rawItem.Difficulty),
+			Category:        rawItem.Category,
+			QuestionRole:    rawItem.QuestionRole,
+			QuestionType:    rawItem.QuestionType,
+			OpeningQuestion: rawItem.OpeningQuestion,
+			StableCode:      rawItem.StableCode,
+			SourceRef:       rawItem.SourceRef,
+			Tags:            rawItem.Tags,
+			Principles:      rawItem.Principles,
+			Pitfalls:        rawItem.Pitfalls,
+			FollowUpPaths:   rawItem.FollowUpPaths,
+			Status:          rawItem.Status,
+			VectorStatus:    rawItem.VectorStatus,
 		},
 		VersionType: domain.InterviewKnowledgeVersionContentUpdate,
 	}
@@ -1804,6 +1836,19 @@ func validateInterviewKnowledgeAtomFields(atom domain.InterviewKnowledgeAtom) []
 	if !interviewKnowledgeAllowedQuestionRoles[atom.QuestionRole] {
 		errors = append(errors, "question_role is invalid")
 	}
+	if atom.QuestionRole == "opening" || atom.QuestionRole == "mixed" {
+		if strings.TrimSpace(atom.OpeningQuestion) == "" {
+			errors = append(errors, "opening_question is required for opening or mixed items")
+		} else if len([]rune(strings.TrimSpace(atom.OpeningQuestion))) > 50 {
+			errors = append(errors, "opening_question must be at most 50 characters")
+		}
+		if !interviewKnowledgeAllowedQuestionTypes[strings.TrimSpace(atom.QuestionType)] {
+			errors = append(errors, "question_type is invalid")
+		}
+		if !validInterviewStableCode(atom.StableCode) {
+			errors = append(errors, "stable_code must use DOMAIN-001 format")
+		}
+	}
 	if !interviewKnowledgeAllowedStatuses[atom.Status] {
 		errors = append(errors, "status is invalid")
 	}
@@ -1822,6 +1867,24 @@ func validateInterviewKnowledgeAtomFields(atom domain.InterviewKnowledgeAtom) []
 	return errors
 }
 
+func validInterviewStableCode(value string) bool {
+	parts := strings.Split(strings.ToUpper(strings.TrimSpace(value)), "-")
+	if len(parts) != 2 || len(parts[0]) < 1 || len(parts[0]) > 8 || len(parts[1]) < 3 {
+		return false
+	}
+	for _, r := range parts[0] {
+		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
+			return false
+		}
+	}
+	for _, r := range parts[1] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func validInterviewKnowledgeDifficulty(value string) bool {
 	switch strings.ToUpper(strings.TrimSpace(value)) {
 	case "L1", "L2", "L3", "L4", "L5":
@@ -1838,6 +1901,9 @@ func interviewKnowledgeAtomsSameContent(left, right domain.InterviewKnowledgeAto
 		left.Difficulty == right.Difficulty &&
 		left.Category == right.Category &&
 		left.QuestionRole == right.QuestionRole &&
+		left.QuestionType == right.QuestionType &&
+		left.OpeningQuestion == right.OpeningQuestion &&
+		left.StableCode == right.StableCode &&
 		left.SourceRef == right.SourceRef &&
 		left.Status == right.Status &&
 		reflect.DeepEqual(left.Tags, right.Tags) &&

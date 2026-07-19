@@ -22,6 +22,9 @@ func prepareInterviewKnowledgeAtomForVersion(atom domain.InterviewKnowledgeAtom,
 	atom.Difficulty = strings.TrimSpace(atom.Difficulty)
 	atom.Category = strings.TrimSpace(atom.Category)
 	atom.QuestionRole = strings.TrimSpace(atom.QuestionRole)
+	atom.QuestionType = strings.TrimSpace(atom.QuestionType)
+	atom.OpeningQuestion = strings.TrimSpace(atom.OpeningQuestion)
+	atom.StableCode = strings.ToUpper(strings.TrimSpace(atom.StableCode))
 	atom.SourceRef = strings.TrimSpace(atom.SourceRef)
 	atom.Status = strings.TrimSpace(atom.Status)
 	atom.VectorStatus = strings.TrimSpace(atom.VectorStatus)
@@ -79,19 +82,22 @@ func buildInterviewKnowledgeAtomVersion(atom domain.InterviewKnowledgeAtom, prev
 
 func interviewKnowledgeAtomSnapshot(atom domain.InterviewKnowledgeAtom) domain.InterviewKnowledgeAtomSnapshot {
 	return domain.InterviewKnowledgeAtomSnapshot{
-		ID:            atom.ID,
-		Title:         atom.Title,
-		Subject:       atom.Subject,
-		Domain:        atom.Domain,
-		Difficulty:    atom.Difficulty,
-		Category:      atom.Category,
-		QuestionRole:  atom.QuestionRole,
-		SourceRef:     atom.SourceRef,
-		Tags:          append([]string{}, atom.Tags...),
-		Principles:    append([]string{}, atom.Principles...),
-		Pitfalls:      append([]string{}, atom.Pitfalls...),
-		FollowUpPaths: append([]string{}, atom.FollowUpPaths...),
-		Status:        atom.Status,
+		ID:              atom.ID,
+		Title:           atom.Title,
+		Subject:         atom.Subject,
+		Domain:          atom.Domain,
+		Difficulty:      atom.Difficulty,
+		Category:        atom.Category,
+		QuestionRole:    atom.QuestionRole,
+		QuestionType:    atom.QuestionType,
+		OpeningQuestion: atom.OpeningQuestion,
+		StableCode:      atom.StableCode,
+		SourceRef:       atom.SourceRef,
+		Tags:            append([]string{}, atom.Tags...),
+		Principles:      append([]string{}, atom.Principles...),
+		Pitfalls:        append([]string{}, atom.Pitfalls...),
+		FollowUpPaths:   append([]string{}, atom.FollowUpPaths...),
+		Status:          atom.Status,
 	}
 }
 
@@ -117,6 +123,15 @@ func interviewKnowledgeDiffSummary(previous, next domain.InterviewKnowledgeAtomS
 	}
 	if previous.QuestionRole != next.QuestionRole {
 		changed = append(changed, "question_role")
+	}
+	if previous.QuestionType != next.QuestionType {
+		changed = append(changed, "question_type")
+	}
+	if previous.OpeningQuestion != next.OpeningQuestion {
+		changed = append(changed, "opening_question")
+	}
+	if previous.StableCode != next.StableCode {
+		changed = append(changed, "stable_code")
 	}
 	if previous.SourceRef != next.SourceRef {
 		changed = append(changed, "sourceRef")

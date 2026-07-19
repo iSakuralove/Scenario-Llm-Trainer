@@ -37,6 +37,7 @@ import type {
   InterviewQuestion,
   InterviewReportRetrievalSummary,
   InterviewSession,
+  ResumeDocument,
   VoiceQualityResult,
   CheckinResult,
   LearningPlan,
@@ -107,12 +108,17 @@ export interface ScenarioListParams {
 }
 
 export interface CreateInterviewPayload {
-  domain: string
-  difficulty: string
-  question_type: string
+  mode?: 'free' | 'role' | 'resume_deep_dive'
+  question_id?: string
+  resume_ids?: string[]
+  domain?: string
+  difficulty?: string
+  question_type?: string
   difficulty_level?: InterviewDifficultyLevel | string
   focus_areas?: InterviewFocusArea[]
   setup_notes?: string
+  max_rounds?: number
+  smart_close?: boolean
 }
 
 export interface StreamEvent {
@@ -125,7 +131,11 @@ export interface StreamStage {
   message: string
 }
 
-type InterviewSubmitResponse = { evaluation: InterviewSession['evaluations'][number]; session_status: string; session: InterviewSession }
+type InterviewSubmitResponse = {
+  evaluation: InterviewSession['evaluations'][number]
+  session_status: string
+  session: InterviewSession
+}
 
 type InterviewRetrievalLogFilters = {
   domain?: string
@@ -154,6 +164,9 @@ export interface InterviewLaunchpadDomain {
 
 export interface InterviewLaunchpadTrack {
   id: string
+  question_id: string
+  stable_code: string
+  opening_question: string
   title: string
   domain: string
   domain_label: string
@@ -169,6 +182,8 @@ export interface InterviewLaunchpadTrack {
   availability_state: string
   unavailable_reason?: string
   vector_status_summary: string
+  latest_updated_at?: string
+  practiced: boolean
 }
 
 export interface InterviewLaunchpadRecommendation extends InterviewLaunchpadTrack {
@@ -724,6 +739,24 @@ export const api = {
     const body = new FormData()
     body.set('file', file)
     return request<User>('/users/me/profile/import', { method: 'POST', body }, token)
+  },
+
+  resumeDocuments: (token: string) => request<{ list: ResumeDocument[]; total: number }>('/users/me/resumes', {}, token),
+
+  updateResumeDocument: (
+    token: string,
+    documentID: string,
+    payload: { content?: string; resume_summary?: string; project_summary?: string },
+  ) => request<ResumeDocument>(`/users/me/resumes/${encodeURIComponent(documentID)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  }, token),
+
+  resumeDocumentContent: async (token: string, contentURL: string) => {
+    const apiPath = contentURL.startsWith('/api/v1') ? contentURL.slice('/api/v1'.length) : contentURL
+    const response = await fetch(buildApiURL(apiPath), { headers: { Authorization: `Bearer ${token}` } })
+    if (!response.ok) throw new Error('简历文件读取失败')
+    return response.blob()
   },
 
   updatePassword: (token: string, newPassword: string) =>

@@ -1,6 +1,6 @@
 import type { InterviewDifficultyLevel, InterviewFocusArea } from '../../types'
 
-export type InterviewQuestionType = 'scenario_analysis' | 'principle'
+export type InterviewQuestionType = 'principle' | 'troubleshooting' | 'architecture' | 'behavioral'
 
 export interface InterviewLevelOption {
   value: 'L2' | 'L3' | 'L4' | 'L5'
@@ -18,11 +18,14 @@ export interface InterviewDomainOption {
 
 export interface InterviewLaunchTrack {
   id: string
+  questionId: string
+  stableCode: string
+  openingQuestion: string
   title: string
   domain: string
   domainLabel: string
   category: string
-  difficulty: 'L2' | 'L3' | 'L4' | 'L5'
+  difficulty: string
   questionType: InterviewQuestionType
   questionRole: 'opening' | 'followup' | 'mixed'
   tags: string[]
@@ -31,6 +34,8 @@ export interface InterviewLaunchTrack {
   unavailableReason?: string
   summary: string
   details: string[]
+  practiced: boolean
+  latestUpdatedAt?: string
 }
 
 export interface InterviewDifficultyLevelOption {
@@ -103,36 +108,47 @@ export const interviewDomains: InterviewDomainOption[] = [
 export const interviewLaunchTracks: InterviewLaunchTrack[] = [
   {
     id: 'interview-db-slow-query',
+    questionId: 'interview-db-slow-query',
+    stableCode: 'DB-001',
+    openingQuestion: '线上接口突然变慢，你怀疑是 MySQL 查询问题。你第一步会先看什么？',
     title: '如何定位 MySQL 慢查询',
     domain: 'database',
     domainLabel: '数据库',
     category: 'database',
     difficulty: 'L3',
-    questionType: 'scenario_analysis',
+    questionType: 'troubleshooting',
     questionRole: 'opening',
     tags: [],
     availabilityState: 'fallback',
     vectorStatusSummary: 'compatibility_seed',
-    summary: '如何定位 MySQL 慢查询',
+    summary: '线上接口突然变慢，你怀疑是 MySQL 查询问题。你第一步会先看什么？',
     details: ['情景分析', '慢查询定位', '索引与回滚'],
+    practiced: false,
   },
   {
     id: 'interview-network-timeout',
+    questionId: 'interview-network-timeout',
+    stableCode: 'NET-001',
+    openingQuestion: '微服务之间出现间歇性超时，重试后往往又能成功。你最先会去核对哪一类证据？',
     title: '如何排查跨服务调用超时',
     domain: 'network',
     domainLabel: '网络',
     category: 'network',
     difficulty: 'L3',
-    questionType: 'scenario_analysis',
+    questionType: 'troubleshooting',
     questionRole: 'opening',
     tags: [],
     availabilityState: 'fallback',
     vectorStatusSummary: 'compatibility_seed',
-    summary: '如何排查跨服务调用超时',
+    summary: '微服务之间出现间歇性超时，重试后往往又能成功。你最先会去核对哪一类证据？',
     details: ['情景分析', '链路定位', '超时边界'],
+    practiced: false,
   },
   {
     id: 'interview-os-load',
+    questionId: 'interview-os-load',
+    stableCode: 'OS-001',
+    openingQuestion: 'Linux 主机 load average 很高，但 CPU 使用率并不高。你认为最可能是哪一类原因？',
     title: 'load average 高但 CPU 不高怎么排查',
     domain: 'os',
     domainLabel: '操作系统',
@@ -143,38 +159,47 @@ export const interviewLaunchTracks: InterviewLaunchTrack[] = [
     tags: [],
     availabilityState: 'fallback',
     vectorStatusSummary: 'compatibility_seed',
-    summary: 'load average 高但 CPU 不高怎么排查',
+    summary: 'Linux 主机 load average 很高，但 CPU 使用率并不高。你认为最可能是哪一类原因？',
     details: ['原理问答', 'D 状态进程', 'IO wait'],
+    practiced: false,
   },
   {
     id: 'interview-security-ak-leak',
+    questionId: 'interview-security-ak-leak',
+    stableCode: 'SEC-001',
+    openingQuestion: '研发同学把云平台访问密钥提交到了公开仓库。你接到告警后的第一步会做什么？',
     title: '访问密钥泄露后如何遏制风险',
     domain: 'security',
     domainLabel: '安全',
     category: 'security',
     difficulty: 'L4',
-    questionType: 'scenario_analysis',
+    questionType: 'troubleshooting',
     questionRole: 'opening',
     tags: [],
     availabilityState: 'fallback',
     vectorStatusSummary: 'compatibility_seed',
-    summary: '访问密钥泄露后如何遏制风险',
+    summary: '研发同学把云平台访问密钥提交到了公开仓库。你接到告警后的第一步会做什么？',
     details: ['情景分析', '风险遏制', '密钥轮换'],
+    practiced: false,
   },
   {
     id: 'interview-devops-release-rollback',
+    questionId: 'interview-devops-release-rollback',
+    stableCode: 'DEVOPS-001',
+    openingQuestion: '一次生产发布导致服务健康检查持续失败，流水线卡在发布阶段。你会先看哪一项？',
     title: '发布失败后如何回滚并恢复流水线',
     domain: 'devops',
     domainLabel: 'DevOps',
     category: 'devops',
     difficulty: 'L4',
-    questionType: 'scenario_analysis',
+    questionType: 'troubleshooting',
     questionRole: 'opening',
     tags: [],
     availabilityState: 'fallback',
     vectorStatusSummary: 'compatibility_seed',
-    summary: '发布失败后如何回滚并恢复流水线',
+    summary: '一次生产发布导致服务健康检查持续失败，流水线卡在发布阶段。你会先看哪一项？',
     details: ['情景分析', '故障回滚', '流水线恢复'],
+    practiced: false,
   },
 ]
 

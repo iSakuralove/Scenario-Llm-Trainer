@@ -361,6 +361,10 @@ func writeMailPart(writer *multipart.Writer, contentType, content string) error 
 	return encoded.Close()
 }
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, user *domain.User, suffix string) {
+	if suffix == "/resumes" || strings.HasPrefix(suffix, "/resumes/") {
+		s.handleResumeDocuments(w, r, user, strings.TrimPrefix(suffix, "/resumes"))
+		return
+	}
 	switch suffix {
 	case "":
 		if r.Method != http.MethodGet {
@@ -393,8 +397,20 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, user *domain.U
 		if req.PreferredDomains != nil {
 			profile.PreferredDomains = req.PreferredDomains
 		}
-		profile.ResumeSummary = strings.TrimSpace(req.ResumeSummary)
-		profile.ProjectSummary = strings.TrimSpace(req.ProjectSummary)
+		resumeSummary := strings.TrimSpace(req.ResumeSummary)
+		projectSummary := strings.TrimSpace(req.ProjectSummary)
+		if resumeSummary != "" || projectSummary != "" {
+			if ok, reason := resumeContentQuality(resumeSummary, projectSummary); !ok {
+				writeError(w, http.StatusBadRequest, reason)
+				return
+			}
+			now := time.Now()
+			profile.ManualResumeUpdatedAt = &now
+		} else {
+			profile.ManualResumeUpdatedAt = nil
+		}
+		profile.ResumeSummary = resumeSummary
+		profile.ProjectSummary = projectSummary
 		updated, err := s.store.SaveUserProfile(user.ID, profile)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())

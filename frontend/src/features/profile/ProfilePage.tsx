@@ -67,7 +67,7 @@ export function ProfilePage() {
       const latestAuth = useAuthStore.getState()
       setSession(updated, latestAuth.token, latestAuth.refreshToken)
       setResumeSummaryDraft(updated.profile.resume_summary ?? '')
-      setMessage('已导入简历文本')
+      setMessage('已添加简历')
     } catch (err) {
       setMessage(err instanceof Error ? err.message : '导入简历失败')
     } finally {
@@ -142,7 +142,7 @@ export function ProfilePage() {
             <label>偏好专业域<input value={domainTextDraft} onChange={(event) => setDomainTextDraft(event.target.value)} placeholder="database,network,os" /></label>
             <div className="profile-import-row" data-testid="profile-resume-import">
               <span>简历导入</span>
-              <small>支持 TXT / MD / DOCX / PDF，导入后会覆盖“简历摘要”。</small>
+              <small>支持 TXT / MD / DOCX / PDF，导入后会作为独立简历保留。</small>
               <input
                 ref={resumeFileInputRef}
                 type="file"
@@ -155,7 +155,7 @@ export function ProfilePage() {
                 }}
               />
               <button className="ghost-button compact" type="button" disabled={isImportingResume} onClick={() => resumeFileInputRef.current?.click()}>
-                {isImportingResume ? '导入中' : '导入简历文本'}
+                {isImportingResume ? '导入中' : '导入简历'}
               </button>
             </div>
             <label>

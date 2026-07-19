@@ -1,5 +1,83 @@
 # Interview Launchpad Contracts
 
+> The atomic-question scenario below is the current contract and supersedes the older aggregate-track wording retained later in this file for migration context.
+
+## Scenario: Atomic Question Launchpad And Three Start Modes
+
+### 1. Scope / Trigger
+
+- Trigger: 修改 `/interviews` 真实题目列表、排序筛选、岗位专项、简历深挖或会话创建请求。
+- Applies to: `backend/internal/httpapi/handlers_interviews.go`, `backend/internal/httpapi/interview_runtime.go`, `frontend/src/api/client.ts`, `frontend/src/features/interviews/InterviewsPage.tsx`, `frontend/src/features/interviews/launchpadConfig.ts`。
+
+### 2. Signatures
+
+- `GET /api/v1/interviews/launchpad` returns atomic `open_tracks`.
+- Atomic track: `{ id, question_id, stable_code, opening_question, title, domain, domain_label, category, difficulty, question_type, question_role, tags, summary, details, published_count, indexed_count, availability_state, vector_status_summary, latest_updated_at?, practiced }`.
+- Free start: `POST /api/v1/interviews/sessions` with `{ mode:"free", question_id, difficulty_level, focus_areas, max_rounds, smart_close }`.
+- Role start: `{ mode:"role", question_id, domain, difficulty, question_type, setup_notes, ...common }`.
+- Resume start: `{ mode:"resume_deep_dive", resume_ids:string[], setup_notes, ...common }`.
+
+### 3. Contracts
+
+- One published `opening|mixed` knowledge atom produces one visible launchpad record; do not group by domain/difficulty or emit “等 N 题”.
+- `question_id` is the exact atom/question selected for session creation.
+- `opening_question` is the card's primary copy and must be complete; migration-only legacy atoms may derive a single-point opening question from title/subject.
+- `stable_code` is permanent and searchable. New imports must provide it; legacy rows may derive a deterministic compatibility code.
+- Recommendation order first matches resume/project content, then uses target role, weak history, unpracticed state, and update time. Recommendation only reorders existing questions.
+- Search covers opening question, title, stable code, domain/category, and tags. Filters cover domain, difficulty, and question type.
+- If a filter/sort change removes the selected question, the frontend clears that selection and disables start while preserving interview settings.
+- The frontend must load `InterviewSessionRoute` before creating any session.
+- A `200` response containing only the older aggregate shape is treated as version skew: show startable local fallback questions and a neutral update notice, never an empty page.
+- Resume mode starts only when at least one owned, quality-passed document is selected. The backend rebuilds and revalidates candidate context from those IDs.
+
+### 4. Validation & Error Matrix
+
+| Condition | Behavior |
+|---|---|
+| Free mode has neither `question_id` nor complete legacy tuple | HTTP `400 domain, difficulty and question_type are required` |
+| Unknown `question_id` | HTTP `404 interview question not found` |
+| Invalid mode | HTTP `400 interview mode is invalid` |
+| Resume IDs empty, foreign, missing, or all invalid | HTTP `400`, no session created |
+| Session route chunk fails | Frontend stays on launchpad and sends no create request |
+| Launchpad network failure or incompatible old shape | Five local startable questions plus non-blocking notice |
+
+### 5. Good/Base/Bad Cases
+
+- Good: Selecting `JAVA-027` activates start and creates a session with that exact atom snapshot.
+- Good: Searching the stable code returns exactly the matching question.
+- Good: A stale Docker API returns aggregate tracks; the current frontend still displays five fallback questions instead of an empty panel.
+- Base: No resume exists; resume mode remains visible, start is disabled, and the profile action is shown.
+- Bad: Clicking a card immediately creates a session.
+- Bad: One aggregate card claims “AI / LLM 等 28 题” and starts an unspecified question.
+
+### 6. Tests Required
+
+- HTTP: atomic launchpad fields, exact `question_id` start, mode validation, resume ownership/quality, recommendation order, compatibility seeds.
+- Import: opening-question length, question-type enum, stable-code format and uniqueness.
+- Frontend lint/build.
+- Browser: 1920, 1440, 1024, 768, 375, 320; no page overflow, 4/3/2/1 columns as available, keyboard selection, stable-code search, disabled/enabled start, role search, mobile settings panel.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```go
+group[atom.Domain+atom.Difficulty]++
+```
+
+This hides the real question and cannot preserve an exact user selection.
+
+#### Correct
+
+```go
+tracks = append(tracks, interviewLaunchpadTrack{
+    ID: atom.ID, QuestionID: atom.ID,
+    StableCode: atom.StableCode, OpeningQuestion: atom.OpeningQuestion,
+})
+```
+
+Each card is stable, searchable, and startable by exact ID.
+
 ## Scenario: User Launchpad Open Track API
 
 ### 1. Scope / Trigger

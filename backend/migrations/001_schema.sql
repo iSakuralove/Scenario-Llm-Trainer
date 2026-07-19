@@ -99,10 +99,13 @@ CREATE TABLE IF NOT EXISTS interview_questions (
 );
 
 CREATE TABLE IF NOT EXISTS interview_sessions (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL REFERENCES users(id),
-    question_id TEXT NOT NULL REFERENCES interview_questions(id),
-    status VARCHAR(50) DEFAULT 'question_presented',
+	id TEXT PRIMARY KEY,
+	user_id TEXT NOT NULL REFERENCES users(id),
+	question_id TEXT NOT NULL REFERENCES interview_questions(id),
+	mode VARCHAR(32),
+	resume_document_ids TEXT[] DEFAULT '{}',
+	candidate_context TEXT,
+	status VARCHAR(50) DEFAULT 'question_presented',
     current_round INT DEFAULT 1,
     max_rounds INT DEFAULT 3,
     difficulty_level VARCHAR(16),
@@ -125,9 +128,12 @@ CREATE TABLE IF NOT EXISTS interview_knowledge_atoms (
     subject TEXT NOT NULL,
     domain VARCHAR(50) NOT NULL,
     difficulty VARCHAR(16),
-    category VARCHAR(64),
-    question_role VARCHAR(20),
-    source_ref TEXT,
+	category VARCHAR(64),
+	question_role VARCHAR(20),
+	question_type VARCHAR(32),
+	opening_question TEXT,
+	stable_code VARCHAR(32),
+	source_ref TEXT,
     tags TEXT[] DEFAULT '{}',
     principles JSONB DEFAULT '[]',
     pitfalls JSONB DEFAULT '[]',
@@ -139,6 +145,9 @@ CREATE TABLE IF NOT EXISTS interview_knowledge_atoms (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS interview_knowledge_atoms_stable_code_idx
+	ON interview_knowledge_atoms(stable_code) WHERE stable_code IS NOT NULL AND stable_code <> '';
 
 CREATE TABLE IF NOT EXISTS interview_knowledge_vector_documents (
     id TEXT PRIMARY KEY,

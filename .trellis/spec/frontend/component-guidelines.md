@@ -65,3 +65,20 @@ Questions to answer:
 - 默认回答区保持轻量文本输入；Markdown、代码块和 Mermaid 工具栏应按需展开，避免首屏被编辑器占满。
 - AI 与用户消息同时使用头像、左右位置和文字标签区分，不能只依赖颜色。
 - 390px 下锚点导航必须折叠，不得产生页面级横向滚动。
+
+### Interview history actions
+
+- `/interviews` 历史列表只展示最近记录时，批量删除必须先通过 `api.history` 重新读取全量 `interviews`，不能只操作当前渲染的切片。
+- 清空历史继续复用 `api.deleteInterviewSession`；除非后端提供批量删除接口，不要新增前端专用协议。
+- 批量删除进行中必须禁用单条删除入口，避免同一会话被并发删除两次。
+
+### Interview launchpad v2
+
+- `/interviews` uses one shared page for `free / role / resume` modes; switching modes must preserve each mode's selection and the shared interview settings.
+- Free-mode cards render one real opening question, stable code, domain, difficulty, and question type. Unselected cards have no top-right action copy; selected cards show only a check mark.
+- The start button stays disabled until the current mode has a valid selection. Card clicks select only; they never create sessions.
+- Desktop keeps common settings in one compact bar. At `<= 760px`, show one settings summary plus `调整`; the dialog contains the common settings and the current mode's advanced settings.
+- Role mode keeps a search field above the role list and matches both role names and controlled technical scopes.
+- Resume mode separates preview state from interview-selection checkboxes. Desktop uses a bounded `260px + 1fr` document workspace; mobile uses a document select and one scrollable reader.
+- `html/body` must not impose a `320px` minimum width; 320px viewport plus browser zoom must not create page-level horizontal scrolling.
+- When a successful launchpad response contains only an older incompatible track shape, render the five startable local fallback questions with a neutral update notice instead of an empty page.

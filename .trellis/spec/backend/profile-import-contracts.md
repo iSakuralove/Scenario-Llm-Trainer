@@ -1,44 +1,80 @@
 # Profile Resume Import Contracts
 
-## 适用范围
+## Scenario: Multi-document Resume Import And Quality Gate
 
-修改 `POST /api/v1/users/me/profile/import`、简历文本抽取或 `UserProfile` 回填行为时，必须遵守本契约。
+### 1. Scope / Trigger
 
-## 输入与持久化契约
+- Trigger: 修改个人档案手动简历、`POST /api/v1/users/me/profile/import`、`GET /api/v1/users/me/resumes`、`PUT /api/v1/users/me/resumes/{id}`、文件资产保存或简历深挖前置校验。
+- Applies to: `backend/internal/httpapi/profile_import.go`, `backend/internal/httpapi/handlers_auth.go`, `backend/internal/domain/types.go`, `backend/internal/store`, `frontend/src/features/profile`, `frontend/src/features/interviews`。
 
-- multipart 字段固定为 `file`，最大读取 `2 MiB`。
-- 支持扩展名：`TXT / MD / DOCX / PDF`。
-- `TXT / MD` 直接按 UTF-8 文本读取；`DOCX` 读取 `word/document.xml`；`PDF` 使用现有 PDF 解析依赖提取纯文本。
-- 导入成功后仍返回更新后的 `User`，不新增独立响应 schema。
-- `resume_summary` 每次使用本次解析结果更新；只有成功提取到非空值时，才覆盖已有 `target_role` 或 `project_summary`。
+### 2. Signatures
 
-## 结构化提取契约
+- Import: `POST /api/v1/users/me/profile/import`, multipart field `file`, max `2 MiB`。
+- List: `GET /api/v1/users/me/resumes` -> `{ list: ResumeDocument[], total: number }`。
+- Edit: `PUT /api/v1/users/me/resumes/{id}` -> `ResumeDocument`。
+- `ResumeDocument`: `{ id, name, source_type, format, asset_id?, content_url?, content?, extracted_text, parse_status, quality_status, quality_reason?, editable, created_at, updated_at }`。
+- Manual profile save remains `PUT /api/v1/users/me/profile` with independent `resume_summary` and `project_summary` fields.
 
-- 目标岗位标签支持：`求职意向 / 目标岗位 / 应聘岗位 / Target Role / Position`。
-- 项目章节支持：`项目经历 / 项目经验 / Projects / Project Experience`。
-- 标签必须是行首标签，并使用中文冒号、英文冒号或独立章节标题；不要用任意子串包含判断，避免把正文中的 `position`、`experience` 误识别为标题。
-- `project_summary` 从项目标题后开始，到下一个可识别简历章节标题前结束。
-- `resume_summary` 保留其余非空行，但排除目标岗位行和完整项目章节；如果排除后为空，则回退为原始文本。
+### 3. Contracts
 
-## 错误与边界
+- Supported upload formats are `TXT / MD / DOCX / PDF`; legacy `.doc` is not accepted until a deterministic conversion path exists.
+- Uploaded files append a new `UserProfile.resume_documents` entry and must not overwrite existing resume documents.
+- `TXT / MD` store editable text directly and do not require a duplicate binary asset.
+- `DOCX / PDF` preserve the original file in the existing asset store, expose an authenticated `content_url`, and remain read-only.
+- Manual `resume_summary + project_summary` are projected as one editable `source_type=manual` document while the two source fields remain independently persisted.
+- Import and manual save reuse the same deterministic quality rules; model output is not the sole accept/reject authority.
+- Every non-empty field/file is checked independently before combined-context validation. One valid field cannot hide another field containing obvious garbage.
+- Combined usable context requires at least `60` Unicode letters/digits and at least two information classes among experience/role, skills, project/responsibility, outcomes, education.
+- A non-empty field/file is rejected when symbol ratio, repeated-character ratio, or repeated-fragment ratio reaches `60%`.
+- Failed validation never overwrites the previous profile and never appends a rejected resume document.
 
-| 条件 | 行为 |
+### 4. Validation & Error Matrix
+
+| Condition | Behavior |
 |---|---|
-| 缺少文件、空文件、超过大小限制 | 返回 `400` 对应导入错误 |
-| 不支持的扩展名 | 返回 `unsupported resume format` |
-| DOCX/PDF 无法解析 | 返回明确的无效文件错误，不保存半成品 |
-| 未识别到目标岗位或项目章节 | 保留原字段，只更新 `resume_summary` |
-| 项目章节后存在工作/教育/技能章节 | 必须在新章节处停止，不能吞入 `project_summary` |
+| Missing, empty, oversized file | HTTP `400`, no profile or asset mutation |
+| Unsupported extension | HTTP `400 unsupported resume format` |
+| Invalid DOCX/PDF | HTTP `400` with actionable parse error, no half-written document |
+| Effective characters `< 60` | HTTP `400`, preserve previous profile |
+| Fewer than two resume information classes | HTTP `400`, preserve previous profile |
+| Symbol/repetition ratio `>= 60%` | HTTP `400`, preserve previous profile |
+| Editing PDF/DOCX | HTTP `400`; only manual/TXT/MD are editable |
+| Document missing or not owned by user | HTTP `404` |
 
-## 必需测试
+### 5. Good/Base/Bad Cases
 
-- 中文“求职意向 + 项目经历”可提取 `target_role` 和 `project_summary`。
-- 英文 `Target Role + Project Experience + Work Experience` 能在工作经历前结束项目段。
-- `resume_summary` 不残留目标岗位行、项目标题或项目正文。
-- 原有 TXT、PDF 导入和无效 PDF 回归继续通过。
+- Good: Uploading two PDFs produces two independent read-only documents and preserves both original assets.
+- Good: A Markdown resume can be switched, rendered, edited, saved, and reused for resume deep dive.
+- Base: Only `project_summary` is filled, but it passes field and combined-context checks, so the manual document remains usable.
+- Bad: Uploading a second file replaces `resume_summary` and deletes the first file reference.
+- Bad: A normal summary masks a `project_summary` made of repeated symbols.
 
-## Wrong vs Correct
+### 6. Tests Required
 
-错误：用 `strings.Contains` 判断章节，或按 `idx+1` 切中文冒号，容易误命中正文并破坏 UTF-8。
+- TXT/MD/DOCX/PDF import success and invalid file regression.
+- Multiple imports append documents without replacing previous documents.
+- Manual summary/project save creates or updates one manual document without merging the source fields irreversibly.
+- All quality thresholds reject before persistence and preserve old profile data.
+- Owned editable documents update; non-editable and foreign documents reject.
+- Frontend lint/build and browser checks for empty, read-only, editable, long-content, and mobile document workspace states.
 
-正确：只匹配行首标签，显式处理 `：` / `:`，并按完整章节范围构造摘要。
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```go
+profile.ResumeSummary = extractedText
+s.store.SaveUserProfile(user.ID, profile)
+```
+
+This destroys the previous resume and bypasses per-document quality and source metadata.
+
+#### Correct
+
+```go
+document, err := buildResumeDocument(file)
+if err := validateResumeDocument(document.ExtractedText); err != nil { return err }
+profile.ResumeDocuments = append(profile.ResumeDocuments, document)
+```
+
+The file is validated before persistence and remains independently selectable.

@@ -444,6 +444,7 @@ func (s *MemoryStore) CreateInterviewSession(userID string, question *domain.Int
 		Status:       "question_presented",
 		CurrentRound: 1,
 		MaxRounds:    3,
+		SmartClose:   true,
 		Submissions:  []domain.InterviewSubmission{},
 		Evaluations:  []domain.InterviewEvaluation{},
 		StartedAt:    time.Now(),
@@ -921,6 +922,16 @@ func (s *MemoryStore) GetAsset(id string) (*domain.Asset, bool) {
 	}
 	copy := *asset
 	return &copy, true
+}
+
+func (s *MemoryStore) DeleteAsset(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.Assets[id]; !ok {
+		return false
+	}
+	delete(s.Assets, id)
+	return true
 }
 
 func (s *MemoryStore) ListAssetsForUser(userID string) []domain.Asset {
@@ -1552,6 +1563,11 @@ func cloneUser(user *domain.User) *domain.User {
 	}
 	copy.Profile.WeakPoints = append([]domain.WeakPoint{}, user.Profile.WeakPoints...)
 	copy.Profile.CheckinDates = append([]string{}, user.Profile.CheckinDates...)
+	copy.Profile.ResumeDocuments = append([]domain.ResumeDocument{}, user.Profile.ResumeDocuments...)
+	if user.Profile.ManualResumeUpdatedAt != nil {
+		updatedAt := *user.Profile.ManualResumeUpdatedAt
+		copy.Profile.ManualResumeUpdatedAt = &updatedAt
+	}
 	return &copy
 }
 
@@ -1628,6 +1644,7 @@ func cloneInterviewSession(session *domain.InterviewSession) *domain.InterviewSe
 	}
 	copy := *session
 	copy.FocusAreas = append([]string{}, session.FocusAreas...)
+	copy.ResumeDocumentIDs = append([]string{}, session.ResumeDocumentIDs...)
 	copy.Submissions = append([]domain.InterviewSubmission{}, session.Submissions...)
 	copy.Evaluations = make([]domain.InterviewEvaluation, 0, len(session.Evaluations))
 	for _, evaluation := range session.Evaluations {

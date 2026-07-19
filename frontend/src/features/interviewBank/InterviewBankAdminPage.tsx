@@ -83,6 +83,9 @@ interface AtomEditForm {
   difficulty: string
   category: string
   question_role: string
+  question_type: string
+  opening_question: string
+  stable_code: string
   source_ref: string
   tagsText: string
   principlesText: string
@@ -2168,6 +2171,23 @@ function AtomDetailPanel({
             {questionRoleOptions.filter(Boolean).map((value) => <option key={value} value={value}>{questionRoleLabel(value)}</option>)}
           </select>
         </label>
+        <label>
+          题型
+          <select value={form.question_type} onChange={(event) => onChange('question_type', event.target.value)}>
+            <option value="principle">原理问答</option>
+            <option value="troubleshooting">故障排查</option>
+            <option value="architecture">架构设计</option>
+            <option value="behavioral">行为面试</option>
+          </select>
+        </label>
+        <label>
+          稳定题号
+          <input value={form.stable_code} disabled={Boolean(atom.stable_code)} onChange={(event) => onChange('stable_code', event.target.value.toUpperCase())} placeholder="DB-001" />
+        </label>
+        <label className="span-2">
+          开场题干
+          <textarea value={form.opening_question} maxLength={50} onChange={(event) => onChange('opening_question', event.target.value)} rows={3} />
+        </label>
         <label className="span-2">
           来源追溯
           <input value={form.source_ref} onChange={(event) => onChange('source_ref', event.target.value)} />
@@ -2285,6 +2305,9 @@ function atomToEditForm(atom: InterviewKnowledgeAtom): AtomEditForm {
     difficulty: atom.difficulty,
     category: atom.category,
     question_role: atom.question_role,
+    question_type: atom.question_type || 'principle',
+    opening_question: atom.opening_question || '',
+    stable_code: atom.stable_code || '',
     source_ref: atom.source_ref,
     tagsText: atom.tags.join(', '),
     principlesText: atom.principles.join('\n'),
@@ -2303,6 +2326,9 @@ function editFormToPayload(form: AtomEditForm): InterviewKnowledgeAtomUpdateRequ
     difficulty: form.difficulty,
     category: form.category,
     question_role: form.question_role,
+    question_type: form.question_type,
+    opening_question: form.opening_question,
+    stable_code: form.stable_code,
     source_ref: form.source_ref,
     tags: parseDelimitedList(form.tagsText),
     principles: parseLineList(form.principlesText),

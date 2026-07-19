@@ -24,40 +24,46 @@ func ValidInterviewKnowledgeVersionType(versionType string) bool {
 }
 
 type InterviewKnowledgeAtom struct {
-	ID             string     `json:"id"`
-	Title          string     `json:"title"`
-	Subject        string     `json:"subject"`
-	Domain         string     `json:"domain"`
-	Difficulty     string     `json:"difficulty"`
-	Category       string     `json:"category"`
-	QuestionRole   string     `json:"question_role"`
-	SourceRef      string     `json:"source_ref"`
-	Tags           []string   `json:"tags"`
-	Principles     []string   `json:"principles"`
-	Pitfalls       []string   `json:"pitfalls"`
-	FollowUpPaths  []string   `json:"follow_up_paths"`
-	Status         string     `json:"status"`
-	CurrentVersion int        `json:"current_version"`
-	VectorStatus   string     `json:"vector_status"`
-	LastIndexedAt  *time.Time `json:"last_indexed_at,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ID              string     `json:"id"`
+	Title           string     `json:"title"`
+	Subject         string     `json:"subject"`
+	Domain          string     `json:"domain"`
+	Difficulty      string     `json:"difficulty"`
+	Category        string     `json:"category"`
+	QuestionRole    string     `json:"question_role"`
+	QuestionType    string     `json:"question_type,omitempty"`
+	OpeningQuestion string     `json:"opening_question,omitempty"`
+	StableCode      string     `json:"stable_code,omitempty"`
+	SourceRef       string     `json:"source_ref"`
+	Tags            []string   `json:"tags"`
+	Principles      []string   `json:"principles"`
+	Pitfalls        []string   `json:"pitfalls"`
+	FollowUpPaths   []string   `json:"follow_up_paths"`
+	Status          string     `json:"status"`
+	CurrentVersion  int        `json:"current_version"`
+	VectorStatus    string     `json:"vector_status"`
+	LastIndexedAt   *time.Time `json:"last_indexed_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 type InterviewKnowledgeAtomSnapshot struct {
-	ID            string   `json:"id"`
-	Title         string   `json:"title"`
-	Subject       string   `json:"subject"`
-	Domain        string   `json:"domain"`
-	Difficulty    string   `json:"difficulty"`
-	Category      string   `json:"category"`
-	QuestionRole  string   `json:"question_role"`
-	SourceRef     string   `json:"sourceRef"`
-	Tags          []string `json:"tags"`
-	Principles    []string `json:"principles"`
-	Pitfalls      []string `json:"pitfalls"`
-	FollowUpPaths []string `json:"followUpPaths"`
-	Status        string   `json:"status"`
+	ID              string   `json:"id"`
+	Title           string   `json:"title"`
+	Subject         string   `json:"subject"`
+	Domain          string   `json:"domain"`
+	Difficulty      string   `json:"difficulty"`
+	Category        string   `json:"category"`
+	QuestionRole    string   `json:"question_role"`
+	QuestionType    string   `json:"question_type,omitempty"`
+	OpeningQuestion string   `json:"opening_question,omitempty"`
+	StableCode      string   `json:"stable_code,omitempty"`
+	SourceRef       string   `json:"sourceRef"`
+	Tags            []string `json:"tags"`
+	Principles      []string `json:"principles"`
+	Pitfalls        []string `json:"pitfalls"`
+	FollowUpPaths   []string `json:"followUpPaths"`
+	Status          string   `json:"status"`
 }
 
 type InterviewKnowledgeAtomVersion struct {
