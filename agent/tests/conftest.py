@@ -105,6 +105,12 @@ def hidden_world() -> HiddenWorld:
                 category="resource",
                 obtained_by=["inspect:resource.pool"],
             ),
+            EvidenceNode(
+                evidence_id="E_CACHE_NORMAL",
+                content="Redis 命中率 94%，与昨日同时段持平",
+                category="metrics",
+                obtained_by=["inspect:metrics.cache"],
+            ),
         ],
         observations=[
             Observation(
@@ -144,6 +150,13 @@ def hidden_world() -> HiddenWorld:
                 is_negative=True,
                 yields_evidence=["E_POOL_NORMAL"],
                 rules_out=["H_POOL"],
+            ),
+            Observation(
+                action="inspect:metrics.cache",
+                result="Redis 命中率 94%，与昨日同时段持平。",
+                is_negative=True,
+                yields_evidence=["E_CACHE_NORMAL"],
+                rules_out=["H_CACHE"],
             ),
         ],
         solution_rubric=SolutionRubric(

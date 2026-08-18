@@ -70,6 +70,17 @@ class Observation(_Strict):
     is_negative: bool = Field(description="阴性结果同样是进展")
     yields_evidence: list[str] = Field(default_factory=list, description="产出的 evidence id，可为空")
     rules_out: list[str] = Field(default_factory=list, description="排除掉的 hypothesis id")
+    unmet_prerequisite_result: str = Field(
+        default="",
+        description=(
+            "前置证据还没到手时，世界给出的回应。\n\n"
+            "学生第 1 轮就要求看 EXPLAIN，此时他还没找到慢 SQL。**不能**回答"
+            "「该线索尚未解锁」——那既暴露了系统的存在，也暗示了存在一条前置。\n"
+            "正确做法是让世界的物理性自己表达约束：「你要看哪条 SQL 的执行计划？」\n"
+            "留空时由引擎给出一句不含新答案信息的中性回应。"
+        ),
+    )
+
 
 
 class RootCause(_Strict):
