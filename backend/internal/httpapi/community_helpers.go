@@ -242,30 +242,25 @@ func normalizeScenarioContent(content domain.ScenarioContent, fallback domain.Sc
 }
 func sanitizeScenarioContent(content domain.ScenarioContent) domain.ScenarioContent {
 	content.RootCause = ai.SanitizeFields(content.RootCause)
-	for i, value := range content.RootCauseKeywords {
-		content.RootCauseKeywords[i] = ai.SanitizeFields(value)
-	}
-	for i, value := range content.KeyEvidence {
-		content.KeyEvidence[i] = ai.SanitizeFields(value)
-	}
-	for i, value := range content.StandardProcedure {
-		content.StandardProcedure[i] = ai.SanitizeFields(value)
-	}
-	for i, value := range content.ReferenceLinks {
-		content.ReferenceLinks[i] = ai.SanitizeFields(value)
-	}
+	content.RootCauseKeywords = sanitizeTextSlice(content.RootCauseKeywords)
+	content.KeyEvidence = sanitizeTextSlice(content.KeyEvidence)
+	content.StandardProcedure = sanitizeTextSlice(content.StandardProcedure)
+	content.ReferenceLinks = sanitizeTextSlice(content.ReferenceLinks)
 	content.ArchitectureDiagram = ai.SanitizeFields(content.ArchitectureDiagram)
 	content.ArchitectureDiagramSpec = ai.SanitizeScenarioDiagramSpec(content.ArchitectureDiagramSpec)
+	content.RevealStrategy.SurfaceClues = append([]domain.Clue{}, content.RevealStrategy.SurfaceClues...)
 	for i, clue := range content.RevealStrategy.SurfaceClues {
 		clue.Content = ai.SanitizeFields(clue.Content)
 		clue.RecommendedNextAsk = ai.SanitizeFields(clue.RecommendedNextAsk)
 		content.RevealStrategy.SurfaceClues[i] = clue
 	}
+	content.RevealStrategy.DeepClues = append([]domain.Clue{}, content.RevealStrategy.DeepClues...)
 	for i, clue := range content.RevealStrategy.DeepClues {
 		clue.Content = ai.SanitizeFields(clue.Content)
 		clue.RecommendedNextAsk = ai.SanitizeFields(clue.RecommendedNextAsk)
 		content.RevealStrategy.DeepClues[i] = clue
 	}
+	content.RevealStrategy.Distractors = append([]domain.Clue{}, content.RevealStrategy.Distractors...)
 	for i, clue := range content.RevealStrategy.Distractors {
 		clue.Content = ai.SanitizeFields(clue.Content)
 		clue.RecommendedNextAsk = ai.SanitizeFields(clue.RecommendedNextAsk)

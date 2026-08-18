@@ -51,7 +51,11 @@ func TestScenarioSessionDetailReturnsSessionAndMessages(t *testing.T) {
 	if payload.Session.QuestionSnapshot.Content.RootCause != "" {
 		t.Fatalf("detail payload must not expose root cause: %+v", payload.Session.QuestionSnapshot)
 	}
-	if strings.TrimSpace(payload.Session.QuestionSnapshot.Content.ArchitectureDiagram) == "" {
+	if payload.Session.QuestionSnapshot.Content.HiddenWorld != nil {
+		t.Fatalf("detail payload must not expose hidden_world: %+v", payload.Session.QuestionSnapshot)
+	}
+	if payload.Session.QuestionSnapshot.Content.PublicScenario == nil ||
+		strings.TrimSpace(payload.Session.QuestionSnapshot.Content.PublicScenario.ArchitectureDiagram) == "" {
 		t.Fatalf("expected public question snapshot in detail payload: %+v", payload.Session.QuestionSnapshot)
 	}
 }
@@ -61,8 +65,12 @@ func TestScenarioSessionDetailRepairsInvalidMermaidSnapshot(t *testing.T) {
 	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
 	token := loginToken(t, handler, "demo", "demo123")
 	question := dataStore.ListScenarios("database", "", "")[0]
-	question.Content.ArchitectureDiagram = "graph TD\nA[内网客户端] --> B[内网DNS递归器]\nB --> C[公网根/顶级域]\nB --> D[上游权威服务器]\nD --> E[错误IP(无服务)]"
-	question.Content.DiagramStatus = "validated"
+	if question.Content.PublicScenario == nil {
+		t.Fatal("fixed HiddenWorld question must contain public_scenario")
+	}
+	publicScenario := *question.Content.PublicScenario
+	publicScenario.ArchitectureDiagram = "graph TD\nA[内网客户端] --> B[内网DNS递归器]\nB --> C[公网根/顶级域]\nB --> D[上游权威服务器]\nD --> E[错误IP(无服务)]"
+	question.Content.PublicScenario = &publicScenario
 	dataStore.AddScenario(question)
 
 	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/scenarios/"+question.ID+"/sessions", token, nil)
@@ -77,11 +85,11 @@ func TestScenarioSessionDetailRepairsInvalidMermaidSnapshot(t *testing.T) {
 	if !ok {
 		t.Fatal("missing persisted session")
 	}
-	if stored.QuestionSnapshot.Content.DiagramStatus != "fallback" {
-		t.Fatalf("expected persisted snapshot to be repaired before storage, got %+v", stored.QuestionSnapshot.Content)
+	if stored.QuestionSnapshot.Content.PublicScenario == nil {
+		t.Fatalf("expected persisted snapshot to retain public_scenario, got %+v", stored.QuestionSnapshot.Content)
 	}
-	if strings.Contains(stored.QuestionSnapshot.Content.ArchitectureDiagram, "错误IP(无服务)") {
-		t.Fatalf("invalid mermaid persisted in session snapshot: %q", stored.QuestionSnapshot.Content.ArchitectureDiagram)
+	if diagram := stored.QuestionSnapshot.Content.PublicScenario.ArchitectureDiagram; strings.TrimSpace(diagram) == "" || strings.Contains(diagram, "错误IP(无服务)") {
+		t.Fatalf("invalid mermaid persisted in HiddenWorld public snapshot: %q", diagram)
 	}
 
 	status, env = requestJSON(t, handler, http.MethodGet, "/api/v1/scenarios/sessions/"+created.SessionID, token, nil)
@@ -92,11 +100,11 @@ func TestScenarioSessionDetailRepairsInvalidMermaidSnapshot(t *testing.T) {
 		Session scenarioSessionResponse `json:"session"`
 	}
 	mustDecodeData(t, env, &payload)
-	if payload.Session.QuestionSnapshot.Content.DiagramStatus != "fallback" {
-		t.Fatalf("expected repaired snapshot fallback status, got %+v", payload.Session.QuestionSnapshot.Content)
+	if payload.Session.QuestionSnapshot.Content.PublicScenario == nil {
+		t.Fatalf("expected repaired public_scenario in response, got %+v", payload.Session.QuestionSnapshot.Content)
 	}
-	if strings.Contains(payload.Session.QuestionSnapshot.Content.ArchitectureDiagram, "错误IP(无服务)") {
-		t.Fatalf("invalid mermaid leaked into session snapshot: %q", payload.Session.QuestionSnapshot.Content.ArchitectureDiagram)
+	if diagram := payload.Session.QuestionSnapshot.Content.PublicScenario.ArchitectureDiagram; strings.TrimSpace(diagram) == "" || strings.Contains(diagram, "错误IP(无服务)") {
+		t.Fatalf("invalid mermaid leaked into HiddenWorld public snapshot: %q", diagram)
 	}
 }
 
@@ -119,6 +127,9 @@ func TestScenarioSessionDetailRepairsLegacyInvalidMermaidSnapshot(t *testing.T) 
 	if !ok {
 		t.Fatal("missing persisted session")
 	}
+	session.QuestionSnapshot.Content.ModelVersion = ""
+	session.QuestionSnapshot.Content.PublicScenario = nil
+	session.QuestionSnapshot.Content.HiddenWorld = nil
 	session.QuestionSnapshot.Content.ArchitectureDiagramSpec = nil
 	session.QuestionSnapshot.Content.ArchitectureDiagram = "graph TD\nA[内网客户端] --> B[内网DNS递归器]\nB --> D[上游权威服务器]\nD --> E[错误IP(无服务)]B --> F[正常权威服务器]"
 	session.QuestionSnapshot.Content.DiagramStatus = "validated"

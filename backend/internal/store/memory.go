@@ -1186,7 +1186,7 @@ func (s *MemoryStore) seed(hashPassword func(string) string) {
 		s.UsersByEmail[strings.ToLower(user.Email)] = user.ID
 	}
 	for _, scenario := range seedDiagnosticScenarios(now) {
-		item := scenario
+		item := ai.PrepareScenarioForPersistence(scenario)
 		s.Scenarios[item.ID] = &item
 		s.indexScenarioLocked(item)
 	}

@@ -1,97 +1,96 @@
 package store
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"situational-teaching/backend/internal/domain"
 )
 
-func TestSeedScenariosIncludeStableCompleteDiagnosticQuestions(t *testing.T) {
+func TestGeneratedFixedHiddenWorldAssetMatchesAgentSource(t *testing.T) {
+	_, testFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve seed_scenarios_test.go path")
+	}
+	sourcePath := filepath.Join(
+		filepath.Dir(testFile),
+		"..", "..", "..",
+		"agent", "src", "hiddenworld", "bank", "fixed", "hw-db-index-001.json",
+	)
+	source, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatalf("read Agent fixed question source: %v", err)
+	}
+	generated, err := fixedHiddenWorldAssets.ReadFile("fixed_hiddenworld/hw-db-index-001.json")
+	if err != nil {
+		t.Fatalf("read generated Go fixed question asset: %v", err)
+	}
+	want := append(bytes.TrimSpace(source), '\n')
+	if !bytes.Equal(generated, want) {
+		t.Fatal("generated fixed question drifted from Agent source; run go generate ./internal/store")
+	}
+}
+
+func TestSeedScenariosLoadTheFixedHiddenWorldBank(t *testing.T) {
 	items := seedDiagnosticScenarios(time.Date(2026, 5, 4, 9, 0, 0, 0, time.UTC))
-	if len(items) < 4 {
-		t.Fatalf("expected at least 4 fixed diagnostic seed scenarios, got %d", len(items))
+	if len(items) != 1 {
+		t.Fatalf("expected the one landed fixed HiddenWorld question, got %d", len(items))
 	}
 
-	expectedIDs := map[string]bool{
-		"scenario-db-index":          false,
-		"scenario-network-timeout":   false,
-		"scenario-k8s-io-throttle":   false,
-		"scenario-cache-key-release": false,
+	item := items[0]
+	if item.ID != "hw-db-index-001" {
+		t.Fatalf("unexpected fixed question id %q", item.ID)
 	}
+	if item.Status != "active" || item.Source != "fixed_hiddenworld" || item.Version != 1 {
+		t.Fatalf("unexpected fixed question metadata: %+v", item)
+	}
+	if item.CreatedBy != "user-admin" {
+		t.Fatalf("fixed question should be owned by user-admin, got %q", item.CreatedBy)
+	}
+	if item.Content.ModelVersion != "hiddenworld.v1" {
+		t.Fatalf("unexpected model version %q", item.Content.ModelVersion)
+	}
+	if item.Content.PublicScenario == nil || item.Content.HiddenWorld == nil {
+		t.Fatalf("fixed question must contain public_scenario + hidden_world: %+v", item.Content)
+	}
+	if item.Title != item.Content.PublicScenario.Title || item.Description != item.Content.PublicScenario.Description {
+		t.Fatalf("outer directory title/description must mirror public_scenario: %+v", item)
+	}
+	if item.Content.RootCause != "" || len(item.Content.KeyEvidence) != 0 || len(item.Content.StandardProcedure) != 0 {
+		t.Fatalf("hiddenworld.v1 seed retained legacy answer fields: %+v", item.Content)
+	}
+	if len(item.Content.HiddenWorld.Hypotheses) < 4 || len(item.Content.HiddenWorld.EvidenceGraph) < 6 {
+		t.Fatalf("fixed question is below the agreed minimum scale: %+v", item.Content.HiddenWorld)
+	}
+	if len(item.Content.HiddenWorld.RootCause.SufficientEvidenceSets) < 2 {
+		t.Fatalf("fixed question must keep both sufficient evidence paths: %+v", item.Content.HiddenWorld.RootCause)
+	}
+	if !containsHypothesis(item.Content.HiddenWorld.Hypotheses, "H_OTHER") {
+		t.Fatal("fixed question must include H_OTHER")
+	}
+	if !hasNegativeObservation(item.Content.HiddenWorld.Observations) {
+		t.Fatal("fixed question must include a negative observation")
+	}
+}
 
+func containsHypothesis(items []domain.Hypothesis, id string) bool {
 	for _, item := range items {
-		if _, ok := expectedIDs[item.ID]; ok {
-			expectedIDs[item.ID] = true
-		}
-		if item.Status != "active" {
-			t.Fatalf("seed scenario %s should be active, got %q", item.ID, item.Status)
-		}
-		if item.Source != "seed" {
-			t.Fatalf("seed scenario %s should use source=seed, got %q", item.ID, item.Source)
-		}
-		if item.CreatedBy != "user-admin" {
-			t.Fatalf("seed scenario %s should be owned by user-admin, got %q", item.ID, item.CreatedBy)
-		}
-		if item.Content.RootCause == "" || len(item.Content.KeyEvidence) < 3 || len(item.Content.StandardProcedure) < 5 {
-			t.Fatalf("seed scenario %s has incomplete answer content: %+v", item.ID, item.Content)
-		}
-		if len(item.Content.RevealStrategy.SurfaceClues) < 2 {
-			t.Fatalf("seed scenario %s should have at least 2 surface clues", item.ID)
-		}
-		if len(item.Content.RevealStrategy.DeepClues) < 2 {
-			t.Fatalf("seed scenario %s should have at least 2 deep clues", item.ID)
-		}
-		if len(item.Content.RevealStrategy.Distractors) < 1 {
-			t.Fatalf("seed scenario %s should have at least 1 distractor", item.ID)
-		}
-		knownIDs := clueIDs(item.Content.RevealStrategy.SurfaceClues)
-		assertSeedClueIntegrity(t, item.ID, item.Content.RevealStrategy.SurfaceClues, nil, nil)
-		assertSeedClueIntegrity(t, item.ID, item.Content.RevealStrategy.DeepClues, knownIDs, knownIDs)
-		mergeClueIDs(knownIDs, item.Content.RevealStrategy.DeepClues)
-		assertSeedClueIntegrity(t, item.ID, item.Content.RevealStrategy.Distractors, nil, nil)
-	}
-
-	for id, found := range expectedIDs {
-		if !found {
-			t.Fatalf("missing fixed seed scenario %s", id)
+		if item.HypothesisID == id {
+			return true
 		}
 	}
+	return false
 }
 
-func assertSeedClueIntegrity(t *testing.T, scenarioID string, clues []domain.Clue, knownPrerequisites map[string]bool, updateKnown map[string]bool) {
-	t.Helper()
-	for _, clue := range clues {
-		if clue.ClueID == "" {
-			t.Fatalf("seed scenario %s has clue without id: %+v", scenarioID, clue)
-		}
-		if len(clue.TriggerKeywords) < 2 {
-			t.Fatalf("seed scenario %s clue %s should have natural trigger keywords, got %+v", scenarioID, clue.ClueID, clue.TriggerKeywords)
-		}
-		if clue.Content == "" {
-			t.Fatalf("seed scenario %s clue %s has empty content", scenarioID, clue.ClueID)
-		}
-		for _, prerequisite := range clue.PrerequisiteClues {
-			if knownPrerequisites == nil || !knownPrerequisites[prerequisite] {
-				t.Fatalf("seed scenario %s clue %s references missing prerequisite %s", scenarioID, clue.ClueID, prerequisite)
-			}
-		}
-		if updateKnown != nil {
-			updateKnown[clue.ClueID] = true
+func hasNegativeObservation(items []domain.Observation) bool {
+	for _, item := range items {
+		if item.IsNegative {
+			return true
 		}
 	}
-}
-
-func clueIDs(clues []domain.Clue) map[string]bool {
-	ids := map[string]bool{}
-	for _, clue := range clues {
-		ids[clue.ClueID] = true
-	}
-	return ids
-}
-
-func mergeClueIDs(dst map[string]bool, clues []domain.Clue) {
-	for _, clue := range clues {
-		dst[clue.ClueID] = true
-	}
+	return false
 }

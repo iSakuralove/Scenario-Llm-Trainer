@@ -31,6 +31,8 @@ def test_first_fixed_question_loads_and_validates() -> None:
     assert question.source == "fixed_hiddenworld"
     assert question.status == "active"
     assert question.version == 1
+    assert question.difficulty == "L3"
+    assert question.scenario_type == "performance"
     assert question.model_version == CONTRACT_VERSION
 
 
@@ -64,6 +66,9 @@ def test_both_evidence_paths_are_completable() -> None:
 def test_public_payload_excludes_hidden_world() -> None:
     payload = load_fixed_question(FIRST_FIXED_ID).public_payload()
     assert "hidden_world" not in payload
+    assert payload["scenario_type"] == "performance"
+    assert payload["source"] == "fixed_hiddenworld"
+    assert payload["status"] == "active"
     serialized = str(payload)
     assert "idx_user_created" not in serialized
     assert "RC_INDEX_DROPPED" not in serialized

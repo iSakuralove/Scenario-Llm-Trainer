@@ -28,9 +28,9 @@ func TestScenarioEvaluationIncludesEvidenceChainScoringReport(t *testing.T) {
 	mustDecodeData(t, env, &created)
 
 	for _, content := range []string{
-		"我先确认接口耗时是否集中在数据库阶段，并查看慢查询日志 rows_examined 是否升高",
-		"继续看 EXPLAIN 执行计划，确认 possible_keys 和 type 是否异常",
-		"再核对最近发布是否新增 status 和 created_at 筛选条件",
+		"我先查看慢查询日志，确认订单列表 SQL 的耗时和 rows_examined",
+		"继续看 EXPLAIN 执行计划，确认 type、key 和扫描行数",
+		"再核对上午发布记录与 orders 表变更前后的 DDL 差异",
 	} {
 		status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/scenarios/sessions/"+created.SessionID+"/messages", token, map[string]string{"content": content})
 		if status != http.StatusOK {
@@ -39,7 +39,7 @@ func TestScenarioEvaluationIncludesEvidenceChainScoringReport(t *testing.T) {
 	}
 
 	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/scenarios/sessions/"+created.SessionID+"/answer", token, map[string]string{
-		"answer": "根因是新增 status 与 created_at 筛选后没有补联合索引，导致订单查询全表扫描并回表。",
+		"answer": "orders 表结构变更后遗漏 idx_user_created (user_id, created_at) 联合索引，导致订单列表查询退化为全表扫描。",
 	})
 	if status != http.StatusOK {
 		t.Fatalf("answer status=%d message=%s", status, env.Message)
@@ -57,7 +57,7 @@ func TestScenarioEvaluationIncludesEvidenceChainScoringReport(t *testing.T) {
 	if report.OverallScore != payload.Score.Total {
 		t.Fatalf("report total and score total diverged: report=%+v score=%+v", report, payload.Score)
 	}
-	if report.EvidenceChainScore < 60 || report.ProcedureCoverageScore < 40 || report.RootCauseSimilarity < 80 {
+	if report.OverallScore < 70 || report.EvidenceChainScore < 50 || report.ProcedureCoverageScore < 40 || report.RootCauseSimilarity < 80 {
 		t.Fatalf("expected strong process scoring report, got %+v", report)
 	}
 	if len(report.EvidenceEvents) < 3 || len(report.MatchedDocuments) == 0 {
@@ -81,7 +81,7 @@ func TestScenarioEvaluationPenalizesRootGuessWithoutEvidenceChain(t *testing.T) 
 	mustDecodeData(t, env, &created)
 
 	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/scenarios/sessions/"+created.SessionID+"/answer", token, map[string]string{
-		"answer": "根因是缺少联合索引导致全表扫描并回表。",
+		"answer": "orders 表结构变更后遗漏 idx_user_created (user_id, created_at) 联合索引，导致订单列表查询退化为全表扫描。",
 	})
 	if status != http.StatusOK {
 		t.Fatalf("answer status=%d message=%s", status, env.Message)
@@ -99,8 +99,11 @@ func TestScenarioEvaluationPenalizesRootGuessWithoutEvidenceChain(t *testing.T) 
 	if len(report.Penalties) == 0 {
 		t.Fatalf("expected evidence-chain penalty, got %+v", report)
 	}
-	if payload.Score.Total >= 90 {
-		t.Fatalf("root guess without evidence must not get near-perfect score: %+v report=%+v", payload.Score, report)
+	if report.RootCauseSimilarity < 80 || report.EvidenceChainScore >= 35 {
+		t.Fatalf("expected a correct root-cause claim without a supporting evidence chain, got %+v", report)
+	}
+	if payload.Score.Total >= 50 {
+		t.Fatalf("root guess without evidence must score materially below a strong process: %+v report=%+v", payload.Score, report)
 	}
 }
 

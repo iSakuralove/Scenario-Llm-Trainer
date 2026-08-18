@@ -39,6 +39,14 @@ func scenarioPublicView(question *domain.ScenarioQuestion) domain.ScenarioQuesti
 	preparedQuestion.Title = ai.SanitizeFields(question.Title)
 	preparedQuestion.Description = ai.SanitizeFields(question.Description)
 	preparedQuestion.Tags = sanitizeTextSlice(question.Tags)
+	if content.PublicScenario != nil {
+		publicScenario := sanitizePublicScenario(*content.PublicScenario)
+		content = domain.ScenarioContent{
+			ModelVersion:   content.ModelVersion,
+			PublicScenario: &publicScenario,
+		}
+		return scenarioQuestionViewFrom(question, preparedQuestion.Title, preparedQuestion.Description, preparedQuestion.Tags, content, true)
+	}
 	preparedQuestion.Content = content
 	content = ai.PrepareScenarioContent(content, preparedQuestion)
 	content.RootCause = ""
@@ -47,6 +55,15 @@ func scenarioPublicView(question *domain.ScenarioQuestion) domain.ScenarioQuesti
 	content.StandardProcedure = nil
 	content.RevealStrategy = domain.RevealStrategy{}
 	return scenarioQuestionViewFrom(question, preparedQuestion.Title, preparedQuestion.Description, preparedQuestion.Tags, content, true)
+}
+
+func sanitizePublicScenario(scenario domain.PublicScenario) domain.PublicScenario {
+	scenario.Title = ai.SanitizeFields(scenario.Title)
+	scenario.Description = ai.SanitizeFields(scenario.Description)
+	scenario.Environment = ai.SanitizeFields(scenario.Environment)
+	scenario.InitialSymptoms = sanitizeTextSlice(scenario.InitialSymptoms)
+	scenario.ArchitectureDiagram = ai.SanitizeFields(scenario.ArchitectureDiagram)
+	return scenario
 }
 func scenarioFullView(question *domain.ScenarioQuestion) domain.ScenarioQuestionView {
 	content := ai.PrepareScenarioContent(question.Content, *question)

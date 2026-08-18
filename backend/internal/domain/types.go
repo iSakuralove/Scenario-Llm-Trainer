@@ -187,6 +187,11 @@ type ScenarioQuestionView struct {
 }
 
 type ScenarioContent struct {
+	ModelVersion   string          `json:"model_version,omitempty"`
+	PublicScenario *PublicScenario `json:"public_scenario,omitempty"`
+	HiddenWorld    *HiddenWorld    `json:"hidden_world,omitempty"`
+	// 以下字段仅用于旧题目迁移期。hiddenworld.v1 题目以
+	// PublicScenario + HiddenWorld 为唯一权威内容。
 	RootCause               string               `json:"root_cause,omitempty"`
 	RootCauseKeywords       []string             `json:"root_cause_keywords,omitempty"`
 	KeyEvidence             []string             `json:"key_evidence,omitempty"`
@@ -197,6 +202,67 @@ type ScenarioContent struct {
 	DiagramStatus           string               `json:"diagram_status,omitempty"`
 	DiagramWarnings         []string             `json:"diagram_warnings,omitempty"`
 	ReferenceLinks          []string             `json:"reference_links"`
+}
+
+type PublicScenario struct {
+	Title               string   `json:"title"`
+	Description         string   `json:"description"`
+	Environment         string   `json:"environment,omitempty"`
+	InitialSymptoms     []string `json:"initial_symptoms"`
+	ArchitectureDiagram string   `json:"architecture_diagram,omitempty"`
+}
+
+type HiddenWorld struct {
+	RootCause          RootCause           `json:"root_cause"`
+	Hypotheses         []Hypothesis        `json:"hypotheses"`
+	EvidenceGraph      []EvidenceNode      `json:"evidence_graph"`
+	Observations       []Observation       `json:"observations"`
+	SolutionRubric     SolutionRubric      `json:"solution_rubric"`
+	MisconceptionRules []MisconceptionRule `json:"misconception_rules"`
+}
+
+type RootCause struct {
+	ID                     string     `json:"id"`
+	Category               string     `json:"category"`
+	Component              string     `json:"component"`
+	Description            string     `json:"description"`
+	SufficientEvidenceSets [][]string `json:"sufficient_evidence_sets"`
+	AcceptedHypotheses     []string   `json:"accepted_hypotheses"`
+	SolutionRequirements   []string   `json:"solution_requirements"`
+}
+
+type Hypothesis struct {
+	HypothesisID string `json:"hypothesis_id"`
+	Label        string `json:"label"`
+}
+
+type EvidenceNode struct {
+	EvidenceID    string   `json:"evidence_id"`
+	Content       string   `json:"content"`
+	Category      string   `json:"category"`
+	Prerequisites []string `json:"prerequisites"`
+	ObtainedBy    []string `json:"obtained_by"`
+}
+
+type Observation struct {
+	Action                  string   `json:"action"`
+	Result                  string   `json:"result"`
+	IsNegative              bool     `json:"is_negative"`
+	YieldsEvidence          []string `json:"yields_evidence"`
+	RulesOut                []string `json:"rules_out"`
+	UnmetPrerequisiteResult string   `json:"unmet_prerequisite_result,omitempty"`
+}
+
+type SolutionRubric struct {
+	RequiredActions   []string `json:"required_actions"`
+	VerificationSteps []string `json:"verification_steps"`
+	RollbackNotes     []string `json:"rollback_notes"`
+}
+
+type MisconceptionRule struct {
+	MisconceptionID   string   `json:"misconception_id"`
+	PatternHypotheses []string `json:"pattern_hypotheses"`
+	WhyWrong          string   `json:"why_wrong"`
 }
 
 type ScenarioDiagramSpec struct {

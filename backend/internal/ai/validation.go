@@ -41,6 +41,9 @@ func PrepareScenarioForPersistence(question domain.ScenarioQuestion) domain.Scen
 }
 
 func PrepareScenarioContent(content domain.ScenarioContent, question domain.ScenarioQuestion) domain.ScenarioContent {
+	if isHiddenWorldScenarioContent(content) {
+		return prepareHiddenWorldScenarioContent(content, question)
+	}
 	question.Content = content
 	if content.ArchitectureDiagramSpec != nil {
 		result := diagram.BuildMermaidFromSpec(*content.ArchitectureDiagramSpec)
@@ -81,6 +84,9 @@ func PrepareScenarioContent(content domain.ScenarioContent, question domain.Scen
 }
 
 func ValidateScenarioContent(content domain.ScenarioContent, allowPreview bool) error {
+	if isHiddenWorldScenarioContent(content) {
+		return validateHiddenWorldScenarioContent(content)
+	}
 	if strings.TrimSpace(content.RootCause) == "" {
 		return fmt.Errorf("root cause is required")
 	}
@@ -114,6 +120,75 @@ func ValidateScenarioContent(content domain.ScenarioContent, allowPreview bool) 
 		if !clue.IsDistractor {
 			return fmt.Errorf("distractor clue must set is_distractor")
 		}
+	}
+	return nil
+}
+
+func isHiddenWorldScenarioContent(content domain.ScenarioContent) bool {
+	return strings.TrimSpace(content.ModelVersion) != "" || content.PublicScenario != nil || content.HiddenWorld != nil
+}
+
+func prepareHiddenWorldScenarioContent(content domain.ScenarioContent, question domain.ScenarioQuestion) domain.ScenarioContent {
+	var publicScenario *domain.PublicScenario
+	if content.PublicScenario != nil {
+		prepared := *content.PublicScenario
+		prepared.InitialSymptoms = append([]string{}, content.PublicScenario.InitialSymptoms...)
+		if strings.TrimSpace(prepared.ArchitectureDiagram) != "" {
+			result := diagram.NormalizeMermaidDiagram(prepared.ArchitectureDiagram)
+			if result.Valid {
+				prepared.ArchitectureDiagram = result.Code
+			} else {
+				prepared.ArchitectureDiagram = diagram.FallbackScenarioDiagram(question)
+			}
+		}
+		publicScenario = &prepared
+	}
+	return (domain.ScenarioContent{
+		ModelVersion:   strings.TrimSpace(content.ModelVersion),
+		PublicScenario: publicScenario,
+		HiddenWorld:    content.HiddenWorld,
+	}).WithHiddenWorldCompatibility()
+}
+
+func validateHiddenWorldScenarioContent(content domain.ScenarioContent) error {
+	if content.ModelVersion != "hiddenworld.v1" {
+		return fmt.Errorf("hidden world model version is invalid")
+	}
+	if content.PublicScenario == nil {
+		return fmt.Errorf("public scenario is required")
+	}
+	if content.HiddenWorld == nil {
+		return fmt.Errorf("hidden world is required")
+	}
+	if strings.TrimSpace(content.PublicScenario.Title) == "" {
+		return fmt.Errorf("public scenario title is required")
+	}
+	if strings.TrimSpace(content.PublicScenario.Description) == "" {
+		return fmt.Errorf("public scenario description is required")
+	}
+	if strings.TrimSpace(content.PublicScenario.ArchitectureDiagram) != "" {
+		if result := diagram.NormalizeMermaidDiagram(content.PublicScenario.ArchitectureDiagram); !result.Valid {
+			return fmt.Errorf("public scenario architecture diagram must be valid mermaid: %s", result.Error)
+		}
+	}
+	world := content.HiddenWorld
+	if strings.TrimSpace(world.RootCause.Description) == "" {
+		return fmt.Errorf("hidden world root cause is required")
+	}
+	if len(world.RootCause.AcceptedHypotheses) == 0 {
+		return fmt.Errorf("hidden world accepted hypotheses are required")
+	}
+	if len(world.RootCause.SufficientEvidenceSets) == 0 {
+		return fmt.Errorf("hidden world sufficient evidence sets are required")
+	}
+	if len(world.Hypotheses) == 0 {
+		return fmt.Errorf("hidden world hypotheses are required")
+	}
+	if len(world.EvidenceGraph) == 0 {
+		return fmt.Errorf("hidden world evidence graph is required")
+	}
+	if len(world.Observations) == 0 {
+		return fmt.Errorf("hidden world observations are required")
 	}
 	return nil
 }

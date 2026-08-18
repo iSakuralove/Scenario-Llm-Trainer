@@ -39,6 +39,7 @@ class FixedQuestion(BaseModel):
     question_id: str
     domain: str
     difficulty: str
+    scenario_type: str
     tags: list[str] = Field(default_factory=list)
     source: str = "fixed_hiddenworld"
     version: int = 1
@@ -53,7 +54,11 @@ class FixedQuestion(BaseModel):
             "question_id": self.question_id,
             "domain": self.domain,
             "difficulty": self.difficulty,
+            "scenario_type": self.scenario_type,
             "tags": list(self.tags),
+            "source": self.source,
+            "version": self.version,
+            "status": self.status,
             "model_version": self.model_version,
             "public_scenario": self.public_scenario.model_dump(),
         }
