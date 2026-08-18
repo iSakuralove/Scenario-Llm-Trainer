@@ -876,6 +876,7 @@ export interface InterviewKnowledgeAtomFilters {
   category?: string
   question_role?: string
   vector_status?: string
+  q?: string
   page?: number
   page_size?: number
 }
@@ -1083,6 +1084,10 @@ export interface InterviewSession {
   ended_at?: string
 }
 
+export interface InterviewEndNotice {
+  reason: string
+  message: string
+}
 
 export interface InterviewQuestionSnapshot {
   id: string

@@ -83,6 +83,7 @@ func (a *DiagnosticAgent) Run(ctx context.Context, req DiagnosticRequest) (Diagn
 		a.buildContextSummaryStep(req, &state),
 		a.rewriteTeachingReplyStep(req, &state),
 		a.safetyRewriteStep(req, &state),
+		a.streamSafeReplyStep(req, &state),
 	}
 	trace, err := runtime.Execute(ctx, steps)
 	state.meta.AgentTrace = &trace
@@ -119,8 +120,19 @@ type diagnosticState struct {
 	context          DiagnosticContext
 	meta             domain.ResponseMeta
 	assistantContent string
-	decisionMade     bool
-	semantic         SemanticDecision
+	// fallbackReply 是没有模型改写时直接展示给学生的话。
+	// assistantContent 里放的是写给模型的指令（“要求用户先补证据链…”），
+	// 一旦原样显示就变成了系统在对学生下命令，两者必须分开。
+	fallbackReply string
+	decisionMade  bool
+	semantic      SemanticDecision
+	stream        *safeReplyStream
+}
+
+// plan 同时记录给模型的指令和给学生的兜底话术。
+func (state *diagnosticState) plan(instruction, reply string) {
+	state.assistantContent = instruction
+	state.fallbackReply = reply
 }
 
 type DiagnosticContext struct {
@@ -139,6 +151,10 @@ func buildDiagnosticContext(content string, question *domain.ScenarioQuestion, s
 		DiagnosticFocus:  diagnosticFocus(content),
 		EvidenceCoverage: len(sessionRevealedIDs(session)),
 	}
+	// 从最近一条往回走，遇到一条正常提问就停：这里要的是「连续」跑偏次数，
+	// 不是整场累计，否则开头偏过一次就会永远背着这笔账。
+	offTrackRunEnded := false
+	guessRunEnded := false
 	for i := len(messages) - 1; i >= 0; i-- {
 		previous := strings.TrimSpace(messages[i].UserContent)
 		if previous == "" {
@@ -147,15 +163,24 @@ func buildDiagnosticContext(content string, question *domain.ScenarioQuestion, s
 		intent := classifyAgentIntent(previous)
 		switch intent {
 		case agentIntentOffTrack, agentIntentNoise, agentIntentChattyOffTopic:
-			ctx.OffTrackStreak++
+			if !offTrackRunEnded {
+				ctx.OffTrackStreak++
+			}
+			guessRunEnded = true
 		case agentIntentAnswerGuess, agentIntentHypothesis:
-			ctx.GuessStreak++
+			if !guessRunEnded {
+				ctx.GuessStreak++
+			}
+			offTrackRunEnded = true
+		default:
+			offTrackRunEnded = true
+			guessRunEnded = true
 		}
 		if ctx.RepeatedTurn == 0 && isRepeatedProbe(content, previous, question) {
 			ctx.RepeatedTurn = messages[i].TurnNumber
 			ctx.RepeatStreak++
 		}
-		if ctx.OffTrackStreak+ctx.GuessStreak+ctx.RepeatStreak == 0 {
+		if offTrackRunEnded && guessRunEnded && ctx.RepeatedTurn > 0 {
 			break
 		}
 	}
@@ -177,7 +202,8 @@ func (a *DiagnosticAgent) inputQualityCheckStep(req DiagnosticRequest, state *di
 				state.meta.SemanticDecision = semanticDecisionRejectNoise
 				state.meta.AgentIntent = agentIntentNoise
 				state.meta.ResponseType = "redirect"
-				state.assistantContent = "要求用户改成一个可验证的排查动作，示例范围仅限日志、指标、变更、配置、影响范围。"
+				state.plan("要求用户改成一个可验证的排查动作，示例范围仅限日志、指标、变更、配置、影响范围。",
+					"这个提问还看不出具体的排查动作。换成一个能直接验证的观察点吧，比如某类日志、某个指标或者最近一次变更。")
 				state.decisionMade = true
 				state.meta.HintLevel = state.session.HintLevel
 				return ToolResult{
@@ -228,7 +254,8 @@ func (a *DiagnosticAgent) detectRootCauseLeakStep(req DiagnosticRequest, state *
 				state.meta.IsSanitized = true
 				state.meta.SemanticDecision = semanticDecisionBlockGuess
 				state.meta.RootSimilarity = float64(match) / 100
-				state.assistantContent = "要求用户先补证据链，围绕日志、指标、变更或验证结果说明判断依据，不能确认根因。"
+				state.plan("要求用户先补证据链，围绕日志、指标、变更或验证结果说明判断依据，不能确认根因。",
+					"先别下结论。把支撑这个判断的证据说清楚——日志、指标、变更或者验证结果都行。")
 				state.decisionMade = true
 				state.meta.HintLevel = state.session.HintLevel
 				return ToolResult{
@@ -264,7 +291,8 @@ func (a *DiagnosticAgent) embeddingSimilarityMatchStep(req DiagnosticRequest, st
 				state.meta.ResponseType = "insufficient"
 				state.meta.IsAnswerLeak = true
 				state.meta.IsSanitized = true
-				state.assistantContent = "要求用户先补证据链，围绕日志、指标、变更或验证结果说明判断依据，不能确认根因。"
+				state.plan("要求用户先补证据链，围绕日志、指标、变更或验证结果说明判断依据，不能确认根因。",
+					"先别下结论。把支撑这个判断的证据说清楚——日志、指标、变更或者验证结果都行。")
 				state.decisionMade = true
 			case semanticDecisionReleaseClue:
 				state.releaseClue(decision.MatchedClue)
@@ -273,7 +301,8 @@ func (a *DiagnosticAgent) embeddingSimilarityMatchStep(req DiagnosticRequest, st
 					state.releaseClue(clue)
 					state.meta.SemanticDecision = semanticDecisionGuidedRedirect
 					state.meta.MatchedClueID = clue.ClueID
-					state.assistantContent = "提示用户已接近关键线索，并释放一条基础观察：" + clue.Content
+					state.plan("提示用户已接近关键线索，并释放一条基础观察："+clue.Content,
+						"你已经接近关键线索了，先看这条观察："+clue.Content)
 				}
 			}
 			metadata := map[string]string{
@@ -344,11 +373,13 @@ func (state *diagnosticState) releaseClue(clue domain.Clue) {
 	state.decisionMade = true
 	if clue.IsDistractor {
 		state.meta.ResponseType = "redirect"
-		state.assistantContent = "说明该方向可先排除，并给出可排除观察：" + clue.Content
+		state.plan("说明该方向可先排除，并给出可排除观察："+clue.Content,
+			"这个方向可以先排除，依据是："+clue.Content)
 		return
 	}
 	state.meta.ResponseType = "partial"
-	state.assistantContent = "说明用户命中了有效线索，并释放线索内容：" + clue.Content
+	state.plan("说明用户命中了有效线索，并释放线索内容："+clue.Content,
+		"这一问命中了有效线索："+clue.Content)
 }
 
 func applySemanticMeta(meta *domain.ResponseMeta, decision SemanticDecision) {
@@ -409,20 +440,41 @@ func (a *DiagnosticAgent) computeHintStep(req DiagnosticRequest, state *diagnost
 			case state.context.RepeatedTurn > 0 || state.meta.AgentIntent == agentIntentRepeatProbe:
 				decision = semanticDecisionRepeatRedirect
 				action = "repeat_redirect"
-				state.assistantContent = "提醒该方向已经覆盖过，并建议换到配置、指标或依赖链路等新视角。"
+				state.plan("提醒该方向已经覆盖过，并建议换到配置、指标或依赖链路等新视角。",
+					"这个方向刚才已经看过了。换个视角试试，比如配置、指标或者依赖链路。")
 			case state.meta.AgentIntent == agentIntentAnswerGuess || state.meta.AgentIntent == agentIntentHypothesis:
 				decision = semanticDecisionAskEvidence
 				action = "ask_for_evidence"
 				state.meta.ResponseType = "insufficient"
-				state.assistantContent = "要求用户补完整证据链，不能直接确认该判断。"
+				// 连续猜答案说明学生在碰运气，明确点出还差哪一类证据，而不是重复同一句话。
+				if state.context.GuessStreak >= 2 {
+					action = "ask_for_evidence_specific"
+					state.plan("指出这已经是连续第几次直接给结论，要求先补一条可验证的观察，再谈判断。",
+						"你已经连着给了几次结论了。先补一条能验证的观察吧——日志、指标或者变更记录都行，我们再回到判断。")
+				} else {
+					state.plan("要求用户补完整证据链，不能直接确认该判断。",
+						"先别急着定结论。把支撑这个判断的证据补上来，我们再一起看。")
+				}
 			case state.meta.AgentIntent == agentIntentChattyOffTopic:
 				decision = semanticDecisionHumorousRedirect
 				action = "humorous_redirect"
-				state.assistantContent = "温和打断聊天式偏题，拉回主线，并要求给出可验证的排查观察点。"
+				state.plan("温和打断聊天式偏题，拉回主线，并要求给出可验证的排查观察点。",
+					"我们先回到这次故障上。你现在最想确认的那个观察点是什么？")
 			case state.meta.AgentIntent == agentIntentOffTrack:
 				decision = semanticDecisionRequestRephrase
 				action = "request_rephrase"
-				state.assistantContent = "指出当前方向跑偏，要求重述为一个可验证的排查动作。"
+				// 连续跑偏说明学生已经卡住了，提示等级要跟上，否则只会一直被要求重述。
+				if state.context.OffTrackStreak >= 2 && state.session.HintLevel < 3 {
+					state.session.HintLevel++
+					action = "request_rephrase_with_hint"
+				}
+				if action == "request_rephrase_with_hint" {
+					state.plan("指出当前方向跑偏，重述之余给出一条方向提示："+hint,
+						"这个方向和当前现象对不上。给你一条方向提示："+hint)
+				} else {
+					state.plan("指出当前方向跑偏，要求重述为一个可验证的排查动作。",
+						"这个方向和当前现象对不上。重新说成一个可验证的排查动作试试。")
+				}
 			case state.meta.AgentIntent == agentIntentBroadProbe:
 				decision = semanticDecisionNarrowScope
 				action = "narrow_scope"
@@ -431,7 +483,8 @@ func (a *DiagnosticAgent) computeHintStep(req DiagnosticRequest, state *diagnost
 					state.session.HintLevel++
 					state.session.NoNewClueStreak = 0
 				}
-				state.assistantContent = "认可方向基本合理，但要求把范围收窄到日志、指标、变更、配置或依赖链路中的一个具体观察点。"
+				state.plan("认可方向基本合理，但要求把范围收窄到日志、指标、变更、配置或依赖链路中的一个具体观察点。",
+					"方向是对的，但范围还太大。收窄到一个具体观察点，比如哪类日志、哪个指标或哪次变更。")
 			default:
 				state.session.NoNewClueStreak++
 				if state.session.NoNewClueStreak >= 3 && state.session.HintLevel < 3 {
@@ -440,11 +493,13 @@ func (a *DiagnosticAgent) computeHintStep(req DiagnosticRequest, state *diagnost
 				}
 				switch state.session.HintLevel {
 				case 1:
-					state.assistantContent = "说明暂未解锁新线索，但鼓励继续从日志、指标、变更、配置或依赖链路等角度推进。"
+					state.plan("说明暂未解锁新线索，但鼓励继续从日志、指标、变更、配置或依赖链路等角度推进。",
+						"这一问暂时没有解锁新线索。继续从日志、指标、变更、配置或依赖链路推进看看。")
 				case 2:
-					state.assistantContent = "说明仍未解锁新线索，并要求把排查动作说得更具体，例如哪类日志、哪个指标或哪次变更。"
+					state.plan("说明仍未解锁新线索，并要求把排查动作说得更具体，例如哪类日志、哪个指标或哪次变更。",
+						"还是没有新线索。把排查动作说得更具体些，比如具体查哪类日志、看哪个指标。")
 				default:
-					state.assistantContent = "给出一条方向提示：" + hint
+					state.plan("给出一条方向提示："+hint, "给你一条方向提示："+hint)
 				}
 			}
 			state.meta.HintLevel = state.session.HintLevel
@@ -455,12 +510,15 @@ func (a *DiagnosticAgent) computeHintStep(req DiagnosticRequest, state *diagnost
 			return ToolResult{
 				Summary: "已根据排查行为选择内部引导策略",
 				Metadata: map[string]string{
-					"decision":         firstNonEmpty(decision, "hint_redirect"),
-					"action":           action,
-					"hint_level":       fmt.Sprintf("%d", state.session.HintLevel),
-					"agent_intent":     state.meta.AgentIntent,
-					"diagnostic_focus": state.context.DiagnosticFocus,
-					"repeat_turn":      fmt.Sprintf("%d", state.context.RepeatedTurn),
+					"decision":          firstNonEmpty(decision, "hint_redirect"),
+					"action":            action,
+					"hint_level":        fmt.Sprintf("%d", state.session.HintLevel),
+					"agent_intent":      state.meta.AgentIntent,
+					"diagnostic_focus":  state.context.DiagnosticFocus,
+					"repeat_turn":       fmt.Sprintf("%d", state.context.RepeatedTurn),
+					"off_track_streak":  fmt.Sprintf("%d", state.context.OffTrackStreak),
+					"guess_streak":      fmt.Sprintf("%d", state.context.GuessStreak),
+					"evidence_coverage": fmt.Sprintf("%d", state.context.EvidenceCoverage),
 				},
 			}, nil
 		},
@@ -492,6 +550,10 @@ func (a *DiagnosticAgent) rewriteTeachingReplyStep(req DiagnosticRequest, state 
 		Run: func(ctx context.Context, _ *StepRecorder) (ToolResult, error) {
 			emitStage(req.OnStage, "agent_reply", "正在生成教学化回复")
 			if a.config.Rewrite == nil {
+				// 没有模型改写时展示面向学生的话术，而不是写给模型的指令。
+				if strings.TrimSpace(state.fallbackReply) != "" {
+					state.assistantContent = state.fallbackReply
+				}
 				return ToolResult{Summary: "未配置模型改写，使用确定性回复", Metadata: map[string]string{"provider": "none"}}, nil
 			}
 			rewriteReq := ai.ScenarioReplyRequest{
@@ -511,7 +573,8 @@ func (a *DiagnosticAgent) rewriteTeachingReplyStep(req DiagnosticRequest, state 
 				ConversationSummary: state.session.ConversationSummary,
 				RecentMessages:      req.RecentMessages,
 			}
-			content, llmMeta, err := a.config.Rewrite(ctx, rewriteReq, nil)
+			state.stream = newSafeReplyStream(req.OnDelta, diagnosticForbiddenTerms(state.question))
+			content, llmMeta, err := a.config.Rewrite(ctx, rewriteReq, state.stream.callback())
 			if err != nil {
 				return ToolResult{Summary: "模型改写失败，保留确定性回复"}, err
 			}
@@ -523,7 +586,13 @@ func (a *DiagnosticAgent) rewriteTeachingReplyStep(req DiagnosticRequest, state 
 			state.meta.FallbackUsed = llmMeta.FallbackUsed
 			state.meta.SafetyRewritten = llmMeta.SafetyRewritten
 			state.meta.IsSanitized = state.meta.IsSanitized || llmMeta.SafetyRewritten
-			return ToolResult{Summary: "回复已完成模型改写", Metadata: map[string]string{"provider": llmMeta.Provider}}, nil
+			return ToolResult{
+				Summary: "回复已完成模型改写",
+				Metadata: map[string]string{
+					"provider":       llmMeta.Provider,
+					"stream_blocked": fmt.Sprintf("%t", state.stream.blocked),
+				},
+			}, nil
 		},
 	}
 }
@@ -548,6 +617,46 @@ func (a *DiagnosticAgent) safetyRewriteStep(req DiagnosticRequest, state *diagno
 				return ToolResult{Summary: "回复触发安全重写", Metadata: map[string]string{"safety_rewritten": "true"}}, nil
 			}
 			return ToolResult{Summary: "回复通过安全检查", Metadata: map[string]string{"safety_rewritten": "false"}}, nil
+		},
+	}
+}
+
+// streamSafeReplyStep 补齐流式输出的尾巴。
+//
+// 模型分片已经由 safeReplyStream 边生成边发出，但两种情况仍有欠账：
+//   - 闸门保留的 holdback 尾巴，以及分片来源本身没有流式能力（确定性回复、mock）；
+//   - 安全重写替换了整段内容，此时已发出的前缀作废，不再追加，由 finish 事件纠正。
+func (a *DiagnosticAgent) streamSafeReplyStep(req DiagnosticRequest, state *diagnosticState) Step {
+	return Step{
+		Name: "stream_safe_reply",
+		Kind: "tool",
+		Run: func(context.Context, *StepRecorder) (ToolResult, error) {
+			content := state.assistantContent
+			if req.OnDelta == nil || strings.TrimSpace(content) == "" {
+				return ToolResult{Summary: "未开启流式输出", Metadata: map[string]string{"streamed": "false"}}, nil
+			}
+			already := state.stream.emittedText()
+			if already != "" && !strings.HasPrefix(content, already) {
+				return ToolResult{
+					Summary:  "最终回复与已发分片不一致，交由完成事件纠正",
+					Metadata: map[string]string{"streamed": "false", "reason": "content_replaced"},
+				}, nil
+			}
+			remainder := strings.TrimPrefix(content, already)
+			if remainder == "" {
+				return ToolResult{
+					Summary:  "流式分片已在生成阶段发完",
+					Metadata: map[string]string{"streamed": "true", "tail_chunks": "0"},
+				}, nil
+			}
+			chunks := ai.StreamTextChunks(remainder, 24)
+			for _, chunk := range chunks {
+				req.OnDelta(chunk)
+			}
+			return ToolResult{
+				Summary:  "已补齐安全后的剩余分片",
+				Metadata: map[string]string{"streamed": "true", "tail_chunks": fmt.Sprintf("%d", len(chunks))},
+			}, nil
 		},
 	}
 }

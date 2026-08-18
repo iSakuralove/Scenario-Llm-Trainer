@@ -554,6 +554,16 @@
   border-top: 1px solid rgba(83, 105, 132, 0.22);
 }
 
+.interview-history-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 14px;
+}
+
+.interview-history-clear {
+  color: #f0a3ae;
+}
+
 .interview-history-list {
   display: grid;
   gap: 10px;

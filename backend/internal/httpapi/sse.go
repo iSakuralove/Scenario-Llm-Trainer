@@ -34,14 +34,17 @@ func (s *sseWriter) event(name string, data interface{}) {
 func (s *sseWriter) stage(step, message string) {
 	s.event("stage", map[string]string{"step": step, "message": message})
 }
+
+// 只丢空串，不丢纯空白：真流式下单个空格本身就是一个 token，
+// 按空白过滤会把它吞掉，拼出来的文本就和最终落库内容不一致了。
 func (s *sseWriter) delta(chunk string, displayable bool) {
-	if strings.TrimSpace(chunk) == "" {
+	if chunk == "" {
 		return
 	}
 	s.event("delta", map[string]interface{}{"chunk": chunk, "displayable": displayable})
 }
 func (s *sseWriter) deltaDisplay(chunk string) {
-	if strings.TrimSpace(chunk) == "" {
+	if chunk == "" {
 		return
 	}
 	s.event("delta", map[string]interface{}{"chunk": chunk, "displayable": true})
@@ -68,7 +71,10 @@ func writeSSE(w http.ResponseWriter, payload map[string]interface{}, content str
 		flusher.Flush()
 	}
 }
-func streamInterviewFeedbackDisplay(writer *sseWriter, feedback ai.InterviewFeedback, evaluation domain.InterviewEvaluation, needReport bool) {
+
+// streamInterviewFeedbackDisplay 是流式反馈的兜底回放：只在模型没能边生成边吐字段时使用。
+// skipScore 表示总分行已经由 interviewFeedbackLiveDisplay 发过，不能重复。
+func streamInterviewFeedbackDisplay(writer *sseWriter, feedback ai.InterviewFeedback, evaluation domain.InterviewEvaluation, needReport, skipScore bool) {
 	if writer == nil {
 		return
 	}
@@ -84,9 +90,14 @@ func streamInterviewFeedbackDisplay(writer *sseWriter, feedback ai.InterviewFeed
 		label string
 		text  string
 	}{
-		{label: "总分", text: fmt.Sprintf("%d 分", evaluation.TotalScore)},
 		{label: "亮点", text: strings.Join(highlights, "；")},
 		{label: "待改进", text: strings.Join(deficiencies, "；")},
+	}
+	if !skipScore {
+		sections = append([]struct {
+			label string
+			text  string
+		}{{label: "总分", text: fmt.Sprintf("%d 分", evaluation.TotalScore)}}, sections...)
 	}
 	if evaluation.FollowUpTriggered {
 		followUp := strings.TrimSpace(feedback.FollowUpQuestion)

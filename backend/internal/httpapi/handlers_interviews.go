@@ -84,7 +84,13 @@ func (s *Server) handleInterviews(w http.ResponseWriter, r *http.Request, user *
 				writeError(w, http.StatusBadRequest, "domain, difficulty and question_type are required")
 				return
 			}
-			question, questionSnapshot, ok = s.selectInterviewOpeningQuestion(req.Domain, req.Difficulty, req.QuestionType)
+			// 岗位专项也会带上启动台预览的那道题；忽略它会让实际开场题和用户看到的不是同一道。
+			if req.QuestionID != "" {
+				question, questionSnapshot, ok = s.selectInterviewOpeningQuestionByID(req.QuestionID)
+			}
+			if !ok {
+				question, questionSnapshot, ok = s.selectInterviewOpeningQuestion(req.Domain, req.Difficulty, req.QuestionType)
+			}
 		default:
 			writeError(w, http.StatusBadRequest, "interview mode is invalid")
 			return
@@ -872,10 +878,8 @@ func (s *Server) interviewLaunchpadAtomTracks() []interviewLaunchpadTrack {
 			continue
 		}
 		questionType := normalizeLaunchpadQuestionType(atom.QuestionType)
-		openingQuestion := strings.TrimSpace(atom.OpeningQuestion)
-		if openingQuestion == "" {
-			openingQuestion = firstNonEmpty(atom.Title, atom.Subject)
-		}
+		// 与开场题共用同一口径，卡片上看到的问法就是进场后被问到的问法。
+		openingQuestion := openingStemForAtom(atom)
 		indexed := 0
 		if atom.VectorStatus == "indexed" {
 			indexed = 1
@@ -893,7 +897,7 @@ func (s *Server) interviewLaunchpadAtomTracks() []interviewLaunchpadTrack {
 			QuestionType:        questionType,
 			QuestionRole:        atom.QuestionRole,
 			Tags:                uniqueStrings(atom.Tags),
-			Summary:             openingQuestion,
+			Summary:             interviewLaunchpadTrackSummary(uniqueStrings([]string{interviewLaunchpadShortTopic(atom.Title, atom.Subject)}), 1),
 			Details:             []string{},
 			PublishedCount:      1,
 			IndexedCount:        indexed,
@@ -1084,6 +1088,59 @@ type interviewLaunchpadSeed struct {
 	Details      []string
 }
 
+func interviewLaunchpadShortTopic(title, subject string) string {
+	raw := strings.TrimSpace(firstNonEmpty(title, subject))
+	if raw == "" {
+		return ""
+	}
+	for _, sep := range []string{"：", ":"} {
+		if idx := strings.Index(raw, sep); idx > 0 {
+			left := strings.TrimSpace(raw[:idx])
+			right := strings.TrimSpace(raw[idx+len(sep):])
+			if strings.Contains(right, "核心原理") || strings.Contains(right, "生产设计") || strings.Contains(right, "故障分析") {
+				raw = left
+				break
+			}
+		}
+	}
+	for _, prefix := range []string{"请解释", "在生产环境中使用", "某线上系统在"} {
+		if strings.HasPrefix(raw, prefix) {
+			raw = strings.TrimPrefix(raw, prefix)
+			break
+		}
+	}
+	for _, suffix := range []string{
+		"的核心机制，并说明它解决的问题与适用边界。",
+		"的核心机制，并说明它解决的问题与适用边界",
+		"相关环节出现延迟、错误或数据不一致，请给出分析路径与改进方案。",
+		"时，你会如何设计、监控并控制风险？",
+	} {
+		if strings.HasSuffix(raw, suffix) {
+			raw = strings.TrimSuffix(raw, suffix)
+			break
+		}
+	}
+	raw = strings.TrimSpace(raw)
+	runes := []rune(raw)
+	if len(runes) > 16 {
+		return string(runes[:16]) + "…"
+	}
+	return raw
+}
+
+func interviewLaunchpadTrackSummary(topics []string, published int) string {
+	if len(topics) == 0 {
+		if published > 0 {
+			return fmt.Sprintf("%d 个可练知识点", published)
+		}
+		return "正式题库开放组合"
+	}
+	joined := strings.Join(topics, " · ")
+	if published > len(topics) {
+		return fmt.Sprintf("%s 等 %d 题", joined, published)
+	}
+	return joined
+}
 func interviewLaunchpadSeeds() []interviewLaunchpadSeed {
 	return []interviewLaunchpadSeed{
 		{ID: "java-l2-principle", Title: "Java L2", Domain: "java", DomainLabel: "Java", Difficulty: "L2", QuestionType: "principle", QuestionRole: "opening", Summary: "面向初级岗位的 Java 基础语法、集合和面向对象问答。", Details: []string{"原理问答", "基础表达", "适合校招和 0-1 年经验"}},
@@ -1267,13 +1324,18 @@ func (s *Server) handleInterviewSubmission(w http.ResponseWriter, r *http.Reques
 		evaluation := irrelevantInterviewEvaluation(round, decision)
 		session.Submissions = append(session.Submissions, submission)
 		session.Evaluations = append(session.Evaluations, evaluation)
+		var irrelevantNotice map[string]string
 		if decision.Final {
 			now := time.Now()
 			session.Status = "final_evaluated"
 			session.FinalScore = 0
 			session.FinalReport = "继续沉淀"
 			session.FollowUpQuestion = ""
+			// 与正常终局对齐：同样落 EndReason、下发 end_notice、并记入学习看板。
+			session.EndReason = "irrelevant"
 			session.EndedAt = &now
+			irrelevantNotice = map[string]string{"reason": "irrelevant", "message": decision.Message}
+			s.store.RecordInterviewScore(user.ID, question.Domain, session.FinalScore)
 		} else {
 			session.Status = fmt.Sprintf("follow_up_%d_presented", round)
 			session.FollowUpQuestion = evaluation.FollowUpQuestion
@@ -1289,9 +1351,15 @@ func (s *Server) handleInterviewSubmission(w http.ResponseWriter, r *http.Reques
 			"session_status": session.Status,
 			"session":        interviewSessionView(session),
 		}
+		if irrelevantNotice != nil {
+			payload["end_notice"] = irrelevantNotice
+		}
 		if writer != nil {
 			writer.stage("agent_intent", decision.Message)
 			writer.deltaDisplay(decision.Message)
+			if irrelevantNotice != nil {
+				writer.stage("session_ending", irrelevantNotice["message"])
+			}
 			writer.stage("completed", "本轮 Agent 面试完成")
 			writer.finish(payload)
 			return
@@ -1302,9 +1370,16 @@ func (s *Server) handleInterviewSubmission(w http.ResponseWriter, r *http.Reques
 	if writer != nil {
 		writer.stage("received", "已收到回答，正在准备评分")
 	}
+	// 反馈边生成边显示：模型返回的是 JSON，这里按字段增量解析后逐条推给前端，
+	// 而不是等全部生成完再用服务端 sleep 假装打字。
+	var liveDisplay *interviewFeedbackLiveDisplay
 	interviewAgent := agentruntime.NewInterviewAgent(agentruntime.InterviewConfig{
 		Feedback: func(ctx context.Context, feedbackReq ai.InterviewFeedbackRequest, _ func(string)) (ai.InterviewFeedback, ai.CallMeta, error) {
-			return s.llmRouter().GenerateInterviewFeedbackStream(ctx, feedbackReq, nil)
+			if writer == nil {
+				return s.llmRouter().GenerateInterviewFeedbackStream(ctx, feedbackReq, nil)
+			}
+			liveDisplay = newInterviewFeedbackLiveDisplay(writer, feedbackReq.Evaluation.TotalScore, feedbackReq.NeedReport)
+			return s.llmRouter().GenerateInterviewFeedbackStream(ctx, feedbackReq, liveDisplay.accept)
 		},
 		Retrieve: s.retrieveInterviewFollowUpContext,
 	})
@@ -1333,14 +1408,16 @@ func (s *Server) handleInterviewSubmission(w http.ResponseWriter, r *http.Reques
 	if needReport && strings.TrimSpace(agentResult.FinalReport) != "" {
 		session.FinalReport = agentResult.FinalReport
 	}
-	if writer != nil {
-		streamInterviewFeedbackDisplay(writer, feedback, evaluation, needReport)
+	// 只有真流式一个字段都没吐出来时（provider 不支持流式、或回退到确定性反馈）才补一次完整回放。
+	if writer != nil && !liveDisplay.hasFieldContent() {
+		streamInterviewFeedbackDisplay(writer, feedback, evaluation, needReport, liveDisplay != nil)
 	}
 	if writer != nil {
 		writer.stage("saving", "正在整理评分结果")
 	}
 	session.Submissions = append(session.Submissions, submission)
 	session.Evaluations = append(session.Evaluations, evaluation)
+	var endNotice map[string]string
 	if evaluation.FollowUpTriggered && round < session.MaxRounds {
 		session.Status = fmt.Sprintf("follow_up_%d_presented", round)
 		session.FollowUpQuestion = evaluation.FollowUpQuestion
@@ -1348,12 +1425,28 @@ func (s *Server) handleInterviewSubmission(w http.ResponseWriter, r *http.Reques
 	} else {
 		now := time.Now()
 		session.Status = "final_evaluated"
-		session.FinalScore = evaluation.TotalScore
+		session.FinalScore = agentruntime.AverageInterviewScore(session.Evaluations)
 		if strings.TrimSpace(session.FinalReport) == "" {
-			session.FinalReport = ai.DefaultInterviewReport(evaluation)
+			// 总分已改为全场均分，报告里的分数必须同口径，否则页面分数和报告叙述会互相打架。
+			overall := evaluation
+			overall.TotalScore = session.FinalScore
+			session.FinalReport = ai.DefaultInterviewReport(overall)
 		}
+		if note := agentruntime.InterviewEarlyEndNote(len(session.Evaluations), session.MaxRounds); note != "" && !strings.Contains(session.FinalReport, note) {
+			session.FinalReport = strings.TrimSpace(session.FinalReport + " " + note)
+		}
+		endReason := strings.TrimSpace(agentResult.EndReason)
+		if endReason == "" {
+			if round >= session.MaxRounds {
+				endReason = "max_rounds"
+			} else {
+				endReason = "completed"
+			}
+		}
+		session.EndReason = endReason
+		endNotice = agentruntime.InterviewEndNotice(endReason, len(session.Evaluations), session.MaxRounds)
 		session.EndedAt = &now
-		s.store.RecordInterviewScore(user.ID, question.Domain, evaluation.TotalScore)
+		s.store.RecordInterviewScore(user.ID, question.Domain, session.FinalScore)
 	}
 	s.store.SaveInterviewSession(session)
 	s.auditInterviewAgentRun(r, user, session.ID, agentResult.Trace, agentResult, "completed", nil)
@@ -1363,7 +1456,13 @@ func (s *Server) handleInterviewSubmission(w http.ResponseWriter, r *http.Reques
 		"session_status": session.Status,
 		"session":        interviewSessionView(session),
 	}
+	if endNotice != nil {
+		payload["end_notice"] = endNotice
+	}
 	if writer != nil {
+		if endNotice != nil {
+			writer.stage("session_ending", endNotice["message"])
+		}
 		writer.stage("completed", "本轮 Agent 面试完成")
 		writer.finish(payload)
 		return
@@ -1459,8 +1558,8 @@ func (s *Server) handleInterviewVoice(w http.ResponseWriter, r *http.Request, us
 		"quality":          validation.Quality,
 	})
 }
-func evaluateInterview(question *domain.InterviewQuestion, answer string, round, maxRounds int) domain.InterviewEvaluation {
-	return agentruntime.EvaluateInterview(question, answer, round, maxRounds)
+func evaluateInterview(question *domain.InterviewQuestion, answer string, round, maxRounds int, difficultyLevel string) domain.InterviewEvaluation {
+	return agentruntime.EvaluateInterview(question, answer, round, maxRounds, difficultyLevel)
 }
 func voiceTranscriptDraft(asset *domain.Asset, session *domain.InterviewSession) string {
 	filename := "语音答案"
@@ -1471,7 +1570,7 @@ func voiceTranscriptDraft(asset *domain.Asset, session *domain.InterviewSession)
 	if session != nil && session.CurrentRound > 0 {
 		round = session.CurrentRound
 	}
-	return fmt.Sprintf("第 %d 轮 %s 转写草稿：我会先说明定位路径，再补充关键命令、验证指标、修复方案和回滚策略。", round, filename)
+	return fmt.Sprintf("第 %d 轮 %s 转写草稿：先说清楚本轮最关键的一步判断。", round, filename)
 }
 
 type irrelevantInterviewDecision struct {
@@ -1497,7 +1596,7 @@ func evaluateIrrelevantInterviewAnswer(question *domain.InterviewQuestion, answe
 	decision := irrelevantInterviewDecision{
 		Irrelevant: true,
 		Attempt:    attempt,
-		Message:    "请认真回答面试问题，围绕题目说明你的定位路径、关键命令、修复方案和回滚考虑。",
+		Message:    "请认真回答本轮问题：围绕当前题目，先说清楚你最关键的一步判断。",
 	}
 	if attempt >= 4 {
 		decision.Final = true

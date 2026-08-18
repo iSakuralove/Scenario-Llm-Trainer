@@ -300,6 +300,10 @@ func (unsafeReplyProvider) GenerateInterviewFeedbackStream(context.Context, Inte
 	return InterviewFeedback{}, nil
 }
 
+func (unsafeReplyProvider) RewriteInterviewOpening(context.Context, InterviewOpeningRequest) (InterviewOpeningRewrite, error) {
+	return InterviewOpeningRewrite{Opening: "线上出现故障。你第一步会先看什么？"}, nil
+}
+
 func (unsafeReplyProvider) CheckSensitiveContent(context.Context, SensitiveCheckRequest) (domain.SensitiveCheckResult, error) {
 	return domain.SensitiveCheckResult{}, nil
 }

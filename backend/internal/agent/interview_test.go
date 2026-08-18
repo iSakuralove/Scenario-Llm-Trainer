@@ -74,8 +74,10 @@ func TestInterviewAgentUsesFeedbackAndFinalReport(t *testing.T) {
 		},
 	})
 
+	session := sampleInterviewSession()
+	session.MaxRounds = 1
 	result, err := agent.Run(context.Background(), InterviewRequest{
-		Session:  sampleInterviewSession(),
+		Session:  session,
 		Question: sampleInterviewQuestion(),
 		Answer:   "首先查看链路耗时和慢查询日志，然后使用 EXPLAIN、执行计划、索引覆盖定位问题，最后灰度建索引、验证 P95 和错误率并保留回滚方案。",
 	})
@@ -122,6 +124,76 @@ func TestInterviewAgentSafetyRewritesUnsafeFeedback(t *testing.T) {
 	}
 }
 
+func TestInterviewAgentSmartClosesOnConsecutiveLowInfo(t *testing.T) {
+	session := sampleInterviewSession()
+	session.CurrentRound = 2
+	session.Evaluations = []domain.InterviewEvaluation{{Round: 1, TotalScore: 30}}
+
+	result, err := NewInterviewAgent(InterviewConfig{}).Run(context.Background(), InterviewRequest{
+		Session:  session,
+		Question: sampleInterviewQuestion(),
+		Answer:   "不知道。",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Evaluation.FollowUpTriggered || !result.NeedReport {
+		t.Fatalf("expected smart close after consecutive low-info answers: %#v", result)
+	}
+}
+
+func TestInterviewAgentKeepsGoingOnShortHighScoreAnswer(t *testing.T) {
+	session := sampleInterviewSession()
+	session.CurrentRound = 2
+	session.Evaluations = []domain.InterviewEvaluation{{Round: 1, TotalScore: 40}}
+
+	result, err := NewInterviewAgent(InterviewConfig{
+		Score: func(_ *domain.InterviewQuestion, _ string, round, _ int, _ string) domain.InterviewEvaluation {
+			return domain.InterviewEvaluation{
+				Round:             round,
+				TotalScore:        88,
+				DimensionScores:   map[string]int{"technical_accuracy": 88, "depth_breadth": 40},
+				FollowUpTriggered: true,
+				FollowUpQuestion:  "那你怎么验证这个判断？",
+			}
+		},
+	}).Run(context.Background(), InterviewRequest{
+		Session:  session,
+		Question: sampleInterviewQuestion(),
+		Answer:   "索引失效走了全表扫描。",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Evaluation.FollowUpTriggered || result.NeedReport {
+		t.Fatalf("short but high-scoring answer must not be closed as low info: %#v", result)
+	}
+	if result.EndReason != "" {
+		t.Fatalf("expected no end reason, got %q", result.EndReason)
+	}
+}
+
+func TestInterviewLowInfoAnswerRequiresLowScore(t *testing.T) {
+	if interviewLowInfoAnswer("索引失效走了全表扫描。", 88) {
+		t.Fatal("short answer with a high score is not low info")
+	}
+	if !interviewLowInfoAnswer("不知道。", 30) {
+		t.Fatal("short answer with a low score is low info")
+	}
+	if interviewLowInfoAnswer(strings.Repeat("排查思路", 30), 30) {
+		t.Fatal("long answer should not be treated as low info even when scored low")
+	}
+}
+
+func TestAverageInterviewScore(t *testing.T) {
+	if got := AverageInterviewScore([]domain.InterviewEvaluation{{TotalScore: 60}, {TotalScore: 80}}); got != 70 {
+		t.Fatalf("expected average 70, got %d", got)
+	}
+	if got := AverageInterviewScore(nil); got != 0 {
+		t.Fatalf("expected 0 for empty, got %d", got)
+	}
+}
+
 func sampleInterviewSession() *domain.InterviewSession {
 	return &domain.InterviewSession{
 		ID:           "interview-session-1",
@@ -130,6 +202,7 @@ func sampleInterviewSession() *domain.InterviewSession {
 		Status:       "question_presented",
 		CurrentRound: 1,
 		MaxRounds:    3,
+		SmartClose:   true,
 		Submissions:  []domain.InterviewSubmission{},
 		Evaluations:  []domain.InterviewEvaluation{},
 		StartedAt:    time.Now(),
@@ -140,7 +213,7 @@ func sampleInterviewQuestion() *domain.InterviewQuestion {
 	return &domain.InterviewQuestion{
 		ID:              "interview-question-1",
 		Title:           "如何定位 MySQL 慢查询",
-		Description:     "线上接口突然变慢，请说明定位、修复和回滚路径。",
+		Description:     "线上接口突然变慢，你怀疑是数据库问题。你第一步会先看什么？",
 		Domain:          "database",
 		Difficulty:      "L3",
 		QuestionType:    "scenario_analysis",

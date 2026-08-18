@@ -301,6 +301,36 @@ func (p MockProvider) GenerateInterviewFeedbackStream(ctx context.Context, req I
 	return feedback, err
 }
 
+func (MockProvider) RewriteInterviewOpening(_ context.Context, req InterviewOpeningRequest) (InterviewOpeningRewrite, error) {
+	subject := strings.TrimSpace(req.Subject)
+	if subject == "" {
+		subject = "当前故障"
+	}
+	scenario := strings.TrimSpace(req.SourceText)
+	if scenario == "" {
+		scenario = "你需要处理与「" + subject + "」相关的线上问题"
+	} else {
+		// 截断过长素材，保留前半段作情景
+		runes := []rune(scenario)
+		if len(runes) > 60 {
+			scenario = string(runes[:60])
+		}
+		for _, sep := range []string{"请说明", "请给出", "请回答"} {
+			if idx := strings.Index(scenario, sep); idx > 0 {
+				scenario = strings.TrimSpace(scenario[:idx])
+				break
+			}
+		}
+	}
+	out := InterviewOpeningRewrite{
+		Opening: strings.TrimRight(scenario, "。.!！？?") + "。你第一步会先看什么？",
+	}
+	if err := ValidateDomainJSONSchema(SchemaInterviewOpening, out); err != nil {
+		return InterviewOpeningRewrite{}, err
+	}
+	return out, ValidateInterviewOpening(out)
+}
+
 func (MockProvider) CheckSensitiveContent(_ context.Context, req SensitiveCheckRequest) (domain.SensitiveCheckResult, error) {
 	result := domain.SensitiveCheckResult{
 		Status:    "clear",
@@ -360,12 +390,13 @@ func emitMockDelta(onDelta func(string), text string) {
 	if onDelta == nil || text == "" {
 		return
 	}
-	for _, chunk := range streamTextChunks(text, 24) {
+	for _, chunk := range StreamTextChunks(text, 24) {
 		onDelta(chunk)
 	}
 }
 
-func streamTextChunks(text string, size int) []string {
+// StreamTextChunks 按 rune 切分文本，供各层复用同一套流式分片规则。
+func StreamTextChunks(text string, size int) []string {
 	if size <= 0 {
 		size = 24
 	}

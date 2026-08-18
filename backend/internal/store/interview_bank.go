@@ -462,7 +462,32 @@ func interviewKnowledgeAtomMatchesFilter(atom domain.InterviewKnowledgeAtom, fil
 	if !matchesTrimmedFilter(atom.QuestionRole, filter.QuestionRole) {
 		return false
 	}
-	return matchesTrimmedFilter(atom.VectorStatus, filter.VectorStatus)
+	if !matchesTrimmedFilter(atom.VectorStatus, filter.VectorStatus) {
+		return false
+	}
+	return interviewKnowledgeAtomMatchesQuery(atom, filter.Query)
+}
+
+func interviewKnowledgeAtomMatchesQuery(atom domain.InterviewKnowledgeAtom, query string) bool {
+	query = strings.TrimSpace(strings.ToLower(query))
+	if query == "" {
+		return true
+	}
+	fields := []string{
+		atom.ID,
+		atom.Title,
+		atom.Subject,
+		atom.Domain,
+		atom.Category,
+		atom.SourceRef,
+		strings.Join(atom.Tags, " "),
+	}
+	for _, field := range fields {
+		if strings.Contains(strings.ToLower(strings.TrimSpace(field)), query) {
+			return true
+		}
+	}
+	return false
 }
 
 func matchesTrimmedFilter(value, filter string) bool {

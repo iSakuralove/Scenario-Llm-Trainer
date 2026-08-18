@@ -13,8 +13,8 @@ import (
 
 func TestListJSONSchemasIncludesAllStructuredAITasks(t *testing.T) {
 	schemas := ListJSONSchemas()
-	if len(schemas) != 5 {
-		t.Fatalf("expected 5 schemas, got %d: %+v", len(schemas), schemas)
+	if len(schemas) != 6 {
+		t.Fatalf("expected 6 schemas, got %d: %+v", len(schemas), schemas)
 	}
 	seen := map[string]JSONSchemaInfo{}
 	for _, schema := range schemas {
@@ -26,7 +26,7 @@ func TestListJSONSchemasIncludesAllStructuredAITasks(t *testing.T) {
 			t.Fatalf("schema should be ok: %+v", schema)
 		}
 	}
-	for _, name := range []string{SchemaScenarioQuestion, SchemaScenarioContentPreview, SchemaInterviewFeedback, SchemaScenarioReply, SchemaSensitiveCheck} {
+	for _, name := range []string{SchemaScenarioQuestion, SchemaScenarioContentPreview, SchemaInterviewFeedback, SchemaInterviewOpening, SchemaScenarioReply, SchemaSensitiveCheck} {
 		if _, ok := seen[name]; !ok {
 			t.Fatalf("missing schema %s in %+v", name, schemas)
 		}

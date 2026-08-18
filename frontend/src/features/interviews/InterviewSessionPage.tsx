@@ -30,6 +30,8 @@ export function InterviewSessionPage() {
   const [isTemplateExpanded, setTemplateExpanded] = useState(false)
   const [activeAnchor, setActiveAnchor] = useState('round-1-question')
   const [isAnchorOpen, setAnchorOpen] = useState(false)
+  const [pendingReportId, setPendingReportId] = useState('')
+  const reportTimerRef = useRef<number | null>(null)
   const question = useInterviewSessionStore((store) => store.question)
   const session = useInterviewSessionStore((store) => store.session)
   const isLoading = useInterviewSessionStore((store) => store.isLoading)
@@ -88,6 +90,16 @@ export function InterviewSessionPage() {
     }
   }, [voiceObjectUrl])
 
+  // 结束提示的自动跳转必须能被卸载打断，否则用户中途离开仍会被拽去报告页。
+  useLayoutEffect(() => {
+    return () => {
+      if (reportTimerRef.current !== null) {
+        window.clearTimeout(reportTimerRef.current)
+        reportTimerRef.current = null
+      }
+    }
+  }, [])
+
   if (isLoading && !question) {
     return <EmptyState title="恢复面试会话中" description="正在拉取会话详情，请稍候。" action={<Link className="primary-button" to="/interviews">返回面试舱</Link>} />
   }
@@ -109,7 +121,13 @@ export function InterviewSessionPage() {
       setAnswer('')
       clearVoiceDraft()
       if (res.session_status === 'final_evaluated') {
-        navigate(`/interviews/session/${id}/report`)
+        const notice = res.end_notice?.message || '本场面试已结束，即将进入报告页。'
+        setSubmitFeedback({ submitStatus: notice, submitError: '' })
+        setPendingReportId(id)
+        reportTimerRef.current = window.setTimeout(() => {
+          reportTimerRef.current = null
+          navigate(`/interviews/session/${id}/report`)
+        }, 3200)
       }
     } catch (err) {
       void err
@@ -464,7 +482,7 @@ export function InterviewSessionPage() {
                   updateVoiceEditedState()
                 }
               }}
-              placeholder="用结构化方式回答，支持 Markdown：定位路径、关键命令、处理方案、回滚验证..."
+              placeholder="围绕本轮问题回答，支持 Markdown。先说清楚你最关键的一步判断..."
               disabled={isSubmitting}
               aria-label="Markdown 回答"
               data-testid="interview-answer-editor"
@@ -503,6 +521,22 @@ export function InterviewSessionPage() {
               </div>
             </details>
             {submitError && <span>{submitError}</span>}
+            {pendingReportId && (
+              <button
+                className="primary-button compact"
+                type="button"
+                data-testid="interview-report-now"
+                onClick={() => {
+                  if (reportTimerRef.current !== null) {
+                    window.clearTimeout(reportTimerRef.current)
+                    reportTimerRef.current = null
+                  }
+                  navigate(`/interviews/session/${pendingReportId}/report`)
+                }}
+              >
+                立即查看报告
+              </button>
+            )}
             {voiceSessionExpired && (
               <button
                 className="ghost-button compact"
@@ -1015,24 +1049,84 @@ type TimelineMessage = {
 }
 
 function buildInterviewTimeline(question: InterviewQuestion, session: InterviewSession, lastEvaluation: InterviewSession['evaluations'][number] | null): TimelineMessage[] {
+  // 按真实对话轮次交错：开场题 → 回答 → 追问 → 回答 → …
   const messages: TimelineMessage[] = [{
-    id: `round-${session.current_round}-question`,
+    id: 'round-1-question',
     role: 'ai',
-    label: `第 ${session.current_round} 轮 · ${session.status.startsWith('follow_up') ? '追问' : '开场题'}`,
-    content: `${question.title}\n\n${session.status.startsWith('follow_up') ? session.follow_up_question || question.description || '' : question.description || ''}`,
+    label: '第 1 轮 · 开场题',
+    content: `${question.title}\n\n${question.description || ''}`,
   }]
-  for (const submission of session.submissions ?? []) {
-    messages.push({ id: `round-${submission.round}-answer`, role: 'user', label: `第 ${submission.round} 轮 · ${submission.type === 'voice' ? '语音回答' : '文字回答'}`, content: submission.content })
+
+  const submissions = [...(session.submissions ?? [])].sort((a, b) => a.round - b.round)
+  const evaluations = [...(session.evaluations ?? [])].sort((a, b) => a.round - b.round)
+  // 同一轮可能有多次作答：被判为无关的回答不推进轮次，学生的重答仍然记在同一 round 上。
+  const submissionsByRound = groupByInterviewRound(submissions)
+  const evaluationsByRound = groupByInterviewRound(evaluations)
+  if (lastEvaluation) {
+    const known = evaluationsByRound.get(lastEvaluation.round) ?? []
+    const landed = known.some((item) => item.total_score === lastEvaluation.total_score && item.follow_up_question === lastEvaluation.follow_up_question)
+    if (!landed) evaluationsByRound.set(lastEvaluation.round, [...known, lastEvaluation])
   }
-  for (const evaluation of session.evaluations ?? []) {
-    if (evaluation.follow_up_question) {
-      messages.push({ id: `round-${evaluation.round}-followup`, role: 'ai', label: `第 ${evaluation.round} 轮 · 追问`, content: evaluation.follow_up_question })
+
+  const maxRound = Math.max(
+    session.current_round || 1,
+    submissions.at(-1)?.round ?? 0,
+    evaluations.at(-1)?.round ?? 0,
+    lastEvaluation?.round ?? 0,
+  )
+
+  for (let round = 1; round <= maxRound; round += 1) {
+    const roundSubmissions = submissionsByRound.get(round) ?? []
+    const roundEvaluations = evaluationsByRound.get(round) ?? []
+    const attempts = Math.max(roundSubmissions.length, roundEvaluations.length)
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const suffix = attempt === 0 ? '' : `-${attempt + 1}`
+      const submission = roundSubmissions[attempt]
+      if (submission) {
+        messages.push({
+          id: `round-${round}-answer${suffix}`,
+          role: 'user',
+          label: `第 ${round} 轮 · ${submission.type === 'voice' ? '语音回答' : '文字回答'}`,
+          content: submission.content,
+        })
+      }
+      const followUp = roundEvaluations[attempt]?.follow_up_question
+      if (followUp) {
+        messages.push({
+          id: `round-${round}-followup${suffix}`,
+          role: 'ai',
+          label: `第 ${round} 轮 · 追问`,
+          content: followUp,
+        })
+      }
+    }
+
+    // 尚未落库的当前追问（例如流式刚结束）
+    if (
+      session.status.startsWith('follow_up')
+      && session.current_round === round + 1
+      && session.follow_up_question
+      && !messages.some((message) => message.id.startsWith(`round-${round}-followup`))
+    ) {
+      messages.push({
+        id: `round-${round}-followup`,
+        role: 'ai',
+        label: `第 ${round} 轮 · 追问`,
+        content: session.follow_up_question,
+      })
     }
   }
-  if (lastEvaluation?.follow_up_question && !messages.some((message) => message.id === `round-${lastEvaluation.round}-followup`)) {
-    messages.push({ id: `round-${lastEvaluation.round}-followup`, role: 'ai', label: `第 ${lastEvaluation.round} 轮 · 追问`, content: lastEvaluation.follow_up_question })
-  }
+
   return messages
+}
+
+function groupByInterviewRound<T extends { round: number }>(items: T[]): Map<number, T[]> {
+  const grouped = new Map<number, T[]>()
+  for (const item of items) {
+    grouped.set(item.round, [...(grouped.get(item.round) ?? []), item])
+  }
+  return grouped
 }
 
 function compactFeedbackSummary(value: string) {

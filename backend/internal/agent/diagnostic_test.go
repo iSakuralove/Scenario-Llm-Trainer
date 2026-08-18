@@ -148,13 +148,14 @@ func TestDiagnosticAgentSafetyRewritesLLMLeak(t *testing.T) {
 func TestDiagnosticAgentDoesNotForwardUnsafeRewriteDelta(t *testing.T) {
 	session := sampleSession()
 	question := sampleQuestion()
-	rewriteDeltaWasNil := false
-	externalDeltaCalled := false
+	streamed := []string{}
 	agent := NewDiagnosticAgent(DiagnosticConfig{
 		Rewrite: func(_ context.Context, _ ai.ScenarioReplyRequest, delta func(string)) (string, ai.CallMeta, error) {
-			rewriteDeltaWasNil = delta == nil
+			// 模型逐字吐出根因：闸门必须在它到达学生屏幕前就关上。
 			if delta != nil {
-				delta("根因是" + question.Content.RootCause)
+				for _, piece := range []string{"根因", "是", question.Content.RootCause} {
+					delta(piece)
+				}
 			}
 			return "根因是" + question.Content.RootCause, ai.CallMeta{Provider: "mock", Validated: true}, nil
 		},
@@ -164,21 +165,106 @@ func TestDiagnosticAgentDoesNotForwardUnsafeRewriteDelta(t *testing.T) {
 		Session:     session,
 		Question:    question,
 		UserMessage: "我想先看日志和发布时间",
-		OnDelta: func(string) {
-			externalDeltaCalled = true
+		OnDelta: func(chunk string) {
+			streamed = append(streamed, chunk)
 		},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !rewriteDeltaWasNil {
-		t.Fatal("rewrite delta should not be forwarded before safety rewrite")
-	}
-	if externalDeltaCalled {
-		t.Fatal("external delta callback should not receive unsafe rewrite chunks")
-	}
 	if !result.Meta.SafetyRewritten {
 		t.Fatalf("expected final reply to be safety rewritten: %#v", result.Meta)
+	}
+	streamedText := strings.Join(streamed, "")
+	if strings.Contains(streamedText, question.Content.RootCause) {
+		t.Fatalf("external delta leaked root cause: %q", streamedText)
+	}
+	// 闸门关闭后不再追加分片：已发出的开头由 finish 事件里的最终内容整体替换。
+	if !strings.HasPrefix(result.AssistantContent, streamedText) && strings.Contains(result.AssistantContent, streamedText) {
+		t.Fatalf("blocked stream must not be silently appended to: streamed=%q final=%q", streamedText, result.AssistantContent)
+	}
+}
+
+func TestDiagnosticAgentStreamsModelChunksProgressively(t *testing.T) {
+	session := sampleSession()
+	question := sampleQuestion()
+	modelPieces := []string{"先别急着下结论，", "把最近一次变更的时间点", "和当时的错误率对齐看看。"}
+	seenDuringRewrite := 0
+	streamed := []string{}
+	agent := NewDiagnosticAgent(DiagnosticConfig{
+		Rewrite: func(_ context.Context, _ ai.ScenarioReplyRequest, delta func(string)) (string, ai.CallMeta, error) {
+			if delta == nil {
+				t.Fatal("scenario rewrite must receive a delta callback so tokens reach the student while the model is still generating")
+			}
+			for _, piece := range modelPieces {
+				delta(piece)
+			}
+			seenDuringRewrite = len(streamed)
+			return strings.Join(modelPieces, ""), ai.CallMeta{Provider: "mock", Validated: true}, nil
+		},
+	})
+
+	result, err := agent.Run(context.Background(), DiagnosticRequest{
+		Session:     session,
+		Question:    question,
+		UserMessage: "我想先看日志和发布时间",
+		OnDelta: func(chunk string) {
+			streamed = append(streamed, chunk)
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if seenDuringRewrite == 0 {
+		t.Fatal("expected chunks to reach the student before the model call returned")
+	}
+	if got := strings.Join(streamed, ""); got != result.AssistantContent {
+		t.Fatalf("streamed text must match the final reply: %q vs %q", got, result.AssistantContent)
+	}
+}
+
+func TestSafeReplyStreamHoldsBackSplitForbiddenTerm(t *testing.T) {
+	emitted := []string{}
+	stream := newSafeReplyStream(func(chunk string) { emitted = append(emitted, chunk) }, []string{"索引缺失导致慢查询"})
+	// 禁词被切在多个分片里，逐片到达时都不能提前放行。
+	for _, piece := range []string{"这里的问题是", "索引缺", "失导致慢查询"} {
+		stream.accept(piece)
+	}
+	if !stream.blocked {
+		t.Fatal("expected the stream to close once the forbidden term completed")
+	}
+	if got := strings.Join(emitted, ""); strings.Contains(got, "索引缺失导致慢查询") {
+		t.Fatalf("forbidden term leaked through the gate: %q", got)
+	}
+}
+
+func TestDiagnosticAgentStreamsSafeReplyChunks(t *testing.T) {
+	session := sampleSession()
+	question := sampleQuestion()
+	reply := "先别急着下结论，把最近一次变更的时间点和当时的错误率对齐看看，再决定下一步查什么。"
+	streamed := []string{}
+	agent := NewDiagnosticAgent(DiagnosticConfig{
+		Rewrite: func(context.Context, ai.ScenarioReplyRequest, func(string)) (string, ai.CallMeta, error) {
+			return reply, ai.CallMeta{Provider: "mock", Validated: true}, nil
+		},
+	})
+
+	result, err := agent.Run(context.Background(), DiagnosticRequest{
+		Session:     session,
+		Question:    question,
+		UserMessage: "我想先看日志和发布时间",
+		OnDelta: func(chunk string) {
+			streamed = append(streamed, chunk)
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(streamed) < 2 {
+		t.Fatalf("expected the reply to be delivered in multiple chunks, got %#v", streamed)
+	}
+	if got := strings.Join(streamed, ""); got != result.AssistantContent {
+		t.Fatalf("streamed text must match the final reply: %q vs %q", got, result.AssistantContent)
 	}
 }
 
@@ -278,5 +364,42 @@ func sampleQuestion() *domain.ScenarioQuestion {
 				},
 			},
 		},
+	}
+}
+
+func TestDiagnosticFallbackReplyIsNotAModelInstruction(t *testing.T) {
+	session := sampleSession()
+	question := sampleQuestion()
+	// 没有配置模型改写时，学生看到的必须是面向他的话，而不是写给模型的指令。
+	result, err := NewDiagnosticAgent(DiagnosticConfig{}).Run(context.Background(), DiagnosticRequest{
+		Session:     session,
+		Question:    question,
+		UserMessage: "?????",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, instruction := range []string{"要求用户", "说明用户", "提醒该方向", "温和打断", "指出当前方向"} {
+		if strings.Contains(result.AssistantContent, instruction) {
+			t.Fatalf("model instruction leaked to the student: %q", result.AssistantContent)
+		}
+	}
+	if strings.TrimSpace(result.AssistantContent) == "" {
+		t.Fatal("expected a student-facing fallback reply")
+	}
+}
+
+func TestBuildDiagnosticContextCountsConsecutiveStreaksOnly(t *testing.T) {
+	question := sampleQuestion()
+	session := sampleSession()
+	messages := []domain.ScenarioMessage{
+		{TurnNumber: 1, UserContent: "今天天气不错，聊点别的吧"},
+		{TurnNumber: 2, UserContent: "我看一下慢查询日志里的执行时间分布"},
+		{TurnNumber: 3, UserContent: "随便说点什么都行吧哈哈"},
+	}
+	ctx := buildDiagnosticContext("再随便聊聊", question, session, messages)
+	// 第 1 轮那次跑偏被第 2 轮的正常提问隔断，不应继续计入连续次数。
+	if ctx.OffTrackStreak > 1 {
+		t.Fatalf("expected only the consecutive tail to count, got %d", ctx.OffTrackStreak)
 	}
 }

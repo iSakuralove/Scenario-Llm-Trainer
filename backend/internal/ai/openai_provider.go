@@ -248,6 +248,27 @@ func (p *OpenAICompatibleProvider) GenerateInterviewFeedbackStream(ctx context.C
 	return out, ValidateInterviewFeedback(out, req.Evaluation.FollowUpTriggered, req.NeedReport)
 }
 
+func (p *OpenAICompatibleProvider) RewriteInterviewOpening(ctx context.Context, req InterviewOpeningRequest) (InterviewOpeningRewrite, error) {
+	var out InterviewOpeningRewrite
+	prompt, err := interviewOpeningPrompt(req)
+	if err != nil {
+		return InterviewOpeningRewrite{}, err
+	}
+	if err := p.completeJSON(ctx, prompt, SchemaInterviewOpening, &out); err != nil {
+		return InterviewOpeningRewrite{}, err
+	}
+	out.Opening = strings.TrimSpace(out.Opening)
+	return out, ValidateInterviewOpening(out)
+}
+
+func interviewOpeningPrompt(req InterviewOpeningRequest) (string, error) {
+	return renderPrompt("interview_opening", map[string]interface{}{
+		"Subject":    strings.TrimSpace(req.Subject),
+		"Domain":     strings.TrimSpace(req.Domain),
+		"SourceText": strings.TrimSpace(req.SourceText),
+	})
+}
+
 func (p *OpenAICompatibleProvider) CheckSensitiveContent(ctx context.Context, req SensitiveCheckRequest) (domain.SensitiveCheckResult, error) {
 	var out sensitiveCheckModelOutput
 	prompt, err := renderPrompt("sensitive_check", map[string]interface{}{
@@ -269,9 +290,9 @@ func interviewFeedbackPrompt(req InterviewFeedbackRequest) (string, error) {
 	if req.NeedReport {
 		reportInstruction = "必须生成 final_report，给出 1-2 句中文综合评价。"
 	}
-	followInstruction := "follow_up_question 可以为空。"
+	followInstruction := "follow_up_question 必须为空字符串。"
 	if req.Evaluation.FollowUpTriggered {
-		followInstruction = "必须生成 follow_up_question，只能围绕评分最低的维度追问。"
+		followInstruction = interviewFollowUpInstruction(req)
 	}
 	questionText := ""
 	if req.Question != nil {
@@ -306,14 +327,26 @@ func interviewSessionContext(req InterviewFeedbackRequest) string {
 	return strings.Join(parts, "\n")
 }
 
+func interviewFollowUpInstruction(req InterviewFeedbackRequest) string {
+	level := strings.TrimSpace(req.DifficultyLevel)
+	switch level {
+	case "challenge":
+		return "必须生成 follow_up_question：一句口语化单点追问。优先顺着候选人回答中的薄弱或风险点加压，但仍只问一个点；不要念维度名，不要并列多个交付物。"
+	case "foundation":
+		return "必须生成 follow_up_question：一句口语化单点追问。先确认候选人刚提到的概念或步骤是否清楚，再轻轻往下挖一层；不要念维度名，不要并列多个交付物。"
+	default:
+		return "必须生成 follow_up_question：一句口语化单点追问。默认回答内容优先——顺着候选人刚说的点再挖一层；若回答过空再补救追问；不要念维度名，不要并列多个交付物。"
+	}
+}
+
 func interviewDifficultyLevelLabel(value string) string {
 	switch strings.TrimSpace(value) {
 	case "foundation":
-		return "偏基础，优先确认概念和表达结构"
+		return "偏基础，优先确认概念和表达结构，循序渐进"
 	case "standard":
-		return "标准难度，兼顾准确性、完整性和落地性"
+		return "标准难度，循序渐进，兼顾准确性与完整性"
 	case "challenge":
-		return "偏挑战，追问更关注边界、权衡和线上风险"
+		return "偏挑战，可更早加压边界、权衡和线上风险，但仍单点提问"
 	default:
 		return value
 	}

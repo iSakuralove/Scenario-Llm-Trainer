@@ -614,9 +614,43 @@ func TestScenarioMessageSSE(t *testing.T) {
 	if !strings.Contains(raw, "event: stage") || !strings.Contains(raw, "event: finish") {
 		t.Fatalf("expected stage and finish events, got %s", raw)
 	}
-	if strings.Contains(raw, "event: delta") {
-		t.Fatalf("scenario message SSE should not expose structured JSON delta, got %s", raw)
+	streamed := collectSSEDeltaText(t, raw)
+	if streamed == "" {
+		t.Fatalf("expected the teaching reply to be streamed as delta events, got %s", raw)
 	}
+	if strings.Contains(streamed, `"reply"`) || strings.Contains(streamed, "{") {
+		t.Fatalf("scenario message SSE should not expose structured JSON delta, got %q", streamed)
+	}
+	// 流式内容必须与最终落库内容一致，确保推给学生的都是安全网关之后的文本。
+	finishIndex := strings.Index(raw, "event: finish")
+	if finishIndex < 0 {
+		t.Fatalf("missing finish event: %s", raw)
+	}
+	if !strings.Contains(raw[finishIndex:], quoteJSON(streamed)) {
+		t.Fatalf("streamed text %q should match the persisted assistant content: %s", streamed, raw[finishIndex:])
+	}
+}
+
+func collectSSEDeltaText(t *testing.T, raw string) string {
+	t.Helper()
+	var builder strings.Builder
+	for _, block := range strings.Split(raw, "\n\n") {
+		if !strings.HasPrefix(strings.TrimSpace(block), "event: delta") {
+			continue
+		}
+		_, data, ok := strings.Cut(block, "data: ")
+		if !ok {
+			continue
+		}
+		var payload struct {
+			Chunk string `json:"chunk"`
+		}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(data)), &payload); err != nil {
+			t.Fatalf("invalid delta payload %q: %v", data, err)
+		}
+		builder.WriteString(payload.Chunk)
+	}
+	return builder.String()
 }
 
 func TestInterviewSubmitSSE(t *testing.T) {

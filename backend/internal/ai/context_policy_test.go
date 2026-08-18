@@ -88,6 +88,7 @@ func TestTaskPolicyRegistryBindsCoreTasks(t *testing.T) {
 		RouterTaskScenarioReply,
 		RouterTaskCommunityStructure,
 		RouterTaskInterviewFeedback,
+		RouterTaskInterviewOpening,
 	} {
 		policy, ok := LookupTaskPolicy(task)
 		if !ok {

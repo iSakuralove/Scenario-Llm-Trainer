@@ -15,6 +15,7 @@ const (
 	SchemaScenarioQuestion       = "scenario_question"
 	SchemaScenarioContentPreview = "scenario_content_preview"
 	SchemaInterviewFeedback      = "interview_feedback"
+	SchemaInterviewOpening       = "interview_opening"
 	SchemaScenarioReply          = "scenario_reply"
 	SchemaSensitiveCheck         = "sensitive_check"
 )
@@ -222,6 +223,7 @@ func loadJSONSchemas() map[string]schemaEntry {
 		{SchemaScenarioQuestion, "schemas/scenario_question.schema.json", "SC-03 scenario content", "Scenario generation JSON Schema"},
 		{SchemaScenarioContentPreview, "schemas/scenario_content_preview.schema.json", "CM-02 community preview", "Community preview JSON Schema"},
 		{SchemaInterviewFeedback, "schemas/interview_feedback.schema.json", "IV-05 interview feedback", "Interview feedback JSON Schema"},
+		{SchemaInterviewOpening, "schemas/interview_opening.schema.json", "IV-opening interview opening rewrite", "Interview opening rewrite JSON Schema"},
 		{SchemaScenarioReply, "schemas/scenario_reply.schema.json", "DG-02 scenario reply", "Scenario reply JSON Schema"},
 		{SchemaSensitiveCheck, "schemas/sensitive_check.schema.json", "SR-02 AI-03 sensitive detection", "Sensitive content detection JSON Schema"},
 	}

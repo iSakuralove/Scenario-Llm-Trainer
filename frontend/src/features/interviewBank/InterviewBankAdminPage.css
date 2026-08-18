@@ -1369,3 +1369,32 @@
     display: grid;
   }
 }
+
+.interview-bank-search-field {
+  min-width: min(100%, 240px);
+}
+
+.interview-bank-search-field input {
+  width: 100%;
+}
+
+.interview-bank-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  color: var(--muted, #8ea0b5);
+  font-size: 0.86rem;
+  font-weight: 650;
+}
+
+.interview-bank-pagination-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.interview-bank-pagination .ghost-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

@@ -203,12 +203,14 @@ func (s *Server) handleScenarioSession(w http.ResponseWriter, r *http.Request, u
 		}
 		var writer *sseWriter
 		var onStage func(string, string)
+		var onDelta func(string)
 		if wantsSSE(r) {
 			writer = newSSEWriter(w)
 			onStage = writer.stage
+			onDelta = func(chunk string) { writer.delta(chunk, true) }
 			writer.stage("agent_intent", "正在分析你的排查意图")
 		}
-		message, session, err := s.processScenarioMessage(r.Context(), user, sessionID, strings.TrimSpace(req.Content), r, onStage)
+		message, session, err := s.processScenarioMessage(r.Context(), user, sessionID, strings.TrimSpace(req.Content), r, onStage, onDelta)
 		if err != nil {
 			if writer != nil {
 				writer.fail(err.Error())

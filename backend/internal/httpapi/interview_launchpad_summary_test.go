@@ -6,6 +6,31 @@ import (
 	"situational-teaching/backend/internal/domain"
 )
 
+func TestInterviewLaunchpadShortTopicPrefersTitleKeyword(t *testing.T) {
+	got := interviewLaunchpadShortTopic("JVM运行时数据区：核心原理与适用场景", "请解释JVM运行时数据区的核心机制，并说明它解决的问题与适用边界。")
+	if got != "JVM运行时数据区" {
+		t.Fatalf("unexpected short topic: %q", got)
+	}
+}
+
+func TestInterviewLaunchpadShortTopicFromSubjectTemplate(t *testing.T) {
+	got := interviewLaunchpadShortTopic("", "请解释Redis数据结构的核心机制，并说明它解决的问题与适用边界。")
+	if got != "Redis数据结构" {
+		t.Fatalf("unexpected short topic: %q", got)
+	}
+}
+
+func TestInterviewLaunchpadTrackSummaryKeepsFocus(t *testing.T) {
+	got := interviewLaunchpadTrackSummary([]string{"模型选型", "AI需求判断", "AI灰度发布"}, 28)
+	if got != "模型选型 · AI需求判断 · AI灰度发布 等 28 题" {
+		t.Fatalf("unexpected summary: %q", got)
+	}
+	got = interviewLaunchpadTrackSummary([]string{"缓存穿透"}, 1)
+	if got != "缓存穿透" {
+		t.Fatalf("unexpected single summary: %q", got)
+	}
+}
+
 func TestSortInterviewLaunchpadTracksPrioritizesResumeBeforeTargetRole(t *testing.T) {
 	tracks := []interviewLaunchpadTrack{
 		{ID: "role", Domain: "java", DomainLabel: "Java", Tags: []string{"spring", "后端工程师"}},

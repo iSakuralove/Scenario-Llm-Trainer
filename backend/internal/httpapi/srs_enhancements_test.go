@@ -225,6 +225,18 @@ func TestInterviewVoiceAssetTranscriptAndReport(t *testing.T) {
 		t.Fatalf("unexpected voice transcript: %+v", voice)
 	}
 
+	// 先校验无效资产，避免高质量首轮作答已结束会话后被 409 挡住。
+	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/interviews/sessions/"+created.SessionID+"/submit", token, map[string]interface{}{
+		"type":                 "voice",
+		"content":              "伪造资产提交",
+		"transcript":           "伪造资产提交",
+		"asset_id":             "asset-not-found",
+		"confirmed_transcript": true,
+	})
+	if status != http.StatusNotFound || env.Code != http.StatusNotFound {
+		t.Fatalf("expected invalid asset rejection, status=%d env=%+v", status, env)
+	}
+
 	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/interviews/sessions/"+created.SessionID+"/submit", token, map[string]interface{}{
 		"type":                 "voice",
 		"content":              voice.Transcript,
@@ -257,17 +269,6 @@ func TestInterviewVoiceAssetTranscriptAndReport(t *testing.T) {
 	mustDecodeData(t, env, &report)
 	if len(report.Session.Submissions) != 1 || report.Session.Submissions[0].Asset == nil || report.Session.Submissions[0].Asset.ContentURL == "" {
 		t.Fatalf("expected report asset evidence chain: %+v", report.Session.Submissions)
-	}
-
-	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/interviews/sessions/"+created.SessionID+"/submit", token, map[string]interface{}{
-		"type":                 "voice",
-		"content":              "伪造资产提交",
-		"transcript":           "伪造资产提交",
-		"asset_id":             "asset-not-found",
-		"confirmed_transcript": true,
-	})
-	if status != http.StatusNotFound || env.Code != http.StatusNotFound {
-		t.Fatalf("expected invalid asset rejection, status=%d env=%+v", status, env)
 	}
 }
 

@@ -1369,7 +1369,7 @@ func seedInterviewQuestions(now time.Time) []domain.InterviewQuestion {
 		{
 			ID:                   "interview-db-slow-query",
 			Title:                "如何定位 MySQL 慢查询",
-			Description:          "线上接口突然变慢，你怀疑是 MySQL 查询问题。请说明你的定位路径、关键命令、可能修复方案和回滚考虑。",
+			Description:          "线上接口突然变慢，你怀疑是 MySQL 查询问题。你第一步会先看什么？",
 			Domain:               "database",
 			Difficulty:           "L3",
 			QuestionType:         "scenario_analysis",
@@ -1385,7 +1385,7 @@ func seedInterviewQuestions(now time.Time) []domain.InterviewQuestion {
 		{
 			ID:                   "interview-network-timeout",
 			Title:                "如何排查跨服务调用超时",
-			Description:          "微服务之间出现间歇性超时，重试后成功。请给出从应用到网络基础设施的排查路径。",
+			Description:          "微服务之间出现间歇性超时，重试后往往又能成功。你最先会去核对哪一类证据？",
 			Domain:               "network",
 			Difficulty:           "L3",
 			QuestionType:         "scenario_analysis",
@@ -1400,7 +1400,7 @@ func seedInterviewQuestions(now time.Time) []domain.InterviewQuestion {
 		{
 			ID:                   "interview-os-load",
 			Title:                "load average 高但 CPU 不高怎么排查",
-			Description:          "Linux 主机 load average 很高，但 CPU 使用率并不高。请说明可能原因、验证命令和处理策略。",
+			Description:          "Linux 主机 load average 很高，但 CPU 使用率并不高。你认为最可能是哪一类原因？",
 			Domain:               "os",
 			Difficulty:           "L3",
 			QuestionType:         "principle",
@@ -1415,7 +1415,7 @@ func seedInterviewQuestions(now time.Time) []domain.InterviewQuestion {
 		{
 			ID:                   "interview-security-ak-leak",
 			Title:                "访问密钥泄露后如何遏制风险",
-			Description:          "研发同学把云平台访问密钥提交到了公开仓库。请说明你的风险遏制顺序、密钥轮换方式、影响面确认和事后加固措施。",
+			Description:          "研发同学把云平台访问密钥提交到了公开仓库。你接到告警后的第一步会做什么？",
 			Domain:               "security",
 			Difficulty:           "L4",
 			QuestionType:         "scenario_analysis",
@@ -1431,7 +1431,7 @@ func seedInterviewQuestions(now time.Time) []domain.InterviewQuestion {
 		{
 			ID:                   "interview-devops-release-rollback",
 			Title:                "发布失败后如何回滚并恢复流水线",
-			Description:          "一次生产发布导致服务健康检查持续失败，流水线卡在发布阶段。请给出排查顺序、回滚策略和流水线修复方案。",
+			Description:          "一次生产发布导致服务健康检查持续失败，流水线卡在发布阶段。你现在会先看哪一项？",
 			Domain:               "devops",
 			Difficulty:           "L4",
 			QuestionType:         "scenario_analysis",
@@ -1446,7 +1446,7 @@ func seedInterviewQuestions(now time.Time) []domain.InterviewQuestion {
 		{
 			ID:                   "interview-backend-idempotency",
 			Title:                "下单重试导致重复扣减库存如何处理",
-			Description:          "用户重复提交订单后库存被扣减两次。请说明你会如何定位幂等缺失点，并给出修复和补偿策略。",
+			Description:          "用户重复提交订单后库存被扣减两次。你会先从哪一层排查幂等是否失效？",
 			Domain:               "backend",
 			Difficulty:           "L4",
 			QuestionType:         "scenario_analysis",
@@ -1461,7 +1461,7 @@ func seedInterviewQuestions(now time.Time) []domain.InterviewQuestion {
 		{
 			ID:                   "interview-distributed-tcc",
 			Title:                "分布式事务补偿失败如何排查",
-			Description:          "订单服务和支付服务通过消息最终一致，但补偿任务频繁失败。请说明排查路径、补偿幂等和恢复策略。",
+			Description:          "订单服务和支付服务通过消息最终一致，但补偿任务频繁失败。你先会核对哪一类状态？",
 			Domain:               "distributed",
 			Difficulty:           "L4",
 			QuestionType:         "scenario_analysis",
@@ -1476,7 +1476,7 @@ func seedInterviewQuestions(now time.Time) []domain.InterviewQuestion {
 		{
 			ID:                   "interview-cloudnative-rollout",
 			Title:                "Kubernetes 滚动发布卡住如何定位",
-			Description:          "Deployment 滚动发布后新 Pod 持续重启，旧版本又迟迟不退出。请说明从镜像、配置、探针到调度层面的排查顺序。",
+			Description:          "Deployment 滚动发布后新 Pod 持续重启，旧版本又迟迟不退出。你第一步会检查什么？",
 			Domain:               "cloud-native",
 			Difficulty:           "L4",
 			QuestionType:         "scenario_analysis",
@@ -1491,7 +1491,7 @@ func seedInterviewQuestions(now time.Time) []domain.InterviewQuestion {
 		{
 			ID:                   "interview-mq-cache-backlog",
 			Title:                "缓存击穿伴随消息积压如何联合排查",
-			Description:          "热点 key 同时失效后数据库流量暴涨，消息队列消费也开始积压。请说明你会怎样判断根因先后与止损顺序。",
+			Description:          "热点 key 同时失效后数据库流量暴涨，消息队列消费也开始积压。你会先止损哪一侧？",
 			Domain:               "mq-cache",
 			Difficulty:           "L4",
 			QuestionType:         "scenario_analysis",
@@ -1506,7 +1506,7 @@ func seedInterviewQuestions(now time.Time) []domain.InterviewQuestion {
 		{
 			ID:                   "interview-observability-alert-storm",
 			Title:                "告警风暴中如何快速定位真实故障",
-			Description:          "一次区域性故障触发了上百条告警，值班同学无法快速定位真正的根因。请说明你的告警去噪、指标定位和链路分析方法。",
+			Description:          "一次区域性故障触发了上百条告警，值班同学无法快速定位真正的根因。你会先抓住哪一个核心信号？",
 			Domain:               "observability",
 			Difficulty:           "L4",
 			QuestionType:         "scenario_analysis",
@@ -1521,7 +1521,7 @@ func seedInterviewQuestions(now time.Time) []domain.InterviewQuestion {
 		{
 			ID:                   "interview-performance-p99",
 			Title:                "P99 延迟抖动如何做性能定位",
-			Description:          "平均响应时间正常，但 P99 延迟在高峰期持续抖动。请说明你会如何从线程池、锁竞争、GC 和热点流量定位瓶颈。",
+			Description:          "平均响应时间正常，但 P99 延迟在高峰期持续抖动。你会先从哪个方向下手？",
 			Domain:               "performance",
 			Difficulty:           "L4",
 			QuestionType:         "scenario_analysis",
@@ -1536,7 +1536,7 @@ func seedInterviewQuestions(now time.Time) []domain.InterviewQuestion {
 		{
 			ID:                   "interview-architecture-multi-active",
 			Title:                "多活架构下如何处理跨地域一致性",
-			Description:          "公司计划把核心交易系统升级为双活架构。请说明你会如何划分一致性等级、处理流量切换和设计演进路径。",
+			Description:          "公司计划把核心交易系统升级为双活架构。你觉得最先要划清的是哪一类边界？",
 			Domain:               "architecture",
 			Difficulty:           "L5",
 			QuestionType:         "principle",

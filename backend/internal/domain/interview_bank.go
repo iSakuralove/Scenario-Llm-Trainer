@@ -99,6 +99,8 @@ type InterviewKnowledgeAtomFilter struct {
 	Category     string
 	QuestionRole string
 	VectorStatus string
+	// Query 对 title/subject/id/tags 做包含匹配（不区分大小写）。
+	Query string
 }
 
 type InterviewKnowledgeSummary struct {

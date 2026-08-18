@@ -182,6 +182,16 @@ type InterviewFeedback struct {
 	FinalReport      string   `json:"final_report"`
 }
 
+type InterviewOpeningRequest struct {
+	Subject    string
+	Domain     string
+	SourceText string
+}
+
+type InterviewOpeningRewrite struct {
+	Opening string `json:"opening"`
+}
+
 type Provider interface {
 	Info() ProviderInfo
 	GenerateScenario(ctx context.Context, req ScenarioGenerationRequest) (domain.ScenarioQuestion, error)
@@ -191,6 +201,7 @@ type Provider interface {
 	RewriteScenarioReplyStream(ctx context.Context, req ScenarioReplyRequest, onDelta func(string)) (string, error)
 	GenerateInterviewFeedback(ctx context.Context, req InterviewFeedbackRequest) (InterviewFeedback, error)
 	GenerateInterviewFeedbackStream(ctx context.Context, req InterviewFeedbackRequest, onDelta func(string)) (InterviewFeedback, error)
+	RewriteInterviewOpening(ctx context.Context, req InterviewOpeningRequest) (InterviewOpeningRewrite, error)
 	CheckSensitiveContent(ctx context.Context, req SensitiveCheckRequest) (domain.SensitiveCheckResult, error)
 }
 
@@ -593,14 +604,32 @@ func (r *Router) RewriteScenarioReplyStream(ctx context.Context, req ScenarioRep
 		withStream(true),
 		withContextWindow(window),
 	)
+	// 只有首个 provider 的分片能直接外发：一旦回退到备用 provider，
+	// 前面那半段已经不属于最终答案，继续追加会拼出两段不同来源的文本。
+	attempt := 0
+	streamedRunes := 0
 	value, meta, err := r.call(ctx, routerReq, func(provider Provider) (interface{}, error) {
-		return provider.RewriteScenarioReplyStream(ctx, preparedReq, nil)
+		attempt++
+		if onDelta == nil || attempt > 1 {
+			return provider.RewriteScenarioReplyStream(ctx, preparedReq, nil)
+		}
+		field := NewJSONFieldStreamer("reply")
+		return provider.RewriteScenarioReplyStream(ctx, preparedReq, func(chunk string) {
+			text := field.Accept(chunk)
+			if text == "" {
+				return
+			}
+			streamedRunes += len([]rune(text))
+			onDelta(text)
+		})
 	}, processScenarioReply(routerReq, preparedReq))
 	if err != nil {
 		return "", meta, err
 	}
 	reply := value.(string)
-	emitMockDelta(onDelta, reply)
+	if streamedRunes == 0 {
+		emitMockDelta(onDelta, reply)
+	}
 	return reply, meta, nil
 }
 
@@ -620,6 +649,27 @@ func (r *Router) GenerateInterviewFeedback(ctx context.Context, req InterviewFee
 		return zero, meta, err
 	}
 	return value.(InterviewFeedback), meta, nil
+}
+
+func (r *Router) RewriteInterviewOpening(ctx context.Context, req InterviewOpeningRequest) (InterviewOpeningRewrite, CallMeta, error) {
+	var zero InterviewOpeningRewrite
+	if r == nil {
+		return zero, CallMeta{}, fmt.Errorf("llm router is not configured")
+	}
+	routerReq := routerRequest(
+		RouterTaskInterviewOpening,
+		withSchema(SchemaInterviewOpening),
+		withPrompt("interview_opening"),
+	)
+	value, meta, err := r.call(ctx, routerReq, func(provider Provider) (interface{}, error) {
+		return provider.RewriteInterviewOpening(ctx, req)
+	}, processWithDomainValidator(routerReq, func(value interface{}) error {
+		return ValidateInterviewOpening(value.(InterviewOpeningRewrite))
+	}))
+	if err != nil {
+		return zero, meta, err
+	}
+	return value.(InterviewOpeningRewrite), meta, nil
 }
 
 func (r *Router) GenerateInterviewFeedbackStream(ctx context.Context, req InterviewFeedbackRequest, onDelta func(string)) (InterviewFeedback, CallMeta, error) {

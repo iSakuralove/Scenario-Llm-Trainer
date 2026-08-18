@@ -4,6 +4,7 @@ test('interview launchpad prioritizes start, bank counts, history, domains, and 
   let requestedPayload: Record<string, unknown> | undefined
   await mockShellAPI(page)
   await page.route('**/api/v1/interviews/sessions', async (route) => {
+    if (await fulfillPreflight(route)) return
     if (route.request().method() !== 'POST') {
       await route.fallback()
       return
@@ -70,6 +71,7 @@ test('interview launchpad prioritizes start, bank counts, history, domains, and 
 test('interview launchpad blocks mismatched question responses', async ({ page }) => {
   await mockShellAPI(page)
   await page.route('**/api/v1/interviews/sessions', async (route) => {
+    if (await fulfillPreflight(route)) return
     if (route.request().method() !== 'POST') {
       await route.fallback()
       return
@@ -94,6 +96,7 @@ test('interview launchpad blocks mismatched question responses', async ({ page }
 test('interview launchpad shows backend not found errors without leaving launchpad', async ({ page }) => {
   await mockShellAPI(page)
   await page.route('**/api/v1/interviews/sessions', async (route) => {
+    if (await fulfillPreflight(route)) return
     if (route.request().method() !== 'POST') {
       await route.fallback()
       return
@@ -101,6 +104,7 @@ test('interview launchpad shows backend not found errors without leaving launchp
     await route.fulfill({
       status: 404,
       contentType: 'application/json',
+      headers: CORS_HEADERS,
       body: JSON.stringify({ code: 404, message: 'interview question not found' }),
     })
   })
@@ -120,6 +124,7 @@ test('interview launchpad does not create history when the session page module c
     await route.abort('failed')
   })
   await page.route('**/api/v1/interviews/sessions', async (route) => {
+    if (await fulfillPreflight(route)) return
     if (route.request().method() === 'POST') createRequests += 1
     await route.fallback()
   })
@@ -310,6 +315,82 @@ test('interview launchpad keeps track card detail lines readable after domain ex
   expect(detailMetrics!.detailBottom).toBeLessThanOrEqual(detailMetrics!.itemBottom + 1)
 })
 
+test('interview session renders timeline and anchors in round order', async ({ page }) => {
+  await mockShellAPI(page)
+  const question = {
+    ...interviewQuestion(),
+    id: 'interview-mysql-slow-query',
+    title: '如何定位 MySQL 慢查询',
+    description: '接口 P95 突然升高，请说明从报警到定位 SQL 的完整路径。',
+  }
+  const session = {
+    ...interviewSession('e2e-timeline-order', question.id),
+    status: 'follow_up_pending',
+    current_round: 3,
+    submissions: [
+      interviewSubmission(2, '第二轮回答：补充 EXPLAIN、索引命中和回滚验证。'),
+      interviewSubmission(1, '第一轮回答：先确认接口耗时、慢查询日志和连接池等待。'),
+    ],
+    evaluations: [
+      interviewEvaluation(2, '第二轮追问：如何证明修复后没有回归？'),
+      interviewEvaluation(1, '第一轮追问：如何确认问题不是网络或应用线程池？'),
+    ],
+  }
+
+  await page.route('**/api/v1/interviews/sessions/e2e-timeline-order', async (route) => {
+    await fulfillJSON(route, { session, question })
+  })
+
+  await page.setViewportSize({ width: 1250, height: 958 })
+  await page.addInitScript(() => {
+    window.localStorage.setItem('teaching_mvp_access', 'e2e-token')
+    window.localStorage.setItem('teaching_mvp_refresh', 'e2e-refresh')
+  })
+  await page.goto('/interviews/session/e2e-timeline-order')
+
+  const timeline = page.getByTestId('interview-timeline')
+  await expect(timeline).toBeVisible()
+  await expect(timeline.locator('.timeline-meta span')).toHaveText([
+    '第 1 轮 · 开场题',
+    '第 1 轮 · 文字回答',
+    '第 1 轮 · 追问',
+    '第 2 轮 · 文字回答',
+    '第 2 轮 · 追问',
+  ])
+  await expect(page.locator('.interview-anchor-nav button span')).toHaveText([
+    '第 1 轮 · 开场题',
+    '回答',
+    '第 1 轮 · 追问',
+    '回答',
+    '第 2 轮 · 追问',
+  ])
+  await expect
+    .poll(async () =>
+      timeline.locator('.timeline-message').evaluateAll((items) =>
+        items.map((item) => ({
+          className: item.className,
+          left: item.getBoundingClientRect().left,
+        })),
+      ),
+    )
+    .toEqual([
+      expect.objectContaining({ className: expect.stringContaining('ai') }),
+      expect.objectContaining({ className: expect.stringContaining('user') }),
+      expect.objectContaining({ className: expect.stringContaining('ai') }),
+      expect.objectContaining({ className: expect.stringContaining('user') }),
+      expect.objectContaining({ className: expect.stringContaining('ai') }),
+    ])
+  const messageLefts = await timeline.locator('.timeline-message').evaluateAll((items) => items.map((item) => item.getBoundingClientRect().left))
+  expect(messageLefts[1]).toBeGreaterThan(messageLefts[0])
+  expect(messageLefts[3]).toBeGreaterThan(messageLefts[2])
+  await expectNoHorizontalOverflow(page)
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.getByRole('button', { name: '对话锚点' }).click()
+  await expect(page.locator('.interview-anchor-nav')).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+})
+
 test('interview launchpad can delete history records', async ({ page }) => {
   await mockShellAPI(page)
   const historySessions = [
@@ -335,6 +416,7 @@ test('interview launchpad can delete history records', async ({ page }) => {
   })
 
   await page.route('**/api/v1/interviews/sessions/e2e-history-delete', async (route) => {
+    if (await fulfillPreflight(route)) return
     if (route.request().method() === 'DELETE') {
       historySessions.splice(0, historySessions.length)
       await fulfillJSON(route, { deleted: true, id: 'e2e-history-delete' })
@@ -346,16 +428,85 @@ test('interview launchpad can delete history records', async ({ page }) => {
   await openInterviewsAsStudent(page)
 
   const historyPanel = page.getByTestId('interview-history-panel')
-  await expect(historyPanel).toContainText('1 条记录')
+  await expect(historyPanel).toContainText('1 场')
   await expect(historyPanel).toContainText('面试 #e2e-hist')
+  await historyPanel.locator('summary').click()
   await historyPanel.getByRole('button', { name: /删除记录/ }).click()
-  await expect(historyPanel).toContainText('0 条记录')
-  await expect(historyPanel).toContainText('暂无历史面试记录')
+  await expect(historyPanel).toContainText('0 场')
+  await expect(historyPanel).toContainText('完成一场面试后，记录会出现在这里。')
 })
+
+test('interview launchpad can clear all history records', async ({ page }) => {
+  await mockShellAPI(page)
+  const historySessions = Array.from({ length: 7 }, (_, index) => ({
+    id: `e2e-history-clear-${index + 1}`,
+    user_id: 'demo-user',
+    question_id: 'interview-history-question',
+    status: 'question_presented',
+    current_round: 1,
+    max_rounds: 3,
+    evaluations: [],
+    submissions: [],
+    started_at: new Date().toISOString(),
+  }))
+  const deletedIds: string[] = []
+
+  await page.route('**/api/v1/users/me/history', async (route) => {
+    await fulfillJSON(route, {
+      scenarios: [],
+      interviews: historySessions,
+      community_posts: [],
+    })
+  })
+
+  await page.route('**/api/v1/interviews/sessions/e2e-history-clear-*', async (route) => {
+    if (await fulfillPreflight(route)) return
+    if (route.request().method() === 'DELETE') {
+      const id = route.request().url().split('/').pop() ?? ''
+      deletedIds.push(id)
+      const index = historySessions.findIndex((session) => session.id === id)
+      if (index >= 0) historySessions.splice(index, 1)
+      await fulfillJSON(route, { deleted: true, id })
+      return
+    }
+    await route.fallback()
+  })
+
+  page.once('dialog', async (dialog) => {
+    expect(dialog.message()).toContain('7 场历史面试')
+    await dialog.accept()
+  })
+
+  await openInterviewsAsStudent(page)
+
+  const historyPanel = page.getByTestId('interview-history-panel')
+  await expect(historyPanel).toContainText('6 场')
+  await historyPanel.locator('summary').click()
+  await historyPanel.getByRole('button', { name: /清空全部/ }).click()
+  await expect.poll(() => deletedIds.length).toBe(7)
+  await expect(historyPanel).toContainText('0 场')
+  await expect(historyPanel).toContainText('完成一场面试后，记录会出现在这里。')
+})
+
+const CORS_HEADERS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-headers': '*',
+  'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+}
+
+async function fulfillPreflight(route: Route) {
+  if (route.request().method() !== 'OPTIONS') return false
+  await route.fulfill({
+    status: 204,
+    headers: CORS_HEADERS,
+  })
+  return true
+}
 
 async function fulfillJSON(route: Route, data: unknown) {
   await route.fulfill({
     contentType: 'application/json',
+    headers: CORS_HEADERS,
     body: JSON.stringify({ code: 200, message: 'success', data }),
   })
 }
@@ -375,8 +526,13 @@ async function openInterviewsAsStudent(page: Page) {
     await page.getByLabel('用户名或邮箱').fill('demo')
     await page.getByLabel('密码').fill('demo123')
     await page.getByRole('button', { name: '进入系统' }).click()
-    await page.waitForURL(/\/dashboard$/, { timeout: 10_000 })
-    await page.goto('/interviews')
+    await page.waitForFunction(() =>
+      window.location.pathname === '/dashboard'
+      || Boolean(document.querySelector('[data-testid="interview-track-grid"]')),
+    null, { timeout: 10_000 })
+    if (!page.url().endsWith('/interviews')) {
+      await page.goto('/interviews')
+    }
   }
   await expect(page.getByTestId('interview-track-grid')).toBeVisible()
 }
@@ -398,8 +554,29 @@ async function mockShellAPI(page: Page) {
       stats: { scenarios_solved: 0, interviews_taken: 0, average_score: 0, streak_days: 0 },
     })
   })
+  await page.route('**/api/v1/users/me/history', async (route) => {
+    await fulfillJSON(route, {
+      scenarios: [],
+      interviews: [],
+      community_posts: [],
+    })
+  })
   await page.route('**/api/v1/ai/status', async (route) => {
     await fulfillJSON(route, { mode: 'mock', provider: 'mock', model: 'mock' })
+  })
+  await page.route('**/api/v1/interviews/launchpad', async (route) => {
+    await fulfillJSON(route, {
+      open_tracks: [],
+      fallback_mode: true,
+      summary: {
+        open_track_count: 0,
+        published_atom_count: 0,
+        indexed_atom_count: 0,
+        fallback_mode: true,
+        state: 'compatibility_fallback',
+        message: '',
+      },
+    })
   })
 }
 
@@ -490,6 +667,29 @@ function interviewSession(sessionId: string, questionId = 'interview-network-tim
     max_rounds: 3,
     submissions: [],
     evaluations: [],
+  }
+}
+
+function interviewSubmission(round: number, content: string) {
+  return {
+    round,
+    content,
+    type: 'text',
+    submitted_at: new Date().toISOString(),
+  }
+}
+
+function interviewEvaluation(round: number, followUpQuestion: string) {
+  return {
+    round,
+    total_score: 78,
+    dimension_scores: {},
+    is_passed: false,
+    highlights: [],
+    deficiencies: [],
+    follow_up_triggered: true,
+    follow_up_question: followUpQuestion,
+    created_at: new Date().toISOString(),
   }
 }
 

@@ -102,16 +102,34 @@ func interviewLaunchpadDomainLabel(value string) string {
 	}
 }
 
+// openingStemForAtom 是知识原子题干的唯一口径：启动台卡片、按 ID 开场、
+// 按领域开场都必须经过它，否则同一道题在三处会显示三个不同的问法。
+// 人工精编的 OpeningQuestion 永远优先。
+func openingStemForAtom(atom domain.InterviewKnowledgeAtom) string {
+	subject := firstNonEmpty(atom.Subject, atom.Title, atom.Category, atom.Domain)
+	if opening := strings.TrimSpace(atom.OpeningQuestion); opening != "" {
+		return ensureSinglePointOpeningDescription(opening, subject)
+	}
+	source := firstNonEmpty(strings.TrimSpace(atom.Title), strings.Join(atom.Principles, "；"), subject)
+	return ensureSinglePointOpeningDescription(source, subject)
+}
+
 func (s *Server) selectInterviewOpeningQuestion(domainName, difficulty, questionType string) (*domain.InterviewQuestion, domain.InterviewQuestionSnapshot, bool) {
 	if atom, ok := s.selectInterviewOpeningAtom(domainName, difficulty); ok {
 		question := interviewQuestionFromAtom(*atom, questionType)
-		return question, interviewQuestionSnapshotFromAtom(*atom, question.QuestionType), true
+		question.Description = s.resolveOpeningDescription(atom.ID, openingStemForAtom(*atom), firstNonEmpty(atom.Subject, atom.Title, atom.Category), domainName)
+		snapshot := interviewQuestionSnapshotFromAtom(*atom, question.QuestionType)
+		snapshot.Description = question.Description
+		return question, snapshot, true
 	}
 	question, ok := s.store.FindInterviewQuestion(domainName, difficulty, questionType)
 	if !ok {
 		return nil, domain.InterviewQuestionSnapshot{}, false
 	}
-	return question, interviewQuestionSnapshotFromQuestion(question), true
+	normalized := *question
+	subject := firstNonEmpty(question.Title, question.Domain)
+	normalized.Description = s.resolveOpeningDescription(question.ID, question.Description, subject, domainName)
+	return &normalized, interviewQuestionSnapshotFromQuestion(&normalized), true
 }
 
 func (s *Server) selectInterviewOpeningQuestionByID(questionID string) (*domain.InterviewQuestion, domain.InterviewQuestionSnapshot, bool) {
@@ -121,7 +139,7 @@ func (s *Server) selectInterviewOpeningQuestionByID(questionID string) (*domain.
 	}
 	if atom, ok := s.store.GetInterviewKnowledgeAtom(questionID); ok && atom.Status == "published" && (atom.QuestionRole == "opening" || atom.QuestionRole == "mixed") {
 		question := interviewQuestionFromAtom(*atom, normalizeLaunchpadQuestionType(atom.QuestionType))
-		question.Description = firstNonEmpty(strings.TrimSpace(atom.OpeningQuestion), strings.TrimSpace(atom.Title), strings.TrimSpace(atom.Subject))
+		question.Description = s.resolveOpeningDescription(atom.ID, openingStemForAtom(*atom), firstNonEmpty(atom.Subject, atom.Title), firstNonEmpty(atom.Category, atom.Domain))
 		snapshot := interviewQuestionSnapshotFromAtom(*atom, question.QuestionType)
 		snapshot.Description = question.Description
 		return question, snapshot, true
@@ -131,8 +149,174 @@ func (s *Server) selectInterviewOpeningQuestionByID(questionID string) (*domain.
 		return nil, domain.InterviewQuestionSnapshot{}, false
 	}
 	normalized := *question
-	normalized.Description = firstNonEmpty(strings.TrimSpace(normalized.Description), strings.TrimSpace(normalized.Title))
+	normalized.Description = s.resolveOpeningDescription(question.ID, normalized.Description, firstNonEmpty(normalized.Title, normalized.Domain), normalized.Domain)
 	return &normalized, interviewQuestionSnapshotFromQuestion(&normalized), true
+}
+
+// openingRewriteTimeout 卡在「开始面试」这个同步动作上，宁可退回规则改写也不让用户干等。
+const openingRewriteTimeout = 4 * time.Second
+
+// resolveOpeningDescription:
+//  1. 合格单点题干原样（或轻量补问号），不触碰模型
+//  2. 空/复合题干才走 LLM 重写，并按题目 ID 缓存
+//  3. LLM 失败或仍复合 → 规则单点规范化
+//
+// 缓存同时保证同一道题每次进来的题干稳定：开场题会写进会话快照，
+// 每次都换一个问法会让历史记录和报告对不上。
+func (s *Server) resolveOpeningDescription(cacheKey, sourceText, subject, domainName string) string {
+	sourceText = strings.TrimSpace(sourceText)
+	subject = strings.TrimSpace(subject)
+	ruleBased := ensureSinglePointOpeningDescription(sourceText, subject)
+	if sourceText != "" && !looksLikeMultiPointOpening(sourceText) {
+		return ruleBased
+	}
+	if s == nil || s.llmRouter() == nil {
+		return ruleBased
+	}
+	cacheKey = strings.TrimSpace(cacheKey)
+	if cached, ok := s.cachedOpeningDescription(cacheKey); ok {
+		return cached
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), openingRewriteTimeout)
+	defer cancel()
+	out, _, err := s.llmRouter().RewriteInterviewOpening(ctx, ai.InterviewOpeningRequest{
+		Subject:    firstNonEmpty(subject, domainName, "当前问题"),
+		Domain:     strings.TrimSpace(domainName),
+		SourceText: firstNonEmpty(sourceText, subject),
+	})
+	if err != nil {
+		return ruleBased
+	}
+	opening := strings.TrimSpace(out.Opening)
+	if opening == "" || looksLikeMultiPointOpening(opening) {
+		return ruleBased
+	}
+	// 仍要求像问句，否则回退
+	if !strings.Contains(opening, "？") && !strings.Contains(opening, "?") && !strings.Contains(opening, "请") {
+		return ruleBased
+	}
+	s.storeOpeningDescription(cacheKey, opening)
+	return opening
+}
+
+func (s *Server) cachedOpeningDescription(key string) (string, bool) {
+	if s == nil || key == "" {
+		return "", false
+	}
+	s.openingStemMu.RLock()
+	defer s.openingStemMu.RUnlock()
+	value, ok := s.openingStemCache[key]
+	return value, ok
+}
+
+func (s *Server) storeOpeningDescription(key, value string) {
+	if s == nil || key == "" || value == "" {
+		return
+	}
+	s.openingStemMu.Lock()
+	defer s.openingStemMu.Unlock()
+	if s.openingStemCache == nil {
+		s.openingStemCache = map[string]string{}
+	}
+	s.openingStemCache[key] = value
+}
+
+// ensureSinglePointOpeningDescription 保证开场对候选人只暴露一个主问。
+// 合格题干原样返回；空/复合题干用规则改写，不调用 LLM。
+func ensureSinglePointOpeningDescription(description, subject string) string {
+	description = strings.TrimSpace(description)
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		subject = "当前问题"
+	}
+	if description == "" {
+		return defaultSinglePointOpening(subject)
+	}
+	if !looksLikeMultiPointOpening(description) {
+		if !strings.Contains(description, "？") && !strings.Contains(description, "?") && !strings.Contains(description, "请") {
+			return fmt.Sprintf("%s。你第一步会怎么做？", strings.TrimRight(description, "。.!！"))
+		}
+		return description
+	}
+	scenario := extractOpeningScenario(description)
+	if scenario == "" {
+		scenario = fmt.Sprintf("先看一个场景：与「%s」相关", subject)
+	}
+	return fmt.Sprintf("%s。你第一步会先看什么？", strings.TrimRight(scenario, "。.!！？?"))
+}
+
+func defaultSinglePointOpening(subject string) string {
+	return fmt.Sprintf("先看一个场景：你需要处理与「%s」相关的线上问题。你第一步会先确认什么？", subject)
+}
+
+// 面试官一次只问一个点。以下三类词用于判断题干是否在一句里索要多个交付物：
+// 索取动词（请说明/请给出…）、交付名词（排查顺序/回滚策略/修复方案…）、并列连接（、和以及）。
+var (
+	openingRequestVerbs = []string{"请说明", "请给出", "请描述", "请分析", "请阐述", "请回答", "请列出", "谈谈你的"}
+	openingDeliverables = []string{
+		"排查顺序", "定位路径", "排查路径", "分析路径", "处理路径", "恢复路径",
+		"回滚策略", "回滚方案", "回滚考虑", "修复方案", "改进方案", "处理策略", "补偿策略",
+		"关键命令", "验证命令", "验证路径", "验证指标", "风险控制", "风险点", "适用边界",
+		"可能原因", "判断依据", "监控方案", "演进路径",
+	}
+)
+
+// looksLikeMultiPointOpening 判断题干是否把多个交付物压在一问里。
+// 用结构化启发式而不是固定文案清单：题库来自外部导入，写死的句子撑不住真实数据。
+func looksLikeMultiPointOpening(text string) bool {
+	normalized := strings.TrimSpace(text)
+	if normalized == "" {
+		return false
+	}
+	deliverables := 0
+	for _, item := range openingDeliverables {
+		if strings.Contains(normalized, item) {
+			deliverables++
+		}
+	}
+	// 两个以上交付名词同时出现，本身就是三件套题干。
+	if deliverables >= 2 {
+		return true
+	}
+	hasVerb := false
+	for _, verb := range openingRequestVerbs {
+		if strings.Contains(normalized, verb) {
+			hasVerb = true
+			break
+		}
+	}
+	enumerations := strings.Count(normalized, "、")
+	// 「请说明 A、B、C」：索取动词 + 至少两个顿号并列。
+	if hasVerb && enumerations >= 2 {
+		return true
+	}
+	// 「请说明 A 和 B」：索取动词 + 一个交付名词 + 并列连接。
+	if hasVerb && deliverables >= 1 && (strings.Contains(normalized, "和") || strings.Contains(normalized, "以及") || strings.Contains(normalized, "并")) {
+		return true
+	}
+	if enumerations >= 3 && (strings.Contains(normalized, "和") || strings.Contains(normalized, "以及")) {
+		return true
+	}
+	return false
+}
+
+func extractOpeningScenario(text string) string {
+	text = strings.TrimSpace(text)
+	cutMarkers := []string{
+		"请说明", "请给出", "请回答", "你会如何", "你会怎样", "请先",
+	}
+	for _, marker := range cutMarkers {
+		if idx := strings.Index(text, marker); idx > 0 {
+			return strings.TrimSpace(text[:idx])
+		}
+	}
+	// 取第一句作为情景
+	for _, sep := range []string{"。", "！", "？", "\n"} {
+		if idx := strings.Index(text, sep); idx > 0 {
+			return strings.TrimSpace(text[:idx])
+		}
+	}
+	return ""
 }
 
 func (s *Server) selectInterviewOpeningAtom(domainName, difficulty string) (*domain.InterviewKnowledgeAtom, bool) {
@@ -197,7 +381,8 @@ func interviewQuestionFromAtom(atom domain.InterviewKnowledgeAtom, questionType 
 	}
 	domainName := firstNonEmpty(atom.Category, atom.Domain)
 	subject := firstNonEmpty(atom.Subject, atom.Title, domainName)
-	description := firstNonEmpty(strings.TrimSpace(atom.OpeningQuestion), strings.TrimSpace(atom.Title), subject)
+	// 描述由 selectInterviewOpeningQuestion 经 resolveOpeningDescription 最终定稿；此处先给规则底稿。
+	description := ensureSinglePointOpeningDescription(strings.TrimSpace(atom.Title), subject)
 	createdAt := atom.CreatedAt
 	if createdAt.IsZero() {
 		createdAt = time.Now()
@@ -308,7 +493,7 @@ func followUpStrategiesFromAtom(atom domain.InterviewKnowledgeAtom) []domain.Fol
 	if len(strategies) == 0 {
 		strategies = append(strategies, domain.FollowUpStrategy{
 			TriggerCondition: "logical_completeness < 60",
-			QuestionTemplate: "请补充说明你的关键判断依据、验证路径和风险控制。",
+			QuestionTemplate: "你刚才最关键的那个判断，依据是什么？",
 			Type:             "supplement",
 		})
 	}

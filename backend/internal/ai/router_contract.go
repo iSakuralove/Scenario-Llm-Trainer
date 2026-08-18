@@ -10,6 +10,7 @@ const (
 	RouterTaskCommunityStructure   = "community_structure"
 	RouterTaskScenarioReply        = "scenario_reply"
 	RouterTaskInterviewFeedback    = "interview_feedback"
+	RouterTaskInterviewOpening     = "interview_opening"
 	RouterTaskSensitiveCheck       = "sensitive_check"
 	RouterTaskStatusCheck          = "router_status"
 	OutputModeJSON                 = "json"

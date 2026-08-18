@@ -135,6 +135,7 @@ type InterviewSubmitResponse = {
   evaluation: InterviewSession['evaluations'][number]
   session_status: string
   session: InterviewSession
+  end_notice?: { reason: string; message: string }
 }
 
 type InterviewRetrievalLogFilters = {

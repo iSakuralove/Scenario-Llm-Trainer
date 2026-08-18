@@ -134,6 +134,17 @@ func ValidateInterviewFeedback(feedback InterviewFeedback, needFollowUp, needRep
 	return nil
 }
 
+func ValidateInterviewOpening(out InterviewOpeningRewrite) error {
+	opening := strings.TrimSpace(out.Opening)
+	if opening == "" {
+		return fmt.Errorf("interview opening is required")
+	}
+	if len([]rune(opening)) < 8 {
+		return fmt.Errorf("interview opening is too short")
+	}
+	return nil
+}
+
 func ValidateScenarioReply(reply string) error {
 	if strings.TrimSpace(reply) == "" {
 		return fmt.Errorf("scenario reply is required")

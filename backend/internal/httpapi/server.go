@@ -39,6 +39,10 @@ type Server struct {
 	assets                 AssetStorage
 	jobMu                  sync.Mutex
 	jobStop                map[string]context.CancelFunc
+	// openingStemCache 缓存被 LLM 改写过的开场题干，按题目 ID 索引。
+	// 既避免每次「开始面试」都同步等一次模型，也保证同一道题的题干稳定不变。
+	openingStemMu    sync.RWMutex
+	openingStemCache map[string]string
 }
 
 func envOrDefault(key, fallback string) string {

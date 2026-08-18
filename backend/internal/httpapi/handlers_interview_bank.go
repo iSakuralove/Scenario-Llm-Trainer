@@ -281,6 +281,7 @@ func (s *Server) handleAdminInterviewBank(w http.ResponseWriter, r *http.Request
 			Category:     r.URL.Query().Get("category"),
 			QuestionRole: r.URL.Query().Get("question_role"),
 			VectorStatus: r.URL.Query().Get("vector_status"),
+			Query:        firstNonEmpty(r.URL.Query().Get("q"), r.URL.Query().Get("query"), r.URL.Query().Get("keyword")),
 		}
 		items := s.store.ListInterviewKnowledgeAtoms(filter)
 		writeOK(w, map[string]interface{}{

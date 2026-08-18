@@ -71,6 +71,8 @@ const emptyFilters: InterviewKnowledgeAtomFilters = {
   category: '',
   question_role: '',
   vector_status: '',
+  q: '',
+  page: 1,
   page_size: 20,
 }
 
@@ -316,9 +318,21 @@ export function InterviewBankAdminPage() {
     [health],
   )
 
-  function updateFilter(key: keyof InterviewKnowledgeAtomFilters, value: string) {
-    setFilters((current) => ({ ...current, [key]: value }))
+  function updateFilter(key: keyof InterviewKnowledgeAtomFilters, value: string | number) {
+    setFilters((current) => {
+      if (key === 'page') {
+        return { ...current, page: Number(value) || 1 }
+      }
+      if (key === 'page_size') {
+        return { ...current, page_size: Number(value) || 20, page: 1 }
+      }
+      return { ...current, [key]: value, page: 1 }
+    })
   }
+
+  const atomPage = Math.max(1, Number(filters.page) || 1)
+  const atomPageSize = Math.max(1, Number(filters.page_size) || 20)
+  const atomTotalPages = Math.max(1, Math.ceil(totalAtoms / atomPageSize))
 
   function applyHealthCombination(combo: InterviewKnowledgeHealthCombination) {
     setFilters({
@@ -328,6 +342,8 @@ export function InterviewBankAdminPage() {
       difficulty: combo.difficulty,
       question_role: '',
       vector_status: '',
+      q: '',
+      page: 1,
       page_size: 20,
     })
     setRetrievalPreviewForm((current) => ({
@@ -348,6 +364,8 @@ export function InterviewBankAdminPage() {
       difficulty: combo.difficulty,
       question_role: '',
       vector_status: '',
+      q: '',
+      page: 1,
       page_size: 20,
     })
     setRetrievalPreviewForm((current) => ({
@@ -377,6 +395,8 @@ export function InterviewBankAdminPage() {
         difficulty: action.difficulty ?? '',
         question_role: '',
         vector_status: '',
+        q: '',
+        page: 1,
         page_size: 20,
       })
       setRetrievalPreviewForm((current) => ({
@@ -903,6 +923,15 @@ export function InterviewBankAdminPage() {
       <section className="panel interview-bank-toolbar">
         <div className="panel-title"><ListFilter size={18} /> 筛选</div>
         <div className="interview-bank-filter-grid">
+          <label className="interview-bank-search-field">
+            搜索
+            <input
+              value={filters.q ?? ''}
+              onChange={(event) => updateFilter('q', event.target.value)}
+              placeholder="题目 / 考点 / ID / 标签"
+              aria-label="搜索题库资源"
+            />
+          </label>
           <label>
             状态
             <select value={filters.status ?? ''} onChange={(event) => updateFilter('status', event.target.value)}>
@@ -1090,43 +1119,66 @@ export function InterviewBankAdminPage() {
           </div>
         </div>
         {atoms.length > 0 ? (
-          <div className="interview-bank-table-wrap">
-            <table className="interview-bank-table">
-              <thead>
-                <tr>
-                  <th className="interview-bank-select-cell">
-                    <input
-                      type="checkbox"
-                      aria-label="选择当前页可重建资源"
-                      checked={allVisibleSelected}
-                      disabled={selectableAtoms.length === 0}
-                      onChange={(event) => toggleAllVisibleSelections(event.target.checked)}
+          <>
+            <div className="interview-bank-table-wrap">
+              <table className="interview-bank-table">
+                <thead>
+                  <tr>
+                    <th className="interview-bank-select-cell">
+                      <input
+                        type="checkbox"
+                        aria-label="选择当前页可重建资源"
+                        checked={allVisibleSelected}
+                        disabled={selectableAtoms.length === 0}
+                        onChange={(event) => toggleAllVisibleSelections(event.target.checked)}
+                      />
+                    </th>
+                    <th>题目</th>
+                    <th>分类</th>
+                    <th>难度</th>
+                    <th>角色</th>
+                    <th>状态</th>
+                    <th>索引</th>
+                    <th>版本</th>
+                    <th>更新时间</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {atoms.map((atom) => (
+                    <AtomRow
+                      atom={atom}
+                      checked={selectedAtomIds.has(atom.id)}
+                      onCheckedChange={(checked) => toggleAtomSelection(atom, checked)}
+                      onOpen={() => void handleOpenAtom(atom.id)}
+                      key={atom.id}
                     />
-                  </th>
-                  <th>题目</th>
-                  <th>分类</th>
-                  <th>难度</th>
-                  <th>角色</th>
-                  <th>状态</th>
-                  <th>索引</th>
-                  <th>版本</th>
-                  <th>更新时间</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {atoms.map((atom) => (
-                  <AtomRow
-                    atom={atom}
-                    checked={selectedAtomIds.has(atom.id)}
-                    onCheckedChange={(checked) => toggleAtomSelection(atom, checked)}
-                    onOpen={() => void handleOpenAtom(atom.id)}
-                    key={atom.id}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="interview-bank-pagination" data-testid="interview-bank-pagination">
+              <span>共 {totalAtoms} 条 · 第 {atomPage}/{atomTotalPages} 页</span>
+              <div className="interview-bank-pagination-actions">
+                <button
+                  type="button"
+                  className="ghost-button compact"
+                  disabled={atomPage <= 1 || isLoading}
+                  onClick={() => updateFilter('page', Math.max(1, atomPage - 1))}
+                >
+                  上一页
+                </button>
+                <button
+                  type="button"
+                  className="ghost-button compact"
+                  disabled={atomPage >= atomTotalPages || isLoading}
+                  onClick={() => updateFilter('page', Math.min(atomTotalPages, atomPage + 1))}
+                >
+                  下一页
+                </button>
+              </div>
+            </div>
+          </>
         ) : (
           <div className="interview-bank-empty-row">
             <strong>暂无匹配题库资源</strong>

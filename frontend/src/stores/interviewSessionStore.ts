@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { api } from '../api/client'
-import type { AgentTrace, Asset, InterviewEvaluation, InterviewQuestion, InterviewSession, VoiceQualityResult } from '../types'
+import type { AgentTrace, Asset, InterviewEndNotice, InterviewEvaluation, InterviewQuestion, InterviewSession, VoiceQualityResult } from '../types'
 
 const STREAM_PREVIEW_MAX = 280
 
@@ -27,6 +27,7 @@ interface InterviewSessionState {
   submitType: 'text' | 'voice'
   voiceSessionExpired: boolean
   hydrate: (token: string, sessionId: string, optimistic?: { question?: InterviewQuestion | null; session?: InterviewSession | null }) => Promise<void>
+  endNotice: InterviewEndNotice | null
   submitAnswer: (
     token: string,
     sessionId: string,
@@ -37,7 +38,7 @@ interface InterviewSessionState {
       voiceTranscript: string
       voiceDuration?: number
     },
-  ) => Promise<{ session_status: string }>
+  ) => Promise<{ session_status: string; end_notice?: InterviewEndNotice | null }>
   uploadVoiceFile: (token: string, sessionId: string, file: File) => Promise<string>
   confirmVoiceTranscript: () => void
   updateVoiceEditedState: (statusMessage?: string) => void
@@ -74,6 +75,7 @@ function emptyState() {
     isVoiceBusy: false,
     submitType: 'text' as const,
     voiceSessionExpired: false,
+    endNotice: null as InterviewEndNotice | null,
   }
 }
 
@@ -169,9 +171,10 @@ export const useInterviewSessionStore = create<InterviewSessionState>((set, get)
         session: response.session,
         lastEvaluation: response.evaluation,
         agentTrace: response.evaluation.agent_trace ?? null,
-        submitStatus: '本轮评分已生成',
+        submitStatus: response.end_notice?.message || '本轮评分已生成',
         streamPreview: buildSafeEvaluationPreview(response.evaluation),
         isSubmitting: false,
+        endNotice: response.end_notice ?? null,
         voiceAsset: null,
         voiceStatus: '',
         voiceQuality: null,
@@ -182,7 +185,7 @@ export const useInterviewSessionStore = create<InterviewSessionState>((set, get)
         submitType: 'text',
       }))
 
-      return { session_status: response.session_status }
+      return { session_status: response.session_status, end_notice: response.end_notice ?? null }
     } catch (err) {
       set((state) => ({
         ...state,

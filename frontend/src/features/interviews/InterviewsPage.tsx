@@ -98,6 +98,7 @@ export function InterviewsPage() {
   const [historyQuestionDetails, setHistoryQuestionDetails] = useState<Record<string, InterviewQuestion>>({})
   const [loadingHistoryQuestionId, setLoadingHistoryQuestionId] = useState('')
   const [deletingHistoryId, setDeletingHistoryId] = useState('')
+  const [isClearingHistory, setClearingHistory] = useState(false)
   const resumeReaderRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -153,22 +154,16 @@ export function InterviewsPage() {
   useEffect(() => {
     let ignore = false
     void api.history(token)
-      .then((res) => {
-        if (ignore) return
-        setHistorySessions((res.interviews ?? []).slice(0, 6))
-        setHistoryError('')
-        setHistoryLoading(false)
+      .then((response) => {
+        if (!ignore) setHistorySessions((response.interviews ?? []).slice(0, 6))
       })
-      .catch((err) => {
-        if (ignore) return
-        const message = err instanceof Error ? err.message : '历史接口异常'
-        setHistoryError(`读取历史面试失败：${message}`)
-        setHistoryLoading(false)
+      .catch((error) => {
+        if (!ignore) setHistoryError(error instanceof Error ? error.message : '历史面试读取失败')
       })
-
-    return () => {
-      ignore = true
-    }
+      .finally(() => {
+        if (!ignore) setHistoryLoading(false)
+      })
+    return () => { ignore = true }
   }, [token])
 
   const previewResume = useMemo(
@@ -378,120 +373,58 @@ export function InterviewsPage() {
     setExpandedHistoryId(sessionId)
     if (historyQuestionDetails[sessionId]) return
     setLoadingHistoryQuestionId(sessionId)
-    setHistoryError('')
     try {
       const detail = await api.interviewSessionDetail(token, sessionId)
       setHistoryQuestionDetails((current) => ({ ...current, [sessionId]: detail.question }))
-    } catch (err) {
-      setHistoryError(err instanceof Error ? err.message : '读取历史面试题目失败')
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : '题目读取失败')
     } finally {
       setLoadingHistoryQuestionId('')
     }
   }
 
   async function deleteHistorySession(sessionId: string) {
-    if (deletingHistoryId) return
+    if (deletingHistoryId || isClearingHistory) return
     setDeletingHistoryId(sessionId)
     setHistoryError('')
     try {
       await api.deleteInterviewSession(token, sessionId)
-      setHistorySessions((current) => current.filter((item) => item.id !== sessionId))
+      setHistorySessions((current) => current.filter((session) => session.id !== sessionId))
+      // 记录没了，缓存的题目详情和展开态也要一起清，否则下次同 ID 会命中旧数据。
       setHistoryQuestionDetails((current) => {
         const next = { ...current }
         delete next[sessionId]
         return next
       })
-      if (expandedHistoryId === sessionId) {
-        setExpandedHistoryId('')
-      }
-    } catch (err) {
-      setHistoryError(err instanceof Error ? err.message : '删除历史面试失败')
+      if (expandedHistoryId === sessionId) setExpandedHistoryId('')
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : '删除失败')
     } finally {
       setDeletingHistoryId('')
     }
   }
 
-  const historyPanel = (
-    <details className="interview-history-disclosure" data-testid="interview-history-panel">
-      <summary className="interview-history-disclosure-summary">
-        <span className="interview-history-disclosure-title"><History size={18} />历史面试</span>
-        <span className="interview-history-disclosure-count">
-          {isHistoryLoading ? '正在读取' : `${historySessions.length} 场`}
-          <ChevronDown size={16} aria-hidden="true" />
-        </span>
-      </summary>
-      <section className="interview-history-panel">
-        {historyError && <div className="launch-error" role="alert"><ShieldAlert size={16} />{historyError}</div>}
-        {isHistoryLoading ? (
-          <div className="interview-panel-skeleton-list" data-testid="history-loading-skeleton">
-            <div className="interview-panel-skeleton-wide" />
-            <div className="interview-panel-skeleton-wide" />
-          </div>
-        ) : historySessions.length > 0 ? (
-          <div className="interview-history-list">
-            {historySessions.map((session) => {
-              const question = historyQuestionDetails[session.id]
-              const isExpanded = expandedHistoryId === session.id
-              const isFinal = session.status === 'final_evaluated'
-              return (
-                <article className="interview-history-item" key={session.id}>
-                  <div className="interview-history-summary">
-                    <div className="interview-history-ident">
-                      <span>{interviewStatusLabel(session.status)}</span>
-                      <strong>面试 #{session.id.slice(0, 8)}</strong>
-                      <small>{formatDateTime(session.ended_at || session.started_at || '')}</small>
-                    </div>
-                    <div className="interview-history-metrics">
-                      <span>{session.current_round}/{session.max_rounds} 轮</span>
-                      <span>{typeof session.final_score === 'number' ? `${session.final_score} 分` : '未出分'}</span>
-                    </div>
-                    <div className="interview-history-actions">
-                      {isFinal ? (
-                        <a className="primary-button compact" href={`/interviews/session/${session.id}/report`}>查看报告</a>
-                      ) : (
-                        <a className="primary-button compact" href={`/interviews/session/${session.id}`}>继续面试</a>
-                      )}
-                      <button className="ghost-button compact" type="button" onClick={() => void toggleHistoryQuestion(session.id)}>
-                        {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                        {isExpanded ? '收起题目' : '查看题目'}
-                      </button>
-                      <button
-                        className="ghost-button compact interview-history-delete"
-                        type="button"
-                        onClick={() => void deleteHistorySession(session.id)}
-                        disabled={deletingHistoryId === session.id}
-                        aria-label="删除记录"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </div>
-                  {isExpanded && (
-                    <div className="interview-history-question">
-                      {loadingHistoryQuestionId === session.id && <span>正在加载题目...</span>}
-                      {question && (
-                        <>
-                          <div className="scenario-meta">
-                            <span>{domainLabel(question.domain)}</span>
-                            <span>{question.difficulty}</span>
-                            <span>{interviewQuestionTypeLabel(question.question_type)}</span>
-                          </div>
-                          <strong>{question.title}</strong>
-                          <p>{question.description}</p>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </article>
-              )
-            })}
-          </div>
-        ) : (
-          <div className="empty-inline">完成一场面试后，记录会出现在这里。</div>
-        )}
-      </section>
-    </details>
-  )
+  async function clearAllHistorySessions() {
+    if (isClearingHistory || deletingHistoryId || historySessions.length === 0) return
+    const confirmed = window.confirm('确认清空全部历史面试？此操作不可恢复。')
+    if (!confirmed) return
+    setClearingHistory(true)
+    setHistoryError('')
+    try {
+      const response = await api.history(token)
+      const sessions = response.interviews ?? []
+      const results = await Promise.allSettled(sessions.map((session) => api.deleteInterviewSession(token, session.id)))
+      const failed = sessions.filter((_, index) => results[index].status === 'rejected')
+      setHistorySessions(failed.slice(0, 6))
+      setHistoryQuestionDetails({})
+      setExpandedHistoryId('')
+      if (failed.length > 0) setHistoryError(`仍有 ${failed.length} 场未能删除`)
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : '清空历史面试失败')
+    } finally {
+      setClearingHistory(false)
+    }
+  }
 
   const hasActiveFilters = Boolean(trackFilters.category || trackFilters.difficulty || trackFilters.questionType || trackFilters.query.trim())
 
@@ -547,7 +480,7 @@ export function InterviewsPage() {
       {startError && <div className="launch-error" role="alert"><ShieldAlert size={16} />{startError}</div>}
 
       {mode === 'free' && (
-        <section className="interview-question-stage" aria-label="面试题目">
+        <section className="interview-question-stage" aria-label="面试题目" data-testid="interview-track-section">
           <div className="interview-question-tabs" role="tablist" aria-label="题目排序">
             {([
               ['recommended', '推荐'],
@@ -644,7 +577,98 @@ export function InterviewsPage() {
         </section>
       )}
 
-      {historyPanel}
+      <details className="interview-history-disclosure" data-testid="interview-history-panel">
+        <summary className="interview-history-disclosure-summary">
+          <span className="interview-history-disclosure-title"><History size={18} />历史面试</span>
+          <span className="interview-history-disclosure-count">
+            {isHistoryLoading ? '正在读取' : `${historySessions.length} 场`}
+            <ChevronDown size={16} aria-hidden="true" />
+          </span>
+        </summary>
+        <section className="interview-history-panel">
+          {!isHistoryLoading && historySessions.length > 0 && (
+            <div className="interview-history-toolbar">
+              <button
+                className="ghost-button compact interview-history-clear"
+                type="button"
+                disabled={isClearingHistory}
+                onClick={() => void clearAllHistorySessions()}
+              >
+                <Trash2 size={15} />{isClearingHistory ? '清空中…' : '清空全部'}
+              </button>
+            </div>
+          )}
+          {historyError && <div className="launch-error" role="alert"><ShieldAlert size={16} />{historyError}</div>}
+          {isHistoryLoading ? (
+            <div className="interview-panel-skeleton-list" data-testid="history-loading-skeleton">
+              <div className="interview-panel-skeleton-wide" />
+              <div className="interview-panel-skeleton-wide" />
+            </div>
+          ) : historySessions.length > 0 ? (
+            <div className="interview-history-list">
+              {historySessions.map((session) => {
+                const question = historyQuestionDetails[session.id]
+                const expanded = expandedHistoryId === session.id
+                const isFinal = session.status === 'final_evaluated'
+                return (
+                  <article className="interview-history-item" key={session.id}>
+                    <div className="interview-history-summary">
+                      <div className="interview-history-ident">
+                        <span>{interviewStatusLabel(session.status)}</span>
+                        <strong>面试 #{session.id.slice(0, 8)}</strong>
+                        <small>{formatDateTime(session.ended_at || session.started_at || '')}</small>
+                      </div>
+                      <div className="interview-history-metrics">
+                        <span>{session.current_round}/{session.max_rounds} 轮</span>
+                        <span>{typeof session.final_score === 'number' ? `${session.final_score} 分` : '未出分'}</span>
+                      </div>
+                      <div className="interview-history-actions">
+                        <a
+                          className="primary-button compact"
+                          href={isFinal ? `/interviews/session/${session.id}/report` : `/interviews/session/${session.id}`}
+                        >
+                          {isFinal ? '查看报告' : '继续面试'}
+                        </a>
+                        <button className="ghost-button compact" type="button" onClick={() => void toggleHistoryQuestion(session.id)}>
+                          {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                          {expanded ? '收起题目' : '查看题目'}
+                        </button>
+                        <button
+                          className="ghost-button compact interview-history-delete"
+                          type="button"
+                          disabled={deletingHistoryId === session.id || isClearingHistory}
+                          onClick={() => void deleteHistorySession(session.id)}
+                          aria-label="删除记录"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                    {expanded && (
+                      <div className="interview-history-question">
+                        {loadingHistoryQuestionId === session.id && <span>正在加载题目…</span>}
+                        {question && (
+                          <>
+                            <div className="scenario-meta">
+                              <span>{domainLabel(question.domain)}</span>
+                              <span>{question.difficulty}</span>
+                              <span>{interviewQuestionTypeLabel(question.question_type)}</span>
+                            </div>
+                            <strong>{question.title}</strong>
+                            <p>{question.description}</p>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </article>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="empty-inline">完成一场面试后，记录会出现在这里。</div>
+          )}
+        </section>
+      </details>
 
       {settingsOpen && <dialog className="interview-settings-dialog" open onCancel={() => setSettingsOpen(false)}><div className="interview-dialog-heading"><strong>更多设置</strong><button type="button" aria-label="关闭" onClick={() => setSettingsOpen(false)} autoFocus><X size={18} /></button></div><div className="interview-dialog-body">
         <div className="interview-mobile-basic-settings">

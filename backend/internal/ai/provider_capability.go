@@ -115,6 +115,7 @@ func capabilityForProvider(info ProviderInfo, _ bool) ProviderCapability {
 			RouterTaskCommunityStructure,
 			RouterTaskScenarioReply,
 			RouterTaskInterviewFeedback,
+			RouterTaskInterviewOpening,
 			RouterTaskSensitiveCheck,
 			RouterTaskStatusCheck,
 		},

@@ -135,7 +135,7 @@ func TestInterviewSubmitSSEShortCircuitsIrrelevantAnswer(t *testing.T) {
 		t.Fatalf("sse status=%d body=%s", rr.Code, rr.Body.String())
 	}
 	raw := rr.Body.String()
-	if !strings.Contains(raw, "请认真回答面试问题") {
+	if !strings.Contains(raw, "请认真回答本轮问题") {
 		t.Fatalf("expected friendly guidance, got %s", raw)
 	}
 	for _, unexpected := range []string{"正在准备评分", "正在执行评分维度检查", "正在判断是否需要追问", "正在生成面试反馈", "总分"} {
@@ -169,7 +169,7 @@ func TestInterviewSubmitEndsAfterRepeatedIrrelevantAnswers(t *testing.T) {
 		if payload.SessionStatus == "final_evaluated" {
 			t.Fatalf("attempt %d should not finish interview: %+v", i, payload)
 		}
-		if !payload.Evaluation.FollowUpTriggered || !strings.Contains(payload.Evaluation.FollowUpQuestion, "请认真回答面试问题") {
+		if !payload.Evaluation.FollowUpTriggered || !strings.Contains(payload.Evaluation.FollowUpQuestion, "请认真回答本轮问题") {
 			t.Fatalf("attempt %d should return friendly guidance: %+v", i, payload.Evaluation)
 		}
 	}
@@ -215,7 +215,7 @@ func TestInterviewSubmitEndsAfterRepeatedIrrelevantAnswers(t *testing.T) {
 func TestEvaluateIrrelevantInterviewAnswerAcceptsTechnicalChineseAnswer(t *testing.T) {
 	question := &domain.InterviewQuestion{
 		Title:             "load average 高但 CPU 不高怎么排查",
-		Description:       "Linux 主机 load average 很高，但 CPU 使用率并不高。请说明可能原因、验证命令和处理策略。",
+		Description:       "Linux 主机 load average 很高，但 CPU 使用率并不高。你认为最可能是哪一类原因？",
 		ReferenceAnswer:   "应解释 load 与可运行/不可中断进程关系，使用 vmstat、iostat、ps 定位 IO wait 与 D 状态进程。",
 		ReferenceKeywords: []string{"load", "D 状态", "IO wait", "vmstat", "iostat", "ps"},
 	}
@@ -230,7 +230,7 @@ func TestEvaluateIrrelevantInterviewAnswerAcceptsTechnicalChineseAnswer(t *testi
 func TestEvaluateIrrelevantInterviewAnswerStillRejectsChitchat(t *testing.T) {
 	question := &domain.InterviewQuestion{
 		Title:             "如何定位 MySQL 慢查询",
-		Description:       "线上接口突然变慢，你怀疑是 MySQL 查询问题。请说明你的定位路径、关键命令、可能修复方案和回滚考虑。",
+		Description:       "线上接口突然变慢，你怀疑是 MySQL 查询问题。你第一步会先看什么？",
 		ReferenceAnswer:   "应从链路耗时、慢查询日志、EXPLAIN、索引覆盖、执行计划变化、灰度建索引与回滚方案等方面回答。",
 		ReferenceKeywords: []string{"慢查询", "EXPLAIN", "索引", "执行计划", "回滚", "灰度"},
 	}

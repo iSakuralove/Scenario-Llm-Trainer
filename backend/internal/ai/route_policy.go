@@ -64,6 +64,18 @@ var taskPolicies = map[string]TaskPolicy{
 		FallbackChain:   []string{ProviderDeepSeek, ProviderOpenAICompatible, ProviderMock},
 		StrictFailure:   false,
 	},
+	RouterTaskInterviewOpening: {
+		Task:            RouterTaskInterviewOpening,
+		PromptName:      "interview_opening",
+		PromptVersion:   promptVersionV1,
+		SchemaName:      SchemaInterviewOpening,
+		OutputMode:      OutputModeJSON,
+		StreamAllowed:   false,
+		SafetyPolicy:    SafetyPolicyDefault,
+		ContextStrategy: ContextStrategyDirect,
+		FallbackChain:   []string{ProviderDeepSeek, ProviderOpenAICompatible, ProviderMock},
+		StrictFailure:   false,
+	},
 	RouterTaskSensitiveCheck: {
 		Task:            RouterTaskSensitiveCheck,
 		PromptName:      "sensitive_check",
