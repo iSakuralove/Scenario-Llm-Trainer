@@ -1,0 +1,73 @@
+"""把当前轮服务端签发的答案尝试与 HiddenWorld 做确定性比较。"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Sequence
+
+from hiddenworld.contracts import (
+    AnswerAttempt,
+    HiddenWorld,
+    HypothesisRelation,
+    InternalAnswerComparison,
+    LearnerState,
+)
+
+from .antiguess import AntiGuess
+from .verifier import RootCauseVerifier
+
+_POINT_SEPARATOR = re.compile(r"[，。；;！？!?\n]+")
+_ALIGNMENT_BY_RELATION: dict[HypothesisRelation, float] = {
+    "target": 1.0,
+    "contributing": 0.75,
+    "unknown": 0.25,
+    "ruled_out": 0.0,
+    "unrelated": 0.0,
+}
+
+
+class AnswerComparator:
+    """返回完整内部比较；调用方只能通过 ``to_public`` 向下投影。"""
+
+    def compare(
+        self,
+        world: HiddenWorld,
+        *,
+        learner_state: LearnerState,
+        attempt: AnswerAttempt,
+        hypothesis_id: str,
+        contradictions: Sequence[str],
+    ) -> InternalAnswerComparison:
+        relation = RootCauseVerifier().relation(
+            world,
+            hypothesis_id=hypothesis_id,
+            learner_state=learner_state,
+        )
+        anti_guess = AntiGuess().evaluate(
+            world,
+            collected_evidence=learner_state.collected_evidence,
+            relation=relation,
+        )
+        requirements = list(world.root_cause.solution_requirements)
+        matched_requirements = [item for item in requirements if item and item in attempt.text]
+        solution_coverage = len(matched_requirements) / len(requirements) if requirements else 1.0
+
+        return InternalAnswerComparison(
+            answer_attempt_id=attempt.answer_attempt_id,
+            relation=relation,
+            claim_alignment=_ALIGNMENT_BY_RELATION[relation],
+            evidence_coverage=anti_guess.coverage,
+            best_evidence_set=anti_guess.best_evidence_set,
+            missing_evidence=anti_guess.missing_evidence,
+            contradictions=list(contradictions),
+            solution_coverage=solution_coverage,
+            missing_solution_requirements=[
+                item for item in requirements if item not in matched_requirements
+            ],
+            completion_allowed=anti_guess.completion_allowed,
+            user_points=_extract_user_points(attempt.text),
+        )
+
+
+def _extract_user_points(text: str) -> list[str]:
+    return [point.strip() for point in _POINT_SEPARATOR.split(text) if point.strip()]

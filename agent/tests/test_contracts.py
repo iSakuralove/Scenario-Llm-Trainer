@@ -111,12 +111,13 @@ def test_missing_required_field_is_rejected() -> None:
         TurnAnalysis.model_validate({"actions": [], "hypothesis_id": ""})
 
 
-def test_contract_version_mismatch_raises(hidden_world, learner_state) -> None:
+def test_contract_version_mismatch_raises(hidden_world, learner_state, public_scenario) -> None:
     request = AgentTurnRequest(
         contract_version="hiddenworld.v0",
         request_id="req-1",
         session_id="sess-1",
         state_revision=3,
+        public_scenario=public_scenario,
         hidden_world=hidden_world,
         learner_state=learner_state,
         user_message="先看看 CPU",
@@ -125,11 +126,12 @@ def test_contract_version_mismatch_raises(hidden_world, learner_state) -> None:
         request.require_contract_version()
 
 
-def test_contract_version_default_matches(hidden_world, learner_state) -> None:
+def test_contract_version_default_matches(hidden_world, learner_state, public_scenario) -> None:
     request = AgentTurnRequest(
         request_id="req-1",
         session_id="sess-1",
         state_revision=3,
+        public_scenario=public_scenario,
         hidden_world=hidden_world,
         learner_state=learner_state,
         user_message="先看看 CPU",
@@ -202,11 +204,12 @@ def test_run_event_roundtrip_preserves_sequence() -> None:
     assert restored.sequence == 7
 
 
-def test_agent_turn_request_roundtrip(hidden_world, learner_state) -> None:
+def test_agent_turn_request_roundtrip(hidden_world, learner_state, public_scenario) -> None:
     request = AgentTurnRequest(
         request_id="req-1",
         session_id="sess-1",
         state_revision=3,
+        public_scenario=public_scenario,
         hidden_world=hidden_world,
         learner_state=learner_state,
         user_message="先看看 CPU",

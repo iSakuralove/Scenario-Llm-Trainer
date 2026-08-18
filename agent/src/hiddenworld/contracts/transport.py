@@ -19,7 +19,7 @@ from .events import PublicTraceEvent
 from .learner import LearnerState, Turn
 from .turn import TurnAnalysis
 from .version import CONTRACT_VERSION, HypothesisRelation
-from .world import HiddenWorld
+from .world import HiddenWorld, PublicScenario
 
 ProposalKind = Literal[
     "release_evidence",
@@ -103,6 +103,7 @@ class AgentTurnRequest(BaseModel):
     request_id: str = Field(description="幂等键。同一个 request_id 重放必须返回同一结果。")
     session_id: str
     state_revision: int
+    public_scenario: PublicScenario = Field(description="学生可见题面；供 Interpreter 与 Mentor 使用。")
     hidden_world: HiddenWorld = Field(description="含答案。仅确定性组件消费。")
     learner_state: LearnerState
     transcript: list[Turn] = Field(default_factory=list)
