@@ -14,6 +14,7 @@ import (
 	"time"
 
 	agentruntime "situational-teaching/backend/internal/agent"
+	"situational-teaching/backend/internal/agentclient"
 	"situational-teaching/backend/internal/ai"
 	"situational-teaching/backend/internal/auth"
 	"situational-teaching/backend/internal/domain"
@@ -36,6 +37,7 @@ type Server struct {
 	llm                    *ai.Router
 	stt                    STTProvider
 	embedding              ai.EmbeddingClient
+	scenarioAgent          scenarioAgentClient
 	assets                 AssetStorage
 	jobMu                  sync.Mutex
 	jobStop                map[string]context.CancelFunc
@@ -95,17 +97,25 @@ func NewServer(dataStore store.Store, authManager *auth.Manager, limiter ratelim
 		assets:                 assetStorage,
 		stt:                    NewSTTProviderFromEnv(assetStorage),
 		embedding:              ai.NewEmbeddingClientFromEnv(),
-		jobStop:                map[string]context.CancelFunc{},
+		scenarioAgent: agentclient.New(agentclient.Config{
+			BaseURL: envOrDefault("AGENT_BASE_URL", "http://127.0.0.1:8091"),
+			Timeout: 20 * time.Second,
+		}),
+		jobStop: map[string]context.CancelFunc{},
 	}
 	server.applyPromptOverrides()
 	return server
 }
 
-func NewServerForTests(dataStore store.Store, authManager *auth.Manager) *Server {
+func NewServerForTests(dataStore store.Store, authManager *auth.Manager, scenarioAgents ...scenarioAgentClient) *Server {
 	var limiter ratelimit.Limiter = ratelimit.NewNoopLimiter()
 	server := NewServer(dataStore, authManager, limiter, ai.NewRouter(ai.Config{Provider: ai.ProviderMock}))
 	server.stt = MockSTTProvider{}
 	server.embedding = nil
+	server.scenarioAgent = deterministicScenarioAgentClient{}
+	if len(scenarioAgents) > 0 && scenarioAgents[0] != nil {
+		server.scenarioAgent = scenarioAgents[0]
+	}
 	return server
 }
 
@@ -253,24 +263,6 @@ func (s *Server) auditAgentRun(request *http.Request, user *domain.User, payload
 		ResourceType: payload.ResourceType,
 		ResourceID:   payload.ResourceID,
 		Metadata:     metadata,
-	})
-}
-
-func (s *Server) auditDiagnosticAgentRun(request *http.Request, user *domain.User, sessionID string, trace domain.AgentTrace, meta domain.ResponseMeta, status string, runErr error) {
-	errorSummary := ""
-	if runErr != nil {
-		errorSummary = "agent run failed"
-	}
-	s.auditAgentRun(request, user, agentAuditPayload{
-		Agent:           firstNonEmpty(strings.TrimSpace(trace.Agent), "diagnostic_agent"),
-		Action:          "agent.diagnostic_run",
-		ResourceType:    "scenario_session",
-		ResourceID:      sessionID,
-		Status:          status,
-		ToolCount:       trace.ToolCount,
-		FallbackUsed:    meta.FallbackUsed,
-		SafetyRewritten: meta.SafetyRewritten,
-		ErrorSummary:    errorSummary,
 	})
 }
 

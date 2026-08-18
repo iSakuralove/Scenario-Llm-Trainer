@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	agentruntime "situational-teaching/backend/internal/agent"
+	"situational-teaching/backend/internal/agentclient"
 	"situational-teaching/backend/internal/ai"
 	"situational-teaching/backend/internal/domain"
 	"situational-teaching/backend/internal/store"
@@ -196,27 +196,35 @@ func (s *Server) handleScenarioSession(w http.ResponseWriter, r *http.Request, u
 			return
 		}
 		var req struct {
-			Content string `json:"content"`
+			Content       string `json:"content"`
+			RequestID     string `json:"request_id"`
+			StateRevision *int   `json:"state_revision"`
 		}
 		if !decode(w, r, &req) {
 			return
 		}
 		var writer *sseWriter
-		var onStage func(string, string)
-		var onDelta func(string)
 		if wantsSSE(r) {
 			writer = newSSEWriter(w)
-			onStage = writer.stage
-			onDelta = func(chunk string) { writer.delta(chunk, true) }
-			writer.stage("agent_intent", "正在分析你的排查意图")
+			writer.stage("understanding_message", "正在理解本轮排查意图")
 		}
-		message, session, err := s.processScenarioMessage(r.Context(), user, sessionID, strings.TrimSpace(req.Content), r, onStage, onDelta)
+		requestID := strings.TrimSpace(req.RequestID)
+		if requestID == "" {
+			requestID = store.NewID()
+		}
+		message, session, err := s.processScenarioMessage(r.Context(), user, scenarioMessageInput{
+			SessionID:     sessionID,
+			Content:       strings.TrimSpace(req.Content),
+			RequestID:     requestID,
+			StateRevision: req.StateRevision,
+		})
 		if err != nil {
+			status, code, message := scenarioMessageError(err)
 			if writer != nil {
-				writer.fail(err.Error())
+				writer.failCode(code, message)
 				return
 			}
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeErrorWithData(w, status, message, map[string]string{"error_code": code})
 			return
 		}
 		payload := map[string]interface{}{
@@ -226,7 +234,11 @@ func (s *Server) handleScenarioSession(w http.ResponseWriter, r *http.Request, u
 			"session":        scenarioSessionView(session),
 		}
 		if writer != nil {
-			writer.stage("completed", "本轮 Agent 排查完成")
+			writer.stage("proposal_approved", "状态提议已通过校验并完成提交")
+			for _, chunk := range chunkText(message.AssistantContent, 28) {
+				writer.delta(chunk, true)
+			}
+			writer.stage("completed", "本轮排查已完成")
 			writer.finish(payload)
 			return
 		}
@@ -297,13 +309,32 @@ func (s *Server) handleScenarioSession(w http.ResponseWriter, r *http.Request, u
 		writeError(w, http.StatusNotFound, "not found")
 	}
 }
-func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, sessionID, content string, callbacks ...interface{}) (domain.ScenarioMessage, *domain.ScenarioSession, error) {
-	if content == "" {
+
+type scenarioMessageInput struct {
+	SessionID     string
+	Content       string
+	RequestID     string
+	StateRevision *int
+}
+
+func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, input scenarioMessageInput) (domain.ScenarioMessage, *domain.ScenarioSession, error) {
+	if input.Content == "" {
 		return domain.ScenarioMessage{}, nil, fmt.Errorf("content is required")
 	}
-	session, ok := s.store.GetScenarioSession(sessionID)
+	if input.RequestID == "" || len(input.RequestID) > 160 {
+		return domain.ScenarioMessage{}, nil, fmt.Errorf("request_id is invalid")
+	}
+	session, ok := s.store.GetScenarioSession(input.SessionID)
 	if !ok || session.UserID != user.ID {
 		return domain.ScenarioMessage{}, nil, fmt.Errorf("session not found")
+	}
+	fingerprint := scenarioRequestFingerprint(session.ID, input.Content)
+	if existing, ok := s.store.GetScenarioAgentTurn(session.ID, input.RequestID); ok {
+		if existing.RequestFingerprint != fingerprint {
+			return domain.ScenarioMessage{}, nil, domain.ScenarioRequestConflictError{RequestID: input.RequestID}
+		}
+		replayedSession := existing.SessionSnapshot
+		return existing.Message, &replayedSession, nil
 	}
 	if s.expireScenarioSessionIfIdle(session) {
 		return domain.ScenarioMessage{}, nil, fmt.Errorf("session is abandoned")
@@ -314,65 +345,105 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 	if session.CurrentTurn >= session.MaxTurns {
 		return domain.ScenarioMessage{}, nil, fmt.Errorf("max turns reached, please submit an answer")
 	}
-
-	question := &session.QuestionSnapshot
-	existingMessages := s.store.ListScenarioMessages(sessionID)
-	request, onStage, onDelta := scenarioMessageCallbacks(callbacks...)
-	agent := agentruntime.NewDiagnosticAgent(agentruntime.DiagnosticConfig{
-		Rewrite: func(ctx context.Context, req ai.ScenarioReplyRequest, delta func(string)) (string, ai.CallMeta, error) {
-			if delta != nil {
-				return s.llmRouter().RewriteScenarioReplyStream(ctx, req, delta)
-			}
-			return s.llmRouter().RewriteScenarioReply(ctx, req)
-		},
-		SemanticGate: agentruntime.NewSemanticGate(agentruntime.SemanticGateConfig{Embedding: s.embedding}),
-	})
-	result, err := agent.Run(ctx, agentruntime.DiagnosticRequest{
-		Session:        session,
-		Question:       question,
-		UserMessage:    content,
-		Messages:       existingMessages,
-		RecentMessages: recentScenarioContext(existingMessages, 5),
-		SummaryBuilder: buildScenarioConversationSummary,
-		OnStage:        onStage,
-		OnDelta:        onDelta,
-	})
-	if err != nil {
-		s.auditDiagnosticAgentRun(request, user, session.ID, result.Trace, result.Meta, "failed", err)
-		return domain.ScenarioMessage{}, nil, err
+	expectedRevision := session.StateRevision
+	if input.StateRevision != nil {
+		expectedRevision = *input.StateRevision
 	}
-	session.CurrentTurn++
-	session.LastActiveAt = time.Now()
-	if session.CurrentTurn >= session.MaxTurns {
-		result.AssistantContent += " 当前会话已达到最大轮次，请提交最终根因答案。"
-	}
-	message := s.store.AddScenarioMessage(domain.ScenarioMessage{
-		SessionID:        session.ID,
-		TurnNumber:       session.CurrentTurn,
-		Role:             "assistant",
-		UserContent:      content,
-		AssistantContent: result.AssistantContent,
-		ResponseMeta:     result.Meta,
-	})
-	s.store.SaveScenarioSession(session)
-	s.auditDiagnosticAgentRun(request, user, session.ID, result.Trace, result.Meta, "completed", nil)
-	return message, session, nil
-}
-func scenarioMessageCallbacks(callbacks ...interface{}) (*http.Request, func(string, string), func(string)) {
-	var request *http.Request
-	var onStage func(string, string)
-	var onDelta func(string)
-	for _, callback := range callbacks {
-		switch value := callback.(type) {
-		case *http.Request:
-			request = value
-		case func(string, string):
-			onStage = value
-		case func(string):
-			onDelta = value
+	if expectedRevision != session.StateRevision {
+		return domain.ScenarioMessage{}, nil, domain.ScenarioRevisionConflictError{
+			Expected: expectedRevision,
+			Current:  session.StateRevision,
 		}
 	}
-	return request, onStage, onDelta
+	question := &session.QuestionSnapshot
+	if question.Content.ModelVersion != domain.HiddenWorldContractVersion ||
+		question.Content.PublicScenario == nil || question.Content.HiddenWorld == nil {
+		return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
+			Status:  http.StatusUnprocessableEntity,
+			Code:    "scenario_contract_unsupported",
+			Message: "当前题目不是可运行的 HiddenWorld 题目",
+		}
+	}
+	if s.scenarioAgent == nil {
+		return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
+			Status:  http.StatusServiceUnavailable,
+			Code:    "agent_not_configured",
+			Message: "排查导师服务尚未配置",
+		}
+	}
+	existingMessages := s.store.ListScenarioMessages(session.ID)
+	result, err := s.scenarioAgent.Turn(ctx, agentclient.TurnRequest{
+		ContractVersion: agentclient.ContractVersion,
+		RequestID:       input.RequestID,
+		SessionID:       session.ID,
+		StateRevision:   expectedRevision,
+		PublicScenario:  *question.Content.PublicScenario,
+		HiddenWorld:     *question.Content.HiddenWorld,
+		LearnerState:    learnerStateForAgent(session.LearnerState),
+		Transcript:      scenarioTranscript(existingMessages),
+		UserMessage:     input.Content,
+		Budget:          agentclient.Budget{DeadlineMS: 15000, MaxReleases: 3},
+	})
+	if err != nil {
+		return domain.ScenarioMessage{}, nil, classifyScenarioAgentError(err)
+	}
+	nextState, approvals, err := approveScenarioProposals(session, question.Content.HiddenWorld, result)
+	if err != nil {
+		return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
+			Status:  http.StatusBadGateway,
+			Code:    "proposal_rejected",
+			Message: "排查导师返回了未通过业务校验的状态提议",
+		}
+	}
+	if err := validateScenarioReply(result.Reply, question.Content.HiddenWorld, nextState); err != nil {
+		return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
+			Status:  http.StatusBadGateway,
+			Code:    "reply_guard_rejected",
+			Message: "排查导师回复未通过安全校验",
+		}
+	}
+	nextSession := *session
+	nextSession.CurrentTurn++
+	nextSession.LastActiveAt = time.Now()
+	nextSession.LearnerState = nextState
+	nextSession.RevealedClueIDs = append([]string{}, nextState.CollectedEvidence...)
+	reply := strings.TrimSpace(result.Reply)
+	if nextSession.CurrentTurn >= nextSession.MaxTurns {
+		reply += " 当前会话已达到最大轮次，请提交最终根因答案。"
+	}
+	publicTrace := marshalAgentAudit(result.PublicTrace)
+	message := domain.ScenarioMessage{
+		SessionID:        session.ID,
+		TurnNumber:       nextSession.CurrentTurn,
+		Role:             "assistant",
+		UserContent:      input.Content,
+		AssistantContent: reply,
+		ResponseMeta: domain.ResponseMeta{
+			ResponseType: "mentor_reply",
+			RequestID:    input.RequestID,
+			Revision:     expectedRevision + 1,
+			PublicTrace:  publicTrace,
+		},
+	}
+	nextMessages := append(append([]domain.ScenarioMessage{}, existingMessages...), message)
+	nextSession.ConversationSummary = buildScenarioConversationSummary(nextSession.ConversationSummary, question, nextMessages)
+	commitResult, err := s.store.CommitScenarioAgentTurn(domain.ScenarioAgentTurnCommit{
+		SessionID:            session.ID,
+		RequestID:            input.RequestID,
+		RequestFingerprint:   fingerprint,
+		ExpectedRevision:     expectedRevision,
+		Message:              message,
+		NextSession:          nextSession,
+		PublicTrace:          publicTrace,
+		InternalVerification: marshalAgentAudit(result.InternalVerification),
+		InternalAudit:        marshalAgentAudit(result.InternalAudit),
+		ApprovalAudit:        marshalAgentAudit(approvals),
+	})
+	if err != nil {
+		return domain.ScenarioMessage{}, nil, err
+	}
+	committedSession := commitResult.Record.SessionSnapshot
+	return commitResult.Record.Message, &committedSession, nil
 }
 func buildScenarioConversationSummary(existing string, question *domain.ScenarioQuestion, messages []domain.ScenarioMessage) string {
 	if len(messages) == 0 {
@@ -386,12 +457,8 @@ func buildScenarioConversationSummary(existing string, question *domain.Scenario
 		return strings.TrimSpace(existing)
 	}
 	older := messages[:limit]
-	revealed := []string{}
 	userFocus := []string{}
 	for _, message := range older {
-		if message.ResponseMeta.RevealedClueID != "" {
-			revealed = append(revealed, message.ResponseMeta.RevealedClueID)
-		}
 		if strings.TrimSpace(message.UserContent) != "" {
 			userFocus = append(userFocus, truncateText(message.UserContent, 80))
 		}
@@ -407,11 +474,6 @@ func buildScenarioConversationSummary(existing string, question *domain.Scenario
 		builder.WriteString("。")
 	}
 	fmt.Fprintf(&builder, "已压缩前 %d 轮对话。", limit)
-	if len(revealed) > 0 {
-		builder.WriteString("已释放线索ID：")
-		builder.WriteString(strings.Join(uniqueStrings(revealed), ","))
-		builder.WriteString("。")
-	}
 	if len(userFocus) > 0 {
 		if len(userFocus) > 8 {
 			userFocus = userFocus[len(userFocus)-8:]
@@ -421,24 +483,6 @@ func buildScenarioConversationSummary(existing string, question *domain.Scenario
 		builder.WriteString("。")
 	}
 	return truncateText(strings.TrimSpace(builder.String()), 1800)
-}
-func recentScenarioContext(messages []domain.ScenarioMessage, limit int) []ai.ScenarioContextMessage {
-	if limit <= 0 || len(messages) == 0 {
-		return []ai.ScenarioContextMessage{}
-	}
-	start := len(messages) - limit
-	if start < 0 {
-		start = 0
-	}
-	out := make([]ai.ScenarioContextMessage, 0, len(messages[start:]))
-	for _, message := range messages[start:] {
-		out = append(out, ai.ScenarioContextMessage{
-			TurnNumber:       message.TurnNumber,
-			UserContent:      message.UserContent,
-			AssistantContent: truncateText(message.AssistantContent, 240),
-		})
-	}
-	return out
 }
 func (s *Server) evaluateScenarioAnswer(user *domain.User, sessionID, answer string) (*domain.ScenarioSession, error) {
 	session, ok := s.store.GetScenarioSession(sessionID)

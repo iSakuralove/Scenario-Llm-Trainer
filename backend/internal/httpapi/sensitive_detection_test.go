@@ -325,17 +325,38 @@ func TestScenarioSessionResponsesKeepInternalSnapshotPrivate(t *testing.T) {
 		ScenarioType: "troubleshooting",
 		Tags:         []string{"马哥教育", "api_key=sk-session-secret"},
 		Content: domain.ScenarioContent{
-			RootCause:         "真实根因为 password=root-secret",
-			RootCauseKeywords: []string{"root-secret"},
-			KeyEvidence:       []string{"日志包含 api_key=sk-evidence-secret"},
-			StandardProcedure: []string{"按内部 runbook 处理 token=procedure-secret"},
-			RevealStrategy: domain.RevealStrategy{
-				SurfaceClues: []domain.Clue{{ClueID: "c1", TriggerKeywords: []string{"日志"}, Content: "表层线索 password=surface-secret"}},
-				DeepClues:    []domain.Clue{{ClueID: "c2", TriggerKeywords: []string{"索引"}, Content: "深层线索 api_key=sk-deep-secret"}},
-				Distractors:  []domain.Clue{{ClueID: "d1", TriggerKeywords: []string{"网络"}, Content: "干扰项 token=distractor-secret"}},
+			ModelVersion: domain.HiddenWorldContractVersion,
+			PublicScenario: &domain.PublicScenario{
+				Title:               "腾讯公司案例 AI 模型key=sk-admin-visible",
+				Description:         "马哥教育真实案例 密码为12345asdfasd@123qq.com,API KEY=[已脱敏];df'hww@@",
+				InitialSymptoms:     []string{"公开现象不包含内部根因"},
+				ArchitectureDiagram: "graph TD\nA[马哥教育] --> B[password=diagram-secret]",
 			},
-			ArchitectureDiagram: "graph TD\nA[马哥教育] --> B[password=diagram-secret]",
-			ReferenceLinks:      []string{"https://internal.example.com?token=link-secret"},
+			HiddenWorld: &domain.HiddenWorld{
+				RootCause: domain.RootCause{
+					ID:                     "RC_PRIVATE",
+					Category:               "database",
+					Component:              "orders",
+					Description:            "真实根因为 password=root-secret",
+					SufficientEvidenceSets: [][]string{{"E_SURFACE"}},
+					AcceptedHypotheses:     []string{"H_PRIVATE"},
+					SolutionRequirements:   []string{"按内部 runbook 处理 token=procedure-secret"},
+				},
+				Hypotheses: []domain.Hypothesis{
+					{HypothesisID: "H_PRIVATE", Label: "root-secret"},
+					{HypothesisID: "H_OTHER", Label: "其他方向"},
+				},
+				EvidenceGraph: []domain.EvidenceNode{
+					{EvidenceID: "E_SURFACE", Content: "表层线索 password=surface-secret", Category: "logs", ObtainedBy: []string{"inspect:logs"}},
+					{EvidenceID: "E_DEEP", Content: "深层线索 api_key=sk-deep-secret", Category: "data", Prerequisites: []string{"E_SURFACE"}, ObtainedBy: []string{"inspect:data"}},
+					{EvidenceID: "E_DISTRACTOR", Content: "干扰项 token=distractor-secret", Category: "dependency", ObtainedBy: []string{"inspect:dependency"}},
+					{EvidenceID: "E_LINK", Content: "https://internal.example.com?token=link-secret", Category: "config", ObtainedBy: []string{"inspect:config"}},
+				},
+				Observations: []domain.Observation{
+					{Action: "inspect:logs", Result: "公开观察", YieldsEvidence: []string{"E_SURFACE"}},
+				},
+				SolutionRubric: domain.SolutionRubric{RequiredActions: []string{"验证"}},
+			},
 		},
 		Status:    "active",
 		Source:    "test",

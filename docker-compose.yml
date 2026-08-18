@@ -16,6 +16,7 @@ services:
       SMTP_FROM: ${SMTP_FROM:-}
       APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:5173}
       REDIS_URL: redis://redis:6379/0
+      AGENT_BASE_URL: http://agent:8090
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-}
@@ -34,8 +35,36 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+      agent:
+        condition: service_healthy
+
+  agent:
+    build:
+      context: ./agent
+    environment:
+      HIDDENWORLD_HOST: 0.0.0.0
+      HIDDENWORLD_PORT: 8090
+      HIDDENWORLD_ALLOW_MODEL_REQUESTS: ${HIDDENWORLD_ALLOW_MODEL_REQUESTS:-0}
+      HIDDENWORLD_INTERPRETER_PROVIDER: ${HIDDENWORLD_INTERPRETER_PROVIDER:-deepseek}
+      HIDDENWORLD_MENTOR_PROVIDER: ${HIDDENWORLD_MENTOR_PROVIDER:-deepseek}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      ZAI_API_KEY: ${ZAI_API_KEY:-}
+      ZAI_BASE_URL: ${ZAI_BASE_URL:-https://api.z.ai/api/paas/v4}
+      ZAI_MODEL: ${ZAI_MODEL:-glm-5.2}
+    ports:
+      - "8090:8090"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
 
   postgres:
     image: pgvector/pgvector:pg15

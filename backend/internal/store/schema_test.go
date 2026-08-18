@@ -24,6 +24,34 @@ func TestUserSchemaIncludesTokenVersion(t *testing.T) {
 	}
 }
 
+func TestScenarioAgentSchemaIncludesRevisionStateAndPrivateAudit(t *testing.T) {
+	root := filepath.Join("..", "..", "migrations", "001_schema.sql")
+	content, err := os.ReadFile(root)
+	if err != nil {
+		t.Fatalf("read docker init schema: %v", err)
+	}
+	for name, schema := range map[string]string{
+		"runtime": SchemaSQL,
+		"legacy":  LegacyCompatibilitySQL,
+		"docker":  string(content),
+	} {
+		for _, required := range []string{
+			"state_revision INT",
+			"learner_state JSONB",
+			"CREATE TABLE IF NOT EXISTS scenario_agent_turns",
+			"request_fingerprint TEXT NOT NULL",
+			"internal_verification JSONB NOT NULL",
+			"internal_audit JSONB NOT NULL",
+			"approval_audit JSONB NOT NULL",
+			"PRIMARY KEY (session_id, request_id)",
+		} {
+			if !strings.Contains(schema, required) {
+				t.Fatalf("%s scenario agent schema must include %q", name, required)
+			}
+		}
+	}
+}
+
 func TestCommunityPostDockerInitSchemaIncludesModerationColumns(t *testing.T) {
 	root := filepath.Join("..", "..", "migrations", "001_schema.sql")
 	content, err := os.ReadFile(root)

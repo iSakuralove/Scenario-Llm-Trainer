@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 const (
 	RoleStudent    = "student"
@@ -299,23 +302,23 @@ type Clue struct {
 }
 
 type ScenarioSession struct {
-	ID                  string              `json:"id"`
-	UserID              string              `json:"user_id"`
-	QuestionID          string              `json:"question_id"`
-	Status              string              `json:"status"`
-	CurrentTurn         int                 `json:"current_turn"`
-	MaxTurns            int                 `json:"max_turns"`
-	RevealedClueIDs     []string            `json:"revealed_clue_ids"`
-	UserAnswer          string              `json:"user_answer,omitempty"`
-	EvaluationResult    *ScenarioEvaluation `json:"evaluation_result,omitempty"`
-	Score               *ScenarioScore      `json:"score,omitempty"`
-	QuestionSnapshot    ScenarioQuestion    `json:"question_snapshot"`
-	HintLevel           int                 `json:"hint_level"`
-	NoNewClueStreak     int                 `json:"no_new_clue_streak"`
-	ConversationSummary string              `json:"conversation_summary,omitempty"`
-	StartedAt           time.Time           `json:"started_at"`
-	LastActiveAt        time.Time           `json:"last_active_at"`
-	EndedAt             *time.Time          `json:"ended_at,omitempty"`
+	ID                  string               `json:"id"`
+	UserID              string               `json:"user_id"`
+	QuestionID          string               `json:"question_id"`
+	Status              string               `json:"status"`
+	CurrentTurn         int                  `json:"current_turn"`
+	MaxTurns            int                  `json:"max_turns"`
+	RevealedClueIDs     []string             `json:"revealed_clue_ids"`
+	UserAnswer          string               `json:"user_answer,omitempty"`
+	EvaluationResult    *ScenarioEvaluation  `json:"evaluation_result,omitempty"`
+	Score               *ScenarioScore       `json:"score,omitempty"`
+	QuestionSnapshot    ScenarioQuestion     `json:"question_snapshot"`
+	StateRevision       int                  `json:"state_revision"`
+	LearnerState        ScenarioLearnerState `json:"learner_state"`
+	ConversationSummary string               `json:"conversation_summary,omitempty"`
+	StartedAt           time.Time            `json:"started_at"`
+	LastActiveAt        time.Time            `json:"last_active_at"`
+	EndedAt             *time.Time           `json:"ended_at,omitempty"`
 }
 
 type ScenarioMessage struct {
@@ -330,25 +333,10 @@ type ScenarioMessage struct {
 }
 
 type ResponseMeta struct {
-	ResponseType          string      `json:"response_type"`
-	RevealedClueID        string      `json:"revealed_clue_id,omitempty"`
-	HintLevel             int         `json:"hint_level"`
-	IsAnswerLeak          bool        `json:"is_answer_leak"`
-	IsDistractor          bool        `json:"is_distractor"`
-	IsSanitized           bool        `json:"is_sanitized"`
-	Provider              string      `json:"provider,omitempty"`
-	Validated             bool        `json:"validated,omitempty"`
-	FallbackUsed          bool        `json:"fallback_used,omitempty"`
-	SafetyRewritten       bool        `json:"safety_rewritten,omitempty"`
-	SemanticDecision      string      `json:"semantic_decision,omitempty"`
-	InputQuality          string      `json:"input_quality,omitempty"`
-	AgentIntent           string      `json:"agent_intent,omitempty"`
-	RootSimilarity        float64     `json:"root_similarity,omitempty"`
-	ClueSimilarity        float64     `json:"clue_similarity,omitempty"`
-	MatchedClueID         string      `json:"matched_clue_id,omitempty"`
-	EmbeddingModel        string      `json:"embedding_model,omitempty"`
-	EmbeddingFallbackUsed bool        `json:"embedding_fallback_used,omitempty"`
-	AgentTrace            *AgentTrace `json:"agent_trace,omitempty"`
+	ResponseType string          `json:"response_type"`
+	RequestID    string          `json:"request_id,omitempty"`
+	Revision     int             `json:"revision"`
+	PublicTrace  json.RawMessage `json:"public_trace,omitempty"`
 }
 
 type AgentTrace struct {

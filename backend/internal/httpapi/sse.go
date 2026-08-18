@@ -55,6 +55,9 @@ func (s *sseWriter) finish(payload interface{}) {
 func (s *sseWriter) fail(message string) {
 	s.event("error", map[string]string{"message": message})
 }
+func (s *sseWriter) failCode(code, message string) {
+	s.event("error", map[string]string{"code": code, "message": message})
+}
 func writeSSE(w http.ResponseWriter, payload map[string]interface{}, content string) {
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")

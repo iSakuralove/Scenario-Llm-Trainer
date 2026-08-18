@@ -271,3 +271,9 @@ func normalizeForbiddenTerms(terms []string) []string {
 	}
 	return out
 }
+
+func emitStage(onStage func(step, message string), step, message string) {
+	if onStage != nil {
+		onStage(step, message)
+	}
+}

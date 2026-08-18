@@ -41,10 +41,10 @@ CREATE TABLE IF NOT EXISTS scenario_sessions (
     user_answer TEXT,
     evaluation_result JSONB,
     score JSONB,
-    question_snapshot JSONB NOT NULL,
-    hint_level INT DEFAULT 1,
-    no_new_clue_streak INT DEFAULT 0,
-    conversation_summary TEXT DEFAULT '',
+	question_snapshot JSONB NOT NULL,
+	state_revision INT NOT NULL DEFAULT 0,
+	learner_state JSONB NOT NULL DEFAULT '{"collected_evidence":[],"ruled_out_hypotheses":[],"established_facts":[],"actions_taken":[],"recent_openings":[],"current_focus":"","effective_turns":0,"stalled_turns":0}',
+	conversation_summary TEXT DEFAULT '',
     started_at TIMESTAMPTZ DEFAULT NOW(),
     last_active_at TIMESTAMPTZ DEFAULT NOW(),
     ended_at TIMESTAMPTZ
@@ -59,6 +59,21 @@ CREATE TABLE IF NOT EXISTS scenario_messages (
     assistant_content TEXT,
     response_meta JSONB,
     created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS scenario_agent_turns (
+	session_id TEXT NOT NULL REFERENCES scenario_sessions(id) ON DELETE CASCADE,
+	request_id TEXT NOT NULL,
+	request_fingerprint TEXT NOT NULL,
+	expected_revision INT NOT NULL,
+	committed_revision INT NOT NULL,
+	result_snapshot JSONB NOT NULL,
+	public_trace JSONB NOT NULL DEFAULT '[]',
+	internal_verification JSONB NOT NULL,
+	internal_audit JSONB NOT NULL,
+	approval_audit JSONB NOT NULL DEFAULT '[]',
+	created_at TIMESTAMPTZ DEFAULT NOW(),
+	PRIMARY KEY (session_id, request_id)
 );
 
 CREATE TABLE IF NOT EXISTS interview_questions (
@@ -348,9 +363,24 @@ ALTER TABLE IF EXISTS community_posts ALTER COLUMN user_id TYPE TEXT USING user_
 ALTER TABLE IF EXISTS community_posts ALTER COLUMN converted_question_id TYPE TEXT USING converted_question_id::text;
 
 ALTER TABLE IF EXISTS scenario_sessions ADD COLUMN IF NOT EXISTS question_snapshot JSONB;
-ALTER TABLE IF EXISTS scenario_sessions ADD COLUMN IF NOT EXISTS hint_level INT DEFAULT 1;
-ALTER TABLE IF EXISTS scenario_sessions ADD COLUMN IF NOT EXISTS no_new_clue_streak INT DEFAULT 0;
+ALTER TABLE IF EXISTS scenario_sessions ADD COLUMN IF NOT EXISTS state_revision INT NOT NULL DEFAULT 0;
+ALTER TABLE IF EXISTS scenario_sessions ADD COLUMN IF NOT EXISTS learner_state JSONB NOT NULL DEFAULT '{"collected_evidence":[],"ruled_out_hypotheses":[],"established_facts":[],"actions_taken":[],"recent_openings":[],"current_focus":"","effective_turns":0,"stalled_turns":0}';
 ALTER TABLE IF EXISTS scenario_sessions ADD COLUMN IF NOT EXISTS conversation_summary TEXT DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS scenario_agent_turns (
+	session_id TEXT NOT NULL REFERENCES scenario_sessions(id) ON DELETE CASCADE,
+	request_id TEXT NOT NULL,
+	request_fingerprint TEXT NOT NULL,
+	expected_revision INT NOT NULL,
+	committed_revision INT NOT NULL,
+	result_snapshot JSONB NOT NULL,
+	public_trace JSONB NOT NULL DEFAULT '[]',
+	internal_verification JSONB NOT NULL,
+	internal_audit JSONB NOT NULL,
+	approval_audit JSONB NOT NULL DEFAULT '[]',
+	created_at TIMESTAMPTZ DEFAULT NOW(),
+	PRIMARY KEY (session_id, request_id)
+);
 ALTER TABLE IF EXISTS interview_questions ADD COLUMN IF NOT EXISTS reference_keywords TEXT[];
 ALTER TABLE IF EXISTS interview_sessions ADD COLUMN IF NOT EXISTS follow_up_question TEXT;
 ALTER TABLE IF EXISTS interview_sessions ADD COLUMN IF NOT EXISTS difficulty_level VARCHAR(16);

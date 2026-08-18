@@ -86,23 +86,21 @@ func scenarioView(question *domain.ScenarioQuestion, user *domain.User) domain.S
 }
 
 type scenarioSessionResponse struct {
-	ID                  string                      `json:"id"`
-	UserID              string                      `json:"user_id"`
-	QuestionID          string                      `json:"question_id"`
-	Status              string                      `json:"status"`
-	CurrentTurn         int                         `json:"current_turn"`
-	MaxTurns            int                         `json:"max_turns"`
-	RevealedClueIDs     []string                    `json:"revealed_clue_ids"`
-	UserAnswer          string                      `json:"user_answer,omitempty"`
-	EvaluationResult    *domain.ScenarioEvaluation  `json:"evaluation_result,omitempty"`
-	Score               *domain.ScenarioScore       `json:"score,omitempty"`
-	QuestionSnapshot    domain.ScenarioQuestionView `json:"question_snapshot"`
-	HintLevel           int                         `json:"hint_level"`
-	NoNewClueStreak     int                         `json:"no_new_clue_streak"`
-	ConversationSummary string                      `json:"conversation_summary,omitempty"`
-	StartedAt           time.Time                   `json:"started_at"`
-	LastActiveAt        time.Time                   `json:"last_active_at"`
-	EndedAt             *time.Time                  `json:"ended_at,omitempty"`
+	ID               string                      `json:"id"`
+	UserID           string                      `json:"user_id"`
+	QuestionID       string                      `json:"question_id"`
+	Status           string                      `json:"status"`
+	CurrentTurn      int                         `json:"current_turn"`
+	MaxTurns         int                         `json:"max_turns"`
+	RevealedClueIDs  []string                    `json:"revealed_clue_ids"`
+	UserAnswer       string                      `json:"user_answer,omitempty"`
+	EvaluationResult *domain.ScenarioEvaluation  `json:"evaluation_result,omitempty"`
+	Score            *domain.ScenarioScore       `json:"score,omitempty"`
+	QuestionSnapshot domain.ScenarioQuestionView `json:"question_snapshot"`
+	StateRevision    int                         `json:"state_revision"`
+	StartedAt        time.Time                   `json:"started_at"`
+	LastActiveAt     time.Time                   `json:"last_active_at"`
+	EndedAt          *time.Time                  `json:"ended_at,omitempty"`
 }
 
 func scenarioSessionView(session *domain.ScenarioSession) scenarioSessionResponse {
@@ -110,23 +108,21 @@ func scenarioSessionView(session *domain.ScenarioSession) scenarioSessionRespons
 		return scenarioSessionResponse{}
 	}
 	return scenarioSessionResponse{
-		ID:                  session.ID,
-		UserID:              session.UserID,
-		QuestionID:          session.QuestionID,
-		Status:              session.Status,
-		CurrentTurn:         session.CurrentTurn,
-		MaxTurns:            session.MaxTurns,
-		RevealedClueIDs:     append([]string{}, session.RevealedClueIDs...),
-		UserAnswer:          session.UserAnswer,
-		EvaluationResult:    session.EvaluationResult,
-		Score:               session.Score,
-		QuestionSnapshot:    scenarioPublicView(&session.QuestionSnapshot),
-		HintLevel:           session.HintLevel,
-		NoNewClueStreak:     session.NoNewClueStreak,
-		ConversationSummary: session.ConversationSummary,
-		StartedAt:           session.StartedAt,
-		LastActiveAt:        session.LastActiveAt,
-		EndedAt:             session.EndedAt,
+		ID:               session.ID,
+		UserID:           session.UserID,
+		QuestionID:       session.QuestionID,
+		Status:           session.Status,
+		CurrentTurn:      session.CurrentTurn,
+		MaxTurns:         session.MaxTurns,
+		RevealedClueIDs:  append([]string{}, session.RevealedClueIDs...),
+		UserAnswer:       session.UserAnswer,
+		EvaluationResult: session.EvaluationResult,
+		Score:            session.Score,
+		QuestionSnapshot: scenarioPublicView(&session.QuestionSnapshot),
+		StateRevision:    session.StateRevision,
+		StartedAt:        session.StartedAt,
+		LastActiveAt:     session.LastActiveAt,
+		EndedAt:          session.EndedAt,
 	}
 }
 func scenarioSessionViews(sessions []domain.ScenarioSession) []scenarioSessionResponse {

@@ -453,7 +453,7 @@ func (s *PostgresStore) CreateScenarioSession(userID, questionID string) (*domai
 		MaxTurns:         50,
 		RevealedClueIDs:  []string{},
 		QuestionSnapshot: questionSnapshot,
-		HintLevel:        1,
+		LearnerState:     domain.ScenarioLearnerState{}.Normalized(),
 		StartedAt:        now,
 		LastActiveAt:     now,
 	}
@@ -466,8 +466,8 @@ func (s *PostgresStore) CreateScenarioSession(userID, questionID string) (*domai
 func (s *PostgresStore) GetScenarioSession(id string) (*domain.ScenarioSession, bool) {
 	row := s.pool.QueryRow(context.Background(), `
 		SELECT id, user_id, question_id, status, current_turn, max_turns, revealed_clue_ids,
-		       user_answer, evaluation_result, score, question_snapshot, hint_level,
-		       no_new_clue_streak, COALESCE(conversation_summary, ''), started_at, last_active_at, ended_at
+		       user_answer, evaluation_result, score, question_snapshot, state_revision,
+		       learner_state, COALESCE(conversation_summary, ''), started_at, last_active_at, ended_at
 		FROM scenario_sessions
 		WHERE id = $1
 	`, id)
@@ -530,11 +530,139 @@ func (s *PostgresStore) ListScenarioMessages(sessionID string) []domain.Scenario
 	return items
 }
 
+func (s *PostgresStore) GetScenarioAgentTurn(sessionID, requestID string) (domain.ScenarioAgentTurnRecord, bool) {
+	row := s.pool.QueryRow(context.Background(), `
+		SELECT result_snapshot
+		FROM scenario_agent_turns
+		WHERE session_id = $1 AND request_id = $2
+	`, sessionID, requestID)
+	var raw []byte
+	if err := row.Scan(&raw); err != nil {
+		return domain.ScenarioAgentTurnRecord{}, false
+	}
+	var record domain.ScenarioAgentTurnRecord
+	if err := unmarshal(raw, &record); err != nil {
+		return domain.ScenarioAgentTurnRecord{}, false
+	}
+	return record, true
+}
+
+func (s *PostgresStore) CommitScenarioAgentTurn(commit domain.ScenarioAgentTurnCommit) (domain.ScenarioAgentTurnCommitResult, error) {
+	ctx := context.Background()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.ScenarioAgentTurnCommitResult{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var currentRevision int
+	if err := tx.QueryRow(ctx, `
+		SELECT state_revision
+		FROM scenario_sessions
+		WHERE id = $1
+		FOR UPDATE
+	`, commit.SessionID).Scan(&currentRevision); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ScenarioAgentTurnCommitResult{}, errors.New("scenario session not found")
+		}
+		return domain.ScenarioAgentTurnCommitResult{}, err
+	}
+
+	var existingRaw []byte
+	err = tx.QueryRow(ctx, `
+		SELECT result_snapshot
+		FROM scenario_agent_turns
+		WHERE session_id = $1 AND request_id = $2
+	`, commit.SessionID, commit.RequestID).Scan(&existingRaw)
+	if err == nil {
+		var existing domain.ScenarioAgentTurnRecord
+		if err := unmarshal(existingRaw, &existing); err != nil {
+			return domain.ScenarioAgentTurnCommitResult{}, err
+		}
+		if existing.RequestFingerprint != commit.RequestFingerprint {
+			return domain.ScenarioAgentTurnCommitResult{}, domain.ScenarioRequestConflictError{RequestID: commit.RequestID}
+		}
+		return domain.ScenarioAgentTurnCommitResult{Record: existing, Replayed: true}, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return domain.ScenarioAgentTurnCommitResult{}, err
+	}
+	if currentRevision != commit.ExpectedRevision {
+		return domain.ScenarioAgentTurnCommitResult{}, domain.ScenarioRevisionConflictError{
+			Expected: commit.ExpectedRevision,
+			Current:  currentRevision,
+		}
+	}
+
+	next := commit.NextSession
+	if next.ID != commit.SessionID {
+		return domain.ScenarioAgentTurnCommitResult{}, errors.New("scenario turn commit has invalid next session")
+	}
+	next.StateRevision = commit.ExpectedRevision + 1
+	next.LearnerState = next.LearnerState.Normalized()
+	message := commit.Message
+	if message.ID == "" {
+		message.ID = NewID()
+	}
+	if message.CreatedAt.IsZero() {
+		message.CreatedAt = time.Now()
+	}
+	metaJSON, err := marshal(message.ResponseMeta)
+	if err != nil {
+		return domain.ScenarioAgentTurnCommitResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO scenario_messages
+			(id, session_id, turn_number, role, user_content, assistant_content, response_meta, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+	`, message.ID, message.SessionID, message.TurnNumber, message.Role, message.UserContent,
+		message.AssistantContent, metaJSON, message.CreatedAt); err != nil {
+		return domain.ScenarioAgentTurnCommitResult{}, err
+	}
+	if err := updateScenarioSessionTx(ctx, tx, &next, commit.ExpectedRevision); err != nil {
+		return domain.ScenarioAgentTurnCommitResult{}, err
+	}
+
+	record := domain.ScenarioAgentTurnRecord{
+		SessionID:            commit.SessionID,
+		RequestID:            commit.RequestID,
+		RequestFingerprint:   commit.RequestFingerprint,
+		ExpectedRevision:     commit.ExpectedRevision,
+		CommittedRevision:    next.StateRevision,
+		Message:              message,
+		SessionSnapshot:      next,
+		PublicTrace:          append([]byte(nil), commit.PublicTrace...),
+		InternalVerification: append([]byte(nil), commit.InternalVerification...),
+		InternalAudit:        append([]byte(nil), commit.InternalAudit...),
+		ApprovalAudit:        append([]byte(nil), commit.ApprovalAudit...),
+		CreatedAt:            time.Now(),
+	}
+	recordJSON, err := marshal(record)
+	if err != nil {
+		return domain.ScenarioAgentTurnCommitResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO scenario_agent_turns
+			(session_id, request_id, request_fingerprint, expected_revision, committed_revision,
+			 result_snapshot, public_trace, internal_verification, internal_audit, approval_audit, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+	`, record.SessionID, record.RequestID, record.RequestFingerprint, record.ExpectedRevision,
+		record.CommittedRevision, recordJSON, nonEmptyJSON(record.PublicTrace, `[]`),
+		nonEmptyJSON(record.InternalVerification, `{}`), nonEmptyJSON(record.InternalAudit, `{}`),
+		nonEmptyJSON(record.ApprovalAudit, `[]`), record.CreatedAt); err != nil {
+		return domain.ScenarioAgentTurnCommitResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.ScenarioAgentTurnCommitResult{}, err
+	}
+	return domain.ScenarioAgentTurnCommitResult{Record: record}, nil
+}
+
 func (s *PostgresStore) ListScenarioSessionsForUser(userID string) []domain.ScenarioSession {
 	rows, err := s.pool.Query(context.Background(), `
 		SELECT id, user_id, question_id, status, current_turn, max_turns, revealed_clue_ids,
-		       user_answer, evaluation_result, score, question_snapshot, hint_level,
-		       no_new_clue_streak, COALESCE(conversation_summary, ''), started_at, last_active_at, ended_at
+		       user_answer, evaluation_result, score, question_snapshot, state_revision,
+		       learner_state, COALESCE(conversation_summary, ''), started_at, last_active_at, ended_at
 		FROM scenario_sessions
 		WHERE user_id = $1
 		ORDER BY started_at DESC
@@ -1618,10 +1746,14 @@ func (s *PostgresStore) upsertScenarioSession(ctx context.Context, session *doma
 	if err != nil {
 		return err
 	}
+	learnerStateJSON, err := marshal(session.LearnerState.Normalized())
+	if err != nil {
+		return err
+	}
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO scenario_sessions
 		    (id, user_id, question_id, status, current_turn, max_turns, revealed_clue_ids, user_answer,
-		     evaluation_result, score, question_snapshot, hint_level, no_new_clue_streak,
+		     evaluation_result, score, question_snapshot, state_revision, learner_state,
 		     conversation_summary, started_at, last_active_at, ended_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
 		ON CONFLICT (id) DO UPDATE SET
@@ -1633,14 +1765,14 @@ func (s *PostgresStore) upsertScenarioSession(ctx context.Context, session *doma
 		    evaluation_result = EXCLUDED.evaluation_result,
 		    score = EXCLUDED.score,
 		    question_snapshot = EXCLUDED.question_snapshot,
-		    hint_level = EXCLUDED.hint_level,
-		    no_new_clue_streak = EXCLUDED.no_new_clue_streak,
+		    state_revision = EXCLUDED.state_revision,
+		    learner_state = EXCLUDED.learner_state,
 		    conversation_summary = EXCLUDED.conversation_summary,
 		    last_active_at = EXCLUDED.last_active_at,
 		    ended_at = EXCLUDED.ended_at
 	`, session.ID, session.UserID, session.QuestionID, session.Status, session.CurrentTurn,
 		session.MaxTurns, session.RevealedClueIDs, emptyToNil(session.UserAnswer), evaluationJSON,
-		scoreJSON, snapshotJSON, session.HintLevel, session.NoNewClueStreak,
+		scoreJSON, snapshotJSON, session.StateRevision, learnerStateJSON,
 		session.ConversationSummary, session.StartedAt, session.LastActiveAt, session.EndedAt)
 	return err
 }
@@ -1962,10 +2094,10 @@ func scanScenarioSessionScanner(row scanner) (domain.ScenarioSession, error) {
 	var item domain.ScenarioSession
 	var userAnswer *string
 	var endedAt *time.Time
-	var evaluationJSON, scoreJSON, snapshotJSON []byte
+	var evaluationJSON, scoreJSON, snapshotJSON, learnerStateJSON []byte
 	err := row.Scan(&item.ID, &item.UserID, &item.QuestionID, &item.Status, &item.CurrentTurn,
 		&item.MaxTurns, &item.RevealedClueIDs, &userAnswer, &evaluationJSON, &scoreJSON,
-		&snapshotJSON, &item.HintLevel, &item.NoNewClueStreak, &item.ConversationSummary, &item.StartedAt,
+		&snapshotJSON, &item.StateRevision, &learnerStateJSON, &item.ConversationSummary, &item.StartedAt,
 		&item.LastActiveAt, &endedAt)
 	if err != nil {
 		return item, err
@@ -1987,10 +2119,65 @@ func scanScenarioSessionScanner(row scanner) (domain.ScenarioSession, error) {
 		}
 	}
 	_ = unmarshal(snapshotJSON, &item.QuestionSnapshot)
+	_ = unmarshal(learnerStateJSON, &item.LearnerState)
+	item.LearnerState = item.LearnerState.Normalized()
 	if item.RevealedClueIDs == nil {
 		item.RevealedClueIDs = []string{}
 	}
 	return item, nil
+}
+
+func updateScenarioSessionTx(ctx context.Context, tx pgx.Tx, session *domain.ScenarioSession, expectedRevision int) error {
+	evaluationJSON, err := marshalNullable(session.EvaluationResult)
+	if err != nil {
+		return err
+	}
+	scoreJSON, err := marshalNullable(session.Score)
+	if err != nil {
+		return err
+	}
+	snapshotJSON, err := marshal(session.QuestionSnapshot)
+	if err != nil {
+		return err
+	}
+	learnerStateJSON, err := marshal(session.LearnerState.Normalized())
+	if err != nil {
+		return err
+	}
+	command, err := tx.Exec(ctx, `
+		UPDATE scenario_sessions
+		SET status = $1,
+		    current_turn = $2,
+		    max_turns = $3,
+		    revealed_clue_ids = $4,
+		    user_answer = $5,
+		    evaluation_result = $6,
+		    score = $7,
+		    question_snapshot = $8,
+		    state_revision = $9,
+		    learner_state = $10,
+		    conversation_summary = $11,
+		    last_active_at = $12,
+		    ended_at = $13
+		WHERE id = $14 AND state_revision = $15
+	`, session.Status, session.CurrentTurn, session.MaxTurns, session.RevealedClueIDs,
+		emptyToNil(session.UserAnswer), evaluationJSON, scoreJSON, snapshotJSON, session.StateRevision,
+		learnerStateJSON, session.ConversationSummary, session.LastActiveAt, session.EndedAt,
+		session.ID, expectedRevision)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return domain.ScenarioRevisionConflictError{Expected: expectedRevision, Current: session.StateRevision}
+	}
+	return nil
+}
+
+func nonEmptyJSON(value json.RawMessage, fallback string) json.RawMessage {
+	if len(value) == 0 {
+		return json.RawMessage(fallback)
+	}
+	return value
 }
 
 func scanInterviewQuestion(row scanner) (*domain.InterviewQuestion, bool) {

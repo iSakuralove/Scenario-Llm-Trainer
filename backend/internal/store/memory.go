@@ -25,6 +25,7 @@ type MemoryStore struct {
 	Scenarios                      map[string]*domain.ScenarioQuestion
 	ScenarioSessions               map[string]*domain.ScenarioSession
 	ScenarioMessages               map[string][]domain.ScenarioMessage
+	ScenarioAgentTurns             map[string]domain.ScenarioAgentTurnRecord
 	InterviewQuestions             map[string]*domain.InterviewQuestion
 	InterviewSessions              map[string]*domain.InterviewSession
 	InterviewKnowledgeAtoms        map[string]*domain.InterviewKnowledgeAtom
@@ -50,6 +51,7 @@ func NewMemoryStore(hashPassword func(string) string) *MemoryStore {
 		Scenarios:                      map[string]*domain.ScenarioQuestion{},
 		ScenarioSessions:               map[string]*domain.ScenarioSession{},
 		ScenarioMessages:               map[string][]domain.ScenarioMessage{},
+		ScenarioAgentTurns:             map[string]domain.ScenarioAgentTurnRecord{},
 		InterviewQuestions:             map[string]*domain.InterviewQuestion{},
 		InterviewSessions:              map[string]*domain.InterviewSession{},
 		InterviewKnowledgeAtoms:        map[string]*domain.InterviewKnowledgeAtom{},
@@ -338,7 +340,7 @@ func (s *MemoryStore) CreateScenarioSession(userID, questionID string) (*domain.
 		MaxTurns:         50,
 		RevealedClueIDs:  []string{},
 		QuestionSnapshot: questionSnapshot,
-		HintLevel:        1,
+		LearnerState:     domain.ScenarioLearnerState{}.Normalized(),
 		StartedAt:        now,
 		LastActiveAt:     now,
 	}
@@ -380,6 +382,75 @@ func (s *MemoryStore) ListScenarioMessages(sessionID string) []domain.ScenarioMe
 	out := make([]domain.ScenarioMessage, len(messages))
 	copy(out, messages)
 	return out
+}
+
+func (s *MemoryStore) GetScenarioAgentTurn(sessionID, requestID string) (domain.ScenarioAgentTurnRecord, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	record, ok := s.ScenarioAgentTurns[scenarioAgentTurnKey(sessionID, requestID)]
+	if !ok {
+		return domain.ScenarioAgentTurnRecord{}, false
+	}
+	return cloneScenarioAgentTurnRecord(record), true
+}
+
+func (s *MemoryStore) CommitScenarioAgentTurn(commit domain.ScenarioAgentTurnCommit) (domain.ScenarioAgentTurnCommitResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key := scenarioAgentTurnKey(commit.SessionID, commit.RequestID)
+	if existing, ok := s.ScenarioAgentTurns[key]; ok {
+		if existing.RequestFingerprint != commit.RequestFingerprint {
+			return domain.ScenarioAgentTurnCommitResult{}, domain.ScenarioRequestConflictError{RequestID: commit.RequestID}
+		}
+		return domain.ScenarioAgentTurnCommitResult{Record: cloneScenarioAgentTurnRecord(existing), Replayed: true}, nil
+	}
+	current, ok := s.ScenarioSessions[commit.SessionID]
+	if !ok {
+		return domain.ScenarioAgentTurnCommitResult{}, errors.New("scenario session not found")
+	}
+	if current.StateRevision != commit.ExpectedRevision {
+		return domain.ScenarioAgentTurnCommitResult{}, domain.ScenarioRevisionConflictError{
+			Expected: commit.ExpectedRevision,
+			Current:  current.StateRevision,
+		}
+	}
+
+	next := cloneScenarioSession(&commit.NextSession)
+	if next == nil || next.ID != commit.SessionID {
+		return domain.ScenarioAgentTurnCommitResult{}, errors.New("scenario turn commit has invalid next session")
+	}
+	next.StateRevision = commit.ExpectedRevision + 1
+	next.LearnerState = next.LearnerState.Normalized()
+	message := commit.Message
+	if message.ID == "" {
+		message.ID = NewID()
+	}
+	if message.CreatedAt.IsZero() {
+		message.CreatedAt = time.Now()
+	}
+	s.ScenarioMessages[commit.SessionID] = append(s.ScenarioMessages[commit.SessionID], message)
+	s.ScenarioSessions[commit.SessionID] = next
+	record := domain.ScenarioAgentTurnRecord{
+		SessionID:            commit.SessionID,
+		RequestID:            commit.RequestID,
+		RequestFingerprint:   commit.RequestFingerprint,
+		ExpectedRevision:     commit.ExpectedRevision,
+		CommittedRevision:    next.StateRevision,
+		Message:              message,
+		SessionSnapshot:      *cloneScenarioSession(next),
+		PublicTrace:          append([]byte(nil), commit.PublicTrace...),
+		InternalVerification: append([]byte(nil), commit.InternalVerification...),
+		InternalAudit:        append([]byte(nil), commit.InternalAudit...),
+		ApprovalAudit:        append([]byte(nil), commit.ApprovalAudit...),
+		CreatedAt:            time.Now(),
+	}
+	s.ScenarioAgentTurns[key] = record
+	return domain.ScenarioAgentTurnCommitResult{Record: cloneScenarioAgentTurnRecord(record)}, nil
+}
+
+func scenarioAgentTurnKey(sessionID, requestID string) string {
+	return sessionID + "\x00" + requestID
 }
 
 func (s *MemoryStore) ListScenarioSessionsForUser(userID string) []domain.ScenarioSession {
@@ -1635,7 +1706,27 @@ func cloneScenarioSession(session *domain.ScenarioSession) *domain.ScenarioSessi
 	}
 	copy := *session
 	copy.RevealedClueIDs = append([]string{}, session.RevealedClueIDs...)
+	copy.LearnerState = cloneScenarioLearnerState(session.LearnerState)
 	return &copy
+}
+
+func cloneScenarioLearnerState(state domain.ScenarioLearnerState) domain.ScenarioLearnerState {
+	state.CollectedEvidence = append([]string{}, state.CollectedEvidence...)
+	state.RuledOutHypotheses = append([]string{}, state.RuledOutHypotheses...)
+	state.EstablishedFacts = append([]string{}, state.EstablishedFacts...)
+	state.ActionsTaken = append([]string{}, state.ActionsTaken...)
+	state.RecentOpenings = append([]string{}, state.RecentOpenings...)
+	return state
+}
+
+func cloneScenarioAgentTurnRecord(record domain.ScenarioAgentTurnRecord) domain.ScenarioAgentTurnRecord {
+	record.Message.ResponseMeta.PublicTrace = append([]byte(nil), record.Message.ResponseMeta.PublicTrace...)
+	record.SessionSnapshot = *cloneScenarioSession(&record.SessionSnapshot)
+	record.PublicTrace = append([]byte(nil), record.PublicTrace...)
+	record.InternalVerification = append([]byte(nil), record.InternalVerification...)
+	record.InternalAudit = append([]byte(nil), record.InternalAudit...)
+	record.ApprovalAudit = append([]byte(nil), record.ApprovalAudit...)
+	return record
 }
 
 func cloneInterviewSession(session *domain.InterviewSession) *domain.InterviewSession {
