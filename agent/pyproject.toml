@@ -1,0 +1,47 @@
+[project]
+name = "hiddenworld-agent"
+version = "1.0.0"
+description = "排查工坊 HiddenWorld Agent —— Typed Agent Runtime + 确定性教学内核"
+requires-python = ">=3.11"
+
+# 版本一律精确 pin，不用 >=。
+# PydanticAI 的 provider profile（tool_choice 降级、thinking 参数、reasoning_content
+# 转换）会随小版本变化，而这些行为正是 CT-01 快照测试的断言对象；
+# 浮动版本会让契约测试在无人改代码时突然变红或突然变绿。
+dependencies = [
+  "pydantic-ai-slim[openai]==2.31.1",
+  "pydantic==2.12.3",
+  "fastapi==0.121.2",
+  "uvicorn[standard]==0.39.0",
+  "httpx==0.28.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.4.2",
+  "pytest-asyncio==1.2.0",
+  "ruff==0.14.4",
+]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+addopts = "-m 'not live'"
+markers = [
+  "live: 需要真实模型 API Key 的 Provider Contract Test。默认不跑。",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

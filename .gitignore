@@ -59,6 +59,7 @@ __pycache__/
 venv/
 env/
 pip-wheel-metadata/
+*.egg-info/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
