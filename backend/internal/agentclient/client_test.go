@@ -83,6 +83,96 @@ func TestClientTurnSendsVersionedRequestAndDecodesTypedResult(t *testing.T) {
 	}
 }
 
+func TestClientTurnStreamForwardsTypedEventsAndReturnsFinalResult(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/turn/stream" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		var request TurnRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeAgentSSE(t, w, "turn_analysis", TurnAnalysis{
+			ContainsAnswerAttempt: true,
+			AnswerAttemptText:     request.UserMessage,
+			StudentAffect:         "engaged",
+			Confidence:            0.95,
+		})
+		writeAgentSSE(t, w, "public_trace", PublicTraceEvent{
+			Sequence: 1,
+			Kind:     "tool_started",
+			Status:   "started",
+			ToolName: "compare_answer",
+			Tool: &ToolEventPayload{
+				Name:              "compare_answer",
+				RedactedArguments: map[string]string{"answer_attempt_id": request.RequestID + ":answer"},
+			},
+		})
+		result := validTurnResult(request.RequestID, request.StateRevision)
+		result.TurnAnalysis.ContainsAnswerAttempt = true
+		result.TurnAnalysis.AnswerAttemptText = request.UserMessage
+		result.PublicTrace = []PublicTraceEvent{{
+			Sequence: 1,
+			Kind:     "tool_started",
+			Status:   "started",
+			ToolName: "compare_answer",
+			Tool: &ToolEventPayload{
+				Name:              "compare_answer",
+				RedactedArguments: map[string]string{"answer_attempt_id": request.RequestID + ":answer"},
+			},
+		}}
+		writeAgentSSE(t, w, "result", result)
+	}))
+	defer server.Close()
+
+	var analysis TurnAnalysis
+	events := []PublicTraceEvent{}
+	result, err := New(Config{BaseURL: server.URL, Timeout: time.Second}).TurnStream(
+		context.Background(),
+		minimalTurnRequest("request-stream", 4, LearnerState{}),
+		StreamCallbacks{
+			OnTurnAnalysis: func(value TurnAnalysis) error {
+				analysis = value
+				return nil
+			},
+			OnPublicTrace: func(event PublicTraceEvent) error {
+				events = append(events, event)
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !analysis.ContainsAnswerAttempt || len(events) != 1 || events[0].Kind != "tool_started" {
+		t.Fatalf("stream callbacks did not receive typed events: analysis=%+v events=%+v", analysis, events)
+	}
+	if result.RequestID != "request-stream" || result.ExpectedRevision != 4 {
+		t.Fatalf("unexpected streamed result: %+v", result)
+	}
+}
+
+func TestClientTurnStreamReturnsStructuredErrorEvent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeAgentSSE(t, w, "error", map[string]string{
+			"code": "model_not_configured", "message": "real model requests are disabled",
+		})
+	}))
+	defer server.Close()
+
+	_, err := New(Config{BaseURL: server.URL, Timeout: time.Second}).TurnStream(
+		context.Background(),
+		minimalTurnRequest("request-stream-error", 0, LearnerState{}),
+		StreamCallbacks{},
+	)
+	var httpErr HTTPError
+	if !errors.As(err, &httpErr) || httpErr.Code != "model_not_configured" {
+		t.Fatalf("expected structured stream error, got %v", err)
+	}
+}
+
 func TestClientTurnNormalizesEveryLearnerStateSlice(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload map[string]any
@@ -311,6 +401,20 @@ func writeTurnResult(t *testing.T, w http.ResponseWriter, requestID string, revi
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(validTurnResult(requestID, revision)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func writeAgentSSE(t *testing.T, w http.ResponseWriter, name string, value any) {
+	t.Helper()
+	payload, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, payload); err != nil {
+		t.Fatal(err)
+	}
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
 	}
 }
 

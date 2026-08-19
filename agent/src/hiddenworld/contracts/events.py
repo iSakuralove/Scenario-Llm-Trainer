@@ -112,6 +112,10 @@ class PublicTraceEvent(BaseModel):
 
     sequence: int
     kind: RunEventKind
+    status: RunEventStatus = "completed"
     summary: str = ""
+    text: str = ""
+    reasoning: PublicReasoningSummary | None = None
+    tool: ToolEventPayload | None = None
     tool_name: str = ""
     duration_ms: int = 0

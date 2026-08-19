@@ -1,6 +1,7 @@
 package agentclient
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -61,6 +62,11 @@ type Client struct {
 	mu           sync.Mutex
 	failures     int
 	circuitUntil time.Time
+}
+
+type StreamCallbacks struct {
+	OnTurnAnalysis func(TurnAnalysis) error
+	OnPublicTrace  func(PublicTraceEvent) error
 }
 
 func New(config Config) *Client {
@@ -182,6 +188,184 @@ func (c *Client) Turn(ctx context.Context, request TurnRequest) (TurnResult, err
 	}
 	c.recordSuccess()
 	return result, nil
+}
+
+func (c *Client) TurnStream(ctx context.Context, request TurnRequest, callbacks StreamCallbacks) (TurnResult, error) {
+	if c == nil || c.baseURL == "" {
+		return TurnResult{}, errors.New("hiddenworld agent base URL is required")
+	}
+	if c.circuitOpen(time.Now()) {
+		return TurnResult{}, ErrCircuitOpen
+	}
+	request = normalizeTurnRequest(request)
+	body, err := json.Marshal(request)
+	if err != nil {
+		return TurnResult{}, fmt.Errorf("encode agent request: %w", err)
+	}
+	requestContext, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	httpRequest, err := http.NewRequestWithContext(requestContext, http.MethodPost, c.baseURL+"/turn/stream", bytes.NewReader(body))
+	if err != nil {
+		return TurnResult{}, fmt.Errorf("build agent stream request: %w", err)
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Accept", "text/event-stream")
+	response, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		c.recordFailure()
+		if errors.Is(err, context.DeadlineExceeded) {
+			return TurnResult{}, fmt.Errorf("%w: %v", ErrRequestTimeout, err)
+		}
+		return TurnResult{}, fmt.Errorf("%w: %v", ErrAgentUnavailable, err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		httpErr := decodeHTTPError(response)
+		if response.StatusCode >= 500 {
+			c.recordFailure()
+		} else {
+			c.recordSuccess()
+		}
+		return TurnResult{}, httpErr
+	}
+
+	var result TurnResult
+	var resultSeen bool
+	var eventName string
+	var dataLines []string
+	var totalBytes int64
+	flush := func() error {
+		if eventName == "" && len(dataLines) == 0 {
+			return nil
+		}
+		data := strings.Join(dataLines, "\n")
+		dataLines = nil
+		name := eventName
+		eventName = ""
+		if len(data) == 0 {
+			return nil
+		}
+		totalBytes += int64(len(data))
+		if totalBytes > maxResponseBytes {
+			return fmt.Errorf("stream response exceeds %d bytes", maxResponseBytes)
+		}
+		switch name {
+		case "turn_analysis":
+			var analysis TurnAnalysis
+			if err := json.Unmarshal([]byte(data), &analysis); err != nil {
+				return fmt.Errorf("decode turn_analysis: %w", err)
+			}
+			if callbacks.OnTurnAnalysis != nil {
+				if err := callbacks.OnTurnAnalysis(analysis); err != nil {
+					return fmt.Errorf("turn_analysis callback: %w", err)
+				}
+			}
+		case "public_trace":
+			var trace PublicTraceEvent
+			if err := json.Unmarshal([]byte(data), &trace); err != nil {
+				return fmt.Errorf("decode public_trace: %w", err)
+			}
+			if callbacks.OnPublicTrace != nil {
+				if err := callbacks.OnPublicTrace(trace); err != nil {
+					return fmt.Errorf("public_trace callback: %w", err)
+				}
+			}
+		case "result":
+			decoder := json.NewDecoder(bytes.NewReader([]byte(data)))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&result); err != nil {
+				return fmt.Errorf("decode streamed result: %w", err)
+			}
+			if err := ensureJSONEOF(decoder); err != nil {
+				return fmt.Errorf("decode streamed result: %w", err)
+			}
+			resultSeen = true
+		case "error":
+			var payload struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}
+			if err := json.Unmarshal([]byte(data), &payload); err != nil {
+				return fmt.Errorf("decode stream error: %w", err)
+			}
+			return HTTPError{StatusCode: http.StatusBadGateway, Code: payload.Code, Message: payload.Message}
+		case "":
+			return nil
+		default:
+			return fmt.Errorf("unknown agent stream event %q", name)
+		}
+		return nil
+	}
+
+	scanner := bufio.NewScanner(response.Body)
+	scanner.Buffer(make([]byte, 4096), 1<<20)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			if err := flush(); err != nil {
+				c.recordFailure()
+				return TurnResult{}, err
+			}
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "event:"):
+			eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
+			dataLines = append(dataLines, strings.TrimPrefix(line, "data:"))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		c.recordFailure()
+		if errors.Is(err, context.DeadlineExceeded) {
+			return TurnResult{}, fmt.Errorf("%w: %v", ErrRequestTimeout, err)
+		}
+		return TurnResult{}, fmt.Errorf("read agent stream: %w", err)
+	}
+	if err := flush(); err != nil {
+		c.recordFailure()
+		return TurnResult{}, err
+	}
+	if !resultSeen {
+		c.recordFailure()
+		return TurnResult{}, errors.New("agent stream ended without result event")
+	}
+	if err := validateTurnResult(request, result); err != nil {
+		c.recordFailure()
+		return TurnResult{}, err
+	}
+	c.recordSuccess()
+	return result, nil
+}
+
+func normalizeTurnRequest(request TurnRequest) TurnRequest {
+	if request.ContractVersion == "" {
+		request.ContractVersion = ContractVersion
+	}
+	if request.Budget.DeadlineMS <= 0 {
+		request.Budget.DeadlineMS = 15000
+	}
+	if request.Budget.MaxReleases <= 0 {
+		request.Budget.MaxReleases = 3
+	}
+	request.LearnerState = normalizeLearnerState(request.LearnerState)
+	if request.Transcript == nil {
+		request.Transcript = []Turn{}
+	}
+	return request
+}
+
+func validateTurnResult(request TurnRequest, result TurnResult) error {
+	if result.ContractVersion != ContractVersion {
+		return ContractVersionError{Received: result.ContractVersion}
+	}
+	if result.RequestID != request.RequestID {
+		return errors.New("agent response request_id mismatch")
+	}
+	if result.ExpectedRevision != request.StateRevision {
+		return errors.New("agent response revision mismatch")
+	}
+	return nil
 }
 
 func normalizeLearnerState(state LearnerState) LearnerState {

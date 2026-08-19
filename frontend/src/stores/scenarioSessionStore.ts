@@ -1,15 +1,12 @@
 import { create } from 'zustand'
-import { api } from '../api/client'
+import { api, ScenarioRunFailure } from '../api/client'
 import type { ScenarioMessage, ScenarioQuestion, ScenarioSession } from '../types'
+import type { ScenarioRunEvent } from '../types/agentRun'
 
-interface ScenarioStreamingTurn {
+interface ScenarioActiveRun {
+  requestId: string
   userContent: string
-  assistantContent: string
-}
-
-interface ScenarioAgentStage {
-  step: string
-  message: string
+  events: ScenarioRunEvent[]
 }
 
 interface ScenarioSessionState {
@@ -21,9 +18,8 @@ interface ScenarioSessionState {
   isSending: boolean
   isQuitting: boolean
   sendError: string
-  streamingTurn: ScenarioStreamingTurn | null
-  agentStages: ScenarioAgentStage[]
-  completedAgentStages: Record<string, ScenarioAgentStage[]>
+  activeRun: ScenarioActiveRun | null
+  completedRuns: Record<string, ScenarioRunEvent[]>
   hydrate: (token: string, sessionId: string, optimistic?: { question?: ScenarioQuestion | null; session?: ScenarioSession | null }) => Promise<void>
   sendMessage: (token: string, sessionId: string, content: string) => Promise<void>
   quit: (token: string, sessionId: string) => Promise<{ status: string; session: ScenarioSession }>
@@ -40,13 +36,12 @@ function emptyState() {
     isSending: false,
     isQuitting: false,
     sendError: '',
-    streamingTurn: null as ScenarioStreamingTurn | null,
-    agentStages: [] as ScenarioAgentStage[],
-    completedAgentStages: {} as Record<string, ScenarioAgentStage[]>,
+    activeRun: null as ScenarioActiveRun | null,
+    completedRuns: {} as Record<string, ScenarioRunEvent[]>,
   }
 }
 
-export const useScenarioSessionStore = create<ScenarioSessionState>((set) => ({
+export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) => ({
   ...emptyState(),
 
   hydrate: async (token, sessionId, optimistic) => {
@@ -66,6 +61,11 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set) => ({
         question: detail.session.question_snapshot,
         session: detail.session,
         messages: detail.messages ?? [],
+        completedRuns: Object.fromEntries(
+          (detail.messages ?? [])
+            .filter((message) => (message.response_meta.run_events?.length ?? 0) > 0)
+            .map((message) => [message.id, normalizeRunEvents(message.response_meta.run_events ?? [])]),
+        ),
         isLoading: false,
       }))
     } catch (err) {
@@ -86,55 +86,56 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set) => ({
       ...state,
       isSending: true,
       sendError: '',
-      streamingTurn: { userContent, assistantContent: '' },
-      agentStages: [],
+      activeRun: { requestId: createRequestId(), userContent, events: [] },
     }))
 
-    const stagesForTurn: ScenarioAgentStage[] = []
+    const requestId = get().activeRun?.requestId ?? createRequestId()
+    const stateRevision = get().session?.state_revision ?? 0
+    const onRunEvent = (event: ScenarioRunEvent) => {
+      set((state) => ({
+        ...state,
+        activeRun: state.activeRun?.requestId === requestId
+          ? { ...state.activeRun, events: appendRunEvent(state.activeRun.events, event) }
+          : state.activeRun,
+      }))
+    }
     try {
-      const result = await api.sendScenarioMessageStream(
-        token,
-        sessionId,
-        userContent,
-        (chunk) => set((state) => ({
-          ...state,
-          streamingTurn: state.streamingTurn
-            ? { ...state.streamingTurn, assistantContent: state.streamingTurn.assistantContent + chunk }
-            : state.streamingTurn,
-        })),
-        (stage) => {
-          if (!stage.message && !stage.step) return
-          const nextStage = { step: stage.step, message: stage.message }
-          const existingIndex = stagesForTurn.findIndex((item) => item.step === nextStage.step)
-          if (existingIndex >= 0) {
-            stagesForTurn[existingIndex] = nextStage
-          } else {
-            stagesForTurn.push(nextStage)
-          }
-          set((state) => ({
-            ...state,
-            agentStages: [...state.agentStages.filter((item) => item.step !== stage.step), nextStage],
-          }))
-        },
-      )
+      let result
+      try {
+        result = await api.sendScenarioMessageStream(
+          token,
+          sessionId,
+          { content: userContent, requestId, stateRevision },
+          onRunEvent,
+        )
+      } catch (err) {
+        if (err instanceof ScenarioRunFailure) throw err
+        const afterSequence = latestSequence(get().activeRun?.events ?? [])
+        result = await api.sendScenarioMessageStream(
+          token,
+          sessionId,
+          { content: userContent, requestId, stateRevision, afterSequence },
+          onRunEvent,
+        )
+      }
 
       set((state) => ({
         ...state,
         session: result.session,
         messages: [...state.messages, result.message],
-        streamingTurn: null,
-        agentStages: [],
+        activeRun: null,
         isSending: false,
-        completedAgentStages: stagesForTurn.length > 0
-          ? { ...state.completedAgentStages, [result.message.id]: stagesForTurn }
-          : state.completedAgentStages,
+        completedRuns: {
+          ...state.completedRuns,
+          [result.message.id]: normalizeRunEvents(
+            result.run_events ?? result.message.response_meta.run_events ?? state.activeRun?.events ?? [],
+          ),
+        },
       }))
     } catch (err) {
       set((state) => ({
         ...state,
         isSending: false,
-        streamingTurn: null,
-        agentStages: [],
         sendError: err instanceof Error ? err.message : '消息发送失败',
       }))
       throw err
@@ -163,3 +164,24 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set) => ({
 
   clear: () => set(emptyState()),
 }))
+
+function createRequestId() {
+  return globalThis.crypto?.randomUUID?.() ?? `scenario-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function appendRunEvent(events: ScenarioRunEvent[], event: ScenarioRunEvent) {
+  return normalizeRunEvents([
+    ...events.filter((item) => !(item.request_id === event.request_id && item.sequence === event.sequence)),
+    event,
+  ])
+}
+
+function normalizeRunEvents(events: ScenarioRunEvent[]) {
+  const byKey = new Map<string, ScenarioRunEvent>()
+  for (const event of events) byKey.set(`${event.request_id}:${event.sequence}`, event)
+  return [...byKey.values()].sort((left, right) => left.sequence - right.sequence)
+}
+
+function latestSequence(events: ScenarioRunEvent[]) {
+  return events.reduce((latest, event) => Math.max(latest, event.sequence), 0)
+}

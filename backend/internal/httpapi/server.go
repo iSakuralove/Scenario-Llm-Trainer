@@ -38,6 +38,8 @@ type Server struct {
 	stt                    STTProvider
 	embedding              ai.EmbeddingClient
 	scenarioAgent          scenarioAgentClient
+	scenarioTurnMu         sync.Mutex
+	scenarioTurnFlights    map[string]*scenarioTurnFlight
 	assets                 AssetStorage
 	jobMu                  sync.Mutex
 	jobStop                map[string]context.CancelFunc
@@ -101,7 +103,8 @@ func NewServer(dataStore store.Store, authManager *auth.Manager, limiter ratelim
 			BaseURL: envOrDefault("AGENT_BASE_URL", "http://127.0.0.1:8091"),
 			Timeout: 20 * time.Second,
 		}),
-		jobStop: map[string]context.CancelFunc{},
+		scenarioTurnFlights: map[string]*scenarioTurnFlight{},
+		jobStop:             map[string]context.CancelFunc{},
 	}
 	server.applyPromptOverrides()
 	return server

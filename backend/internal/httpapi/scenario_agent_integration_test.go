@@ -55,8 +55,8 @@ func TestScenarioMessageCommitsApprovedAgentTurnAndKeepsPrivateAuditPrivate(t *t
 				{Kind: "record_opening", Text: reply},
 			},
 			PublicTrace: []agentclient.PublicTraceEvent{
-				{Sequence: 1, Kind: "reasoning_summary_completed", Summary: "已识别公开排查动作。"},
-				{Sequence: 2, Kind: "guard_passed", Summary: "回复已通过安全校验。"},
+				{Sequence: 1, Kind: "reasoning_summary_completed", Status: "completed", Summary: "已识别公开排查动作。"},
+				{Sequence: 2, Kind: "guard_passed", Status: "completed", Summary: "回复已通过安全校验。"},
 			},
 			InternalVerification: agentclient.VerificationResult{
 				Relation:         "target",
@@ -128,6 +128,141 @@ func TestScenarioMessageReplaysSameRequestWithoutCallingAgentOrWritingAgain(t *t
 	}
 	if messages := dataStore.ListScenarioMessages(sessionID); len(messages) != 1 {
 		t.Fatalf("replay wrote duplicate messages: %+v", messages)
+	}
+}
+
+func TestScenarioMessageCoalescesConcurrentSameRequestBeforeAgentCommit(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	client := scenarioAgentClientFunc(func(_ context.Context, request agentclient.TurnRequest) (agentclient.TurnResult, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return noProgressTurnResult(request, "并发重连只生成一次。"), nil
+	})
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour), client).Handler()
+	token, sessionID := createScenarioSessionForAgentTest(t, handler, dataStore)
+	payload := map[string]any{"content": "同一轮并发重连", "request_id": "request-in-flight", "state_revision": 0}
+
+	type response struct {
+		status int
+		env    testEnvelope
+		err    error
+	}
+	responses := make(chan response, 2)
+	rawBody, _ := json.Marshal(payload)
+	request := func() {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/scenarios/sessions/"+sessionID+"/messages", strings.NewReader(string(rawBody)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+token)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, req)
+		var env testEnvelope
+		err := json.Unmarshal(recorder.Body.Bytes(), &env)
+		responses <- response{status: recorder.Code, env: env, err: err}
+	}
+	go request()
+	<-started
+	go request()
+	time.Sleep(40 * time.Millisecond)
+	if calls.Load() != 1 {
+		t.Fatalf("concurrent retry called Python Agent more than once before release: %d", calls.Load())
+	}
+	close(release)
+
+	messageIDs := make([]string, 0, 2)
+	for index := 0; index < 2; index++ {
+		result := <-responses
+		if result.err != nil {
+			t.Fatalf("request %d decode response: %v", index+1, result.err)
+		}
+		if result.status != http.StatusOK {
+			t.Fatalf("request %d status=%d message=%s", index+1, result.status, result.env.Message)
+		}
+		var payload struct {
+			Message domain.ScenarioMessage `json:"message"`
+		}
+		mustDecodeData(t, result.env, &payload)
+		messageIDs = append(messageIDs, payload.Message.ID)
+	}
+	if calls.Load() != 1 || messageIDs[0] == "" || messageIDs[0] != messageIDs[1] {
+		t.Fatalf("expected one in-flight execution and exact replay, calls=%d ids=%v", calls.Load(), messageIDs)
+	}
+	if messages := dataStore.ListScenarioMessages(sessionID); len(messages) != 1 {
+		t.Fatalf("concurrent retry wrote duplicate messages: %+v", messages)
+	}
+}
+
+func TestScenarioMessageReconnectAfterClientCancellationReusesInFlightExecution(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	client := scenarioAgentClientFunc(func(ctx context.Context, request agentclient.TurnRequest) (agentclient.TurnResult, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		select {
+		case <-ctx.Done():
+			return agentclient.TurnResult{}, ctx.Err()
+		case <-release:
+			return noProgressTurnResult(request, "取消连接后仍只生成一次。"), nil
+		}
+	})
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour), client).Handler()
+	token, sessionID := createScenarioSessionForAgentTest(t, handler, dataStore)
+	rawBody, _ := json.Marshal(map[string]any{
+		"content": "断线后重连", "request_id": "request-cancel-reconnect", "state_revision": 0,
+	})
+
+	type response struct {
+		status int
+		env    testEnvelope
+		err    error
+	}
+	responses := make(chan response, 2)
+	request := func(ctx context.Context) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/scenarios/sessions/"+sessionID+"/messages", strings.NewReader(string(rawBody))).WithContext(ctx)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+token)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, req)
+		var env testEnvelope
+		err := json.Unmarshal(recorder.Body.Bytes(), &env)
+		responses <- response{status: recorder.Code, env: env, err: err}
+	}
+	firstContext, cancelFirst := context.WithCancel(context.Background())
+	go request(firstContext)
+	<-started
+	cancelFirst()
+	time.Sleep(20 * time.Millisecond)
+	go request(context.Background())
+	time.Sleep(40 * time.Millisecond)
+	if calls.Load() != 1 {
+		t.Fatalf("client cancellation caused duplicate Python Agent execution: %d", calls.Load())
+	}
+	close(release)
+
+	messageIDs := make([]string, 0, 2)
+	for index := 0; index < 2; index++ {
+		result := <-responses
+		if result.err != nil {
+			t.Fatalf("request %d decode response: %v", index+1, result.err)
+		}
+		if result.status != http.StatusOK {
+			t.Fatalf("request %d status=%d message=%s", index+1, result.status, result.env.Message)
+		}
+		var payload struct {
+			Message domain.ScenarioMessage `json:"message"`
+		}
+		mustDecodeData(t, result.env, &payload)
+		messageIDs = append(messageIDs, payload.Message.ID)
+	}
+	if calls.Load() != 1 || messageIDs[0] == "" || messageIDs[0] != messageIDs[1] {
+		t.Fatalf("expected cancellation-safe in-flight replay, calls=%d ids=%v", calls.Load(), messageIDs)
 	}
 }
 
@@ -203,6 +338,177 @@ func TestScenarioMessageDoesNotFallbackWhenPythonAgentIsUnavailable(t *testing.T
 	}
 }
 
+func TestScenarioMessageReconnectReplaysOnlyEventsAfterRequestedSequence(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	var calls atomic.Int32
+	client := scenarioAgentClientFunc(func(_ context.Context, request agentclient.TurnRequest) (agentclient.TurnResult, error) {
+		calls.Add(1)
+		return noProgressTurnResult(request, "断线后仍是同一条回复。"), nil
+	})
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour), client).Handler()
+	token, sessionID := createScenarioSessionForAgentTest(t, handler, dataStore)
+	payload := map[string]any{
+		"content": "测试重连", "request_id": "request-reconnect", "state_revision": 0,
+	}
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/scenarios/sessions/"+sessionID+"/messages", token, payload)
+	if status != http.StatusOK {
+		t.Fatalf("initial turn failed: %d %s", status, env.Message)
+	}
+
+	payload["after_sequence"] = 5
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/scenarios/sessions/"+sessionID+"/messages", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Authorization", "Bearer "+token)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if calls.Load() != 1 {
+		t.Fatalf("reconnect must replay committed result without a second Agent call, got %d", calls.Load())
+	}
+	for _, event := range collectScenarioRunEvents(t, recorder.Body.String()) {
+		if event.Sequence <= 5 {
+			t.Fatalf("reconnect repeated acknowledged event: %+v", event)
+		}
+	}
+}
+
+func TestScenarioRunEventsExposeOnlyPublicCompareAnswerResult(t *testing.T) {
+	result := agentclient.TurnResult{
+		PublicTrace: []agentclient.PublicTraceEvent{
+			{
+				Sequence: 1,
+				Kind:     "tool_result",
+				Status:   "completed",
+				Tool: &agentclient.ToolEventPayload{
+					Name:              "compare_answer",
+					RedactedArguments: map[string]string{"answer_attempt_id": "request-tool:answer"},
+					DurationMS:        12,
+					Result: &agentclient.PublicAnswerComparison{
+						Tool:          "compare_answer",
+						Status:        "completed",
+						UserPoints:    []string{"索引可能缺失"},
+						SupportStatus: "needs_more_evidence",
+						NextAction:    "继续补充直接观察。",
+					},
+				},
+			},
+		},
+	}
+	events := buildScenarioRunEvents("request-tool", "我认为是索引问题", result, "继续验证。")
+	raw, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, forbidden := range []string{"claim_alignment", "completion_allowed", "missing_evidence", `"correct"`, `"target"`} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("public tool event leaked %q: %s", forbidden, text)
+		}
+	}
+	if !strings.Contains(text, `"name":"compare_answer"`) || !strings.Contains(text, `"support_status":"needs_more_evidence"`) {
+		t.Fatalf("missing public compare_answer payload: %s", text)
+	}
+}
+
+func TestScenarioMessageRejectsPythonReplyDeltaInPublicTrace(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	client := scenarioAgentClientFunc(func(_ context.Context, request agentclient.TurnRequest) (agentclient.TurnResult, error) {
+		result := noProgressTurnResult(request, "安全的最终回复。")
+		result.PublicTrace = []agentclient.PublicTraceEvent{
+			{Sequence: 1, Kind: "reply_delta", Status: "running", Text: "UNSAFE_TRACE_REPLY"},
+			{Sequence: 2, Kind: "guard_passed", Status: "completed", Summary: "回复已通过安全校验。"},
+		}
+		return result, nil
+	})
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour), client).Handler()
+	token, sessionID := createScenarioSessionForAgentTest(t, handler, dataStore)
+	body, _ := json.Marshal(map[string]any{
+		"content": "继续排查", "request_id": "request-trace-reply", "state_revision": 0,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/scenarios/sessions/"+sessionID+"/messages", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Authorization", "Bearer "+token)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	raw := recorder.Body.String()
+	if strings.Contains(raw, "UNSAFE_TRACE_REPLY") || !strings.Contains(raw, "public_trace_rejected") {
+		t.Fatalf("unsafe Python trace must be rejected before publication: %s", raw)
+	}
+	if len(dataStore.ListScenarioMessages(sessionID)) != 0 {
+		t.Fatal("rejected public trace must not write a scenario message")
+	}
+}
+
+func TestScenarioMessageRejectsFabricatedToolTraceOnOrdinaryTurn(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	client := scenarioAgentClientFunc(func(_ context.Context, request agentclient.TurnRequest) (agentclient.TurnResult, error) {
+		result := noProgressTurnResult(request, "普通轮回复。")
+		result.PublicTrace = []agentclient.PublicTraceEvent{
+			{
+				Sequence: 1,
+				Kind:     "tool_started",
+				Status:   "started",
+				ToolName: "compare_answer",
+				Tool: &agentclient.ToolEventPayload{
+					Name:              "compare_answer",
+					RedactedArguments: map[string]string{"answer_attempt_id": request.RequestID + ":answer"},
+				},
+			},
+			{Sequence: 2, Kind: "guard_passed", Status: "completed", Summary: "回复已通过安全校验。"},
+		}
+		return result, nil
+	})
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour), client).Handler()
+	token, sessionID := createScenarioSessionForAgentTest(t, handler, dataStore)
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/scenarios/sessions/"+sessionID+"/messages", token, map[string]any{
+		"content": "先看看公开现象", "request_id": "request-fake-tool", "state_revision": 0,
+	})
+	if status != http.StatusBadGateway || !strings.Contains(string(env.Data), "public_trace_rejected") {
+		t.Fatalf("ordinary turn must reject fabricated tool trace, status=%d env=%+v", status, env)
+	}
+	if len(dataStore.ListScenarioMessages(sessionID)) != 0 {
+		t.Fatal("fabricated tool trace must not write a scenario message")
+	}
+}
+
+func TestValidateScenarioPublicTraceAcceptsBoundCompareAnswerLifecycle(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	question := dataStore.ListScenarios("database", "", "")[0]
+	if question.Content.HiddenWorld == nil {
+		t.Fatal("fixed HiddenWorld question is missing")
+	}
+	requestID := "request-valid-tool"
+	userContent := "我认为目前的证据还需要继续验证索引问题"
+	payload := &agentclient.ToolEventPayload{
+		Name:              "compare_answer",
+		RedactedArguments: map[string]string{"answer_attempt_id": requestID + ":answer"},
+		DurationMS:        12,
+		Result: &agentclient.PublicAnswerComparison{
+			Tool:          "compare_answer",
+			Status:        "completed",
+			UserPoints:    []string{"我认为目前的证据还需要继续验证索引问题"},
+			SupportStatus: "needs_more_evidence",
+			NextAction:    "继续补充能支撑这个结论的直接观察。",
+		},
+	}
+	result := agentclient.TurnResult{
+		TurnAnalysis: agentclient.TurnAnalysis{ContainsAnswerAttempt: true, Confidence: 0.95},
+		PublicTrace: []agentclient.PublicTraceEvent{
+			{Sequence: 1, Kind: "tool_started", Status: "started", ToolName: "compare_answer", Tool: &agentclient.ToolEventPayload{Name: payload.Name, RedactedArguments: payload.RedactedArguments}},
+			{Sequence: 2, Kind: "tool_result", Status: "completed", ToolName: "compare_answer", DurationMS: 12, Tool: payload},
+			{Sequence: 3, Kind: "tool_completed", Status: "completed", ToolName: "compare_answer", DurationMS: 12, Tool: payload},
+			{Sequence: 4, Kind: "guard_passed", Status: "completed", Summary: "回复已通过安全校验。"},
+		},
+	}
+	if err := validateScenarioPublicTrace(requestID, userContent, result, question.Content.HiddenWorld, domain.ScenarioLearnerState{}); err != nil {
+		t.Fatalf("valid compare_answer lifecycle was rejected: %v", err)
+	}
+}
+
 func createScenarioSessionForAgentTest(t *testing.T, handler http.Handler, dataStore *store.MemoryStore) (string, string) {
 	t.Helper()
 	token := loginToken(t, handler, "demo", "demo123")
@@ -249,9 +555,29 @@ func noProgressTurnResult(request agentclient.TurnRequest, reply string) agentcl
 			{Kind: "record_opening", Text: reply},
 		},
 		PublicTrace: []agentclient.PublicTraceEvent{
-			{Sequence: 1, Kind: "guard_passed", Summary: "回复已通过安全校验。"},
+			{Sequence: 1, Kind: "guard_passed", Status: "completed", Summary: "回复已通过安全校验。"},
 		},
 		InternalVerification: agentclient.VerificationResult{Relation: "unknown", RuledOutThisTurn: []string{}},
 		InternalAudit:        agentclient.AuditTrace{ReasonCodes: []string{}, RulesVersion: agentclient.ContractVersion},
 	}
+}
+
+func collectScenarioRunEvents(t *testing.T, raw string) []domain.ScenarioRunEvent {
+	t.Helper()
+	events := []domain.ScenarioRunEvent{}
+	for _, block := range strings.Split(raw, "\n\n") {
+		if !strings.HasPrefix(strings.TrimSpace(block), "event: run_event") {
+			continue
+		}
+		_, data, ok := strings.Cut(block, "data: ")
+		if !ok {
+			continue
+		}
+		var event domain.ScenarioRunEvent
+		if err := json.Unmarshal([]byte(strings.TrimSpace(data)), &event); err != nil {
+			t.Fatalf("decode run event: %v", err)
+		}
+		events = append(events, event)
+	}
+	return events
 }

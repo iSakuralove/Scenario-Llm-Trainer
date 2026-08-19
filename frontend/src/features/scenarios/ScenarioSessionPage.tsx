@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
 import type { CSSProperties, PointerEvent } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { Bot, CheckCircle2, ChevronDown, ChevronUp, FileText, Send } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronUp, FileText, Send } from 'lucide-react'
 import { api } from '../../api/client'
 import type { ScenarioQuestion } from '../../types'
 import { EmptyState, Loading } from '../../components/common'
@@ -10,6 +10,7 @@ import { MermaidLoading } from '../../components/common/MermaidLoading'
 import { useToken } from '../../lib/auth'
 import { redactSensitiveText } from '../../lib/redaction'
 import { useScenarioSessionStore } from '../../stores/scenarioSessionStore'
+import { AgentRun } from './agentrun'
 import './ScenarioSessionPage.css'
 
 const MermaidRenderer = lazy(() => import('../../components/common/MermaidRenderer').then((module) => ({ default: module.MermaidRenderer })))
@@ -32,9 +33,8 @@ export function ScenarioSessionPage() {
   const isSending = useScenarioSessionStore((store) => store.isSending)
   const isQuitting = useScenarioSessionStore((store) => store.isQuitting)
   const sendError = useScenarioSessionStore((store) => store.sendError)
-  const streamingTurn = useScenarioSessionStore((store) => store.streamingTurn)
-  const agentStages = useScenarioSessionStore((store) => store.agentStages)
-  const completedAgentStages = useScenarioSessionStore((store) => store.completedAgentStages)
+  const activeRun = useScenarioSessionStore((store) => store.activeRun)
+  const completedRuns = useScenarioSessionStore((store) => store.completedRuns)
   const hydrateSession = useScenarioSessionStore((store) => store.hydrate)
   const sendMessage = useScenarioSessionStore((store) => store.sendMessage)
   const quitScenarioSession = useScenarioSessionStore((store) => store.quit)
@@ -103,7 +103,7 @@ export function ScenarioSessionPage() {
     current_turn: 0,
     max_turns: 50,
     revealed_clue_ids: [],
-    hint_level: 1,
+    state_revision: 0,
     status: 'active',
   }
   const snapshotText = (value = '') => question.is_sanitized ? redactSensitiveText(value) : value
@@ -185,8 +185,8 @@ export function ScenarioSessionPage() {
           </Suspense>
           <div className="clue-status">
             <span>轮次 {activeSession.current_turn}/{activeSession.max_turns}</span>
-            <span>提示等级 {activeSession.hint_level}</span>
-            <span>已揭示 {(activeSession.revealed_clue_ids ?? []).length}</span>
+            <span>状态版本 {activeSession.state_revision}</span>
+            <span>已验证观察 {(activeSession.revealed_clue_ids ?? []).length}</span>
           </div>
         </div>
       </aside>
@@ -204,7 +204,7 @@ export function ScenarioSessionPage() {
             <div className="chat-title-line">
               <strong>渐进式排查会话</strong>
             </div>
-            <span>AI 只按 Reveal Strategy 释放线索，不直接确认根因。</span>
+            <span>导师只依据已公开观察引导，不展示隐藏答案或原始思维链。</span>
           </div>
           <button className="ghost-button compact" type="button" onClick={() => void quitSession()} disabled={isQuitting}>
             {isQuitting ? '放弃中' : '放弃会话'}
@@ -212,43 +212,19 @@ export function ScenarioSessionPage() {
         </div>
         <div className="message-thread" data-testid="session-message-thread">
           {messages.map((message) => (
-            <div className="turn" key={message.id}>
-              <div className="user-msg">{message.user_content}</div>
-              <div className={`assistant-msg ${message.response_meta.is_distractor ? 'distractor' : ''}`}>
-                <Bot size={18} />
-                <span>
-                  {message.assistant_content}
-                  {(completedAgentStages[message.id] ?? []).length > 0 && (
-                    <span className="agent-stage-list completed" data-testid="agent-stage-list">
-                      {completedAgentStages[message.id].map((stage) => (
-                        <span key={stage.step || stage.message}>{stage.message || agentStageLabel(stage.step)}</span>
-                      ))}
-                    </span>
-                  )}
-                  {message.response_meta.agent_trace && (
-                    <small className="agent-trace-summary">
-                      Agent 已执行 {message.response_meta.agent_trace.tool_count} 个安全步骤
-                    </small>
-                  )}
-                </span>
-              </div>
-            </div>
+            <AgentRun
+              key={message.id}
+              events={completedRuns[message.id] ?? message.response_meta.run_events ?? []}
+              fallbackUser={message.user_content}
+              fallbackReply={message.assistant_content}
+            />
           ))}
-          {streamingTurn && (
-            <div className="turn">
-              <div className="user-msg">{streamingTurn.userContent}</div>
-              {agentStages.length > 0 && (
-                <div className="agent-stage-list" data-testid="agent-stage-list" aria-live="polite">
-                  {agentStages.map((stage) => (
-                    <span key={stage.step || stage.message}>{stage.message || agentStageLabel(stage.step)}</span>
-                  ))}
-                </div>
-              )}
-              <div className="assistant-msg streaming">
-                <Bot size={18} />
-                <span>{streamingTurn.assistantContent || 'Agent 正在组织已允许释放的线索...'}</span>
-              </div>
-            </div>
+          {activeRun && (
+            <AgentRun
+              events={activeRun.events}
+              fallbackUser={activeRun.userContent}
+              active={isSending}
+            />
           )}
         </div>
         {sendError && <div className="inline-error chat-error">{sendError}</div>}
@@ -336,23 +312,6 @@ export function ScenarioSessionPage() {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
-}
-
-function agentStageLabel(step: string) {
-  switch (step) {
-    case 'agent_intent':
-      return '正在分析你的排查意图'
-    case 'agent_policy':
-      return '正在检查是否会泄露根因'
-    case 'agent_clue':
-      return '正在匹配可释放线索'
-    case 'agent_hint':
-      return '正在判断是否需要升级提示'
-    case 'agent_reply':
-      return '正在生成教学化回复'
-    default:
-      return 'Agent 正在处理'
-  }
 }
 
 function getDiagramStatusMessage(status?: string) {

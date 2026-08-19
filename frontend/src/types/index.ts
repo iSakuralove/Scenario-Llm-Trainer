@@ -1,3 +1,5 @@
+import type { ScenarioRunEvent } from './agentRun'
+
 export interface ApiEnvelope<T> {
   code: number
   message: string
@@ -143,14 +145,12 @@ export interface ScenarioSession {
   status: string
   current_turn: number
   max_turns: number
-  revealed_clue_ids: string[]
+  revealed_clue_ids?: string[]
   user_answer?: string
   evaluation_result?: ScenarioEvaluation
   score?: ScenarioScore
   question_snapshot: ScenarioQuestion
-  hint_level: number
-  no_new_clue_streak: number
-  conversation_summary?: string
+  state_revision: number
   started_at: string
   last_active_at: string
 }
@@ -168,24 +168,9 @@ export interface ScenarioMessage {
 
 export interface ResponseMeta {
   response_type: string
-  revealed_clue_id?: string
-  hint_level: number
-  is_answer_leak: boolean
-  is_distractor: boolean
-  is_sanitized: boolean
-  provider?: string
-  validated?: boolean
-  fallback_used?: boolean
-  safety_rewritten?: boolean
-  semantic_decision?: string
-  input_quality?: string
-  agent_intent?: string
-  root_similarity?: number
-  clue_similarity?: number
-  matched_clue_id?: string
-  embedding_model?: string
-  embedding_fallback_used?: boolean
-  agent_trace?: AgentTrace
+  request_id?: string
+  revision: number
+  run_events?: ScenarioRunEvent[]
 }
 
 export interface ScenarioSessionDetailResponse {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
@@ -21,7 +22,9 @@ from hiddenworld.contracts import (
     Observation,
     Proposal,
     PublicAnswerComparison,
+    PublicReasoningSummary,
     PublicTraceEvent,
+    ToolEventPayload,
     VerificationResult,
 )
 from hiddenworld.kernel import (
@@ -40,6 +43,10 @@ class TurnDeadlineExceeded(TimeoutError):
     """单轮总 deadline 已耗尽；不得在后台继续执行或重放工具。"""
 
 
+PublicTraceCallback = Callable[[PublicTraceEvent], Awaitable[None]]
+TurnAnalysisCallback = Callable[[Any], Awaitable[None]]
+
+
 @dataclass
 class HiddenWorldRuntime:
     """无状态主链；Go 仍负责 revision、幂等审批和持久化。"""
@@ -47,16 +54,34 @@ class HiddenWorldRuntime:
     interpreter: Any
     mentor: Any
 
-    async def run_turn(self, request: AgentTurnRequest) -> AgentTurnResult:
+    async def run_turn(
+        self,
+        request: AgentTurnRequest,
+        *,
+        on_turn_analysis: TurnAnalysisCallback | None = None,
+        on_public_trace: PublicTraceCallback | None = None,
+    ) -> AgentTurnResult:
         request.require_contract_version()
         timeout_seconds = max(request.budget.deadline_ms, 1) / 1000
         try:
-            return await asyncio.wait_for(self._run_turn(request), timeout=timeout_seconds)
+            return await asyncio.wait_for(
+                self._run_turn(
+                    request,
+                    on_turn_analysis=on_turn_analysis,
+                    on_public_trace=on_public_trace,
+                ),
+                timeout=timeout_seconds,
+            )
         except TimeoutError as exc:
             raise TurnDeadlineExceeded("turn deadline exceeded") from exc
 
-    async def _run_turn(self, request: AgentTurnRequest) -> AgentTurnResult:
-
+    async def _run_turn(
+        self,
+        request: AgentTurnRequest,
+        *,
+        on_turn_analysis: TurnAnalysisCallback | None,
+        on_public_trace: PublicTraceCallback | None,
+    ) -> AgentTurnResult:
         interpreter_started = perf_counter()
         interpreter_deps = InterpreterDeps(
             public_scenario=request.public_scenario,
@@ -72,6 +97,8 @@ class HiddenWorldRuntime:
         )
         interpreter_ms = _elapsed_ms(interpreter_started)
         analysis = interpreter_result.output
+        if on_turn_analysis is not None:
+            await on_turn_analysis(analysis)
 
         actions = [] if analysis.is_low_confidence() or analysis.is_noise else analysis.actions
         approved_releases = ClueGate().approve(
@@ -104,6 +131,8 @@ class HiddenWorldRuntime:
 
         answer_internal = None
         answer_public: PublicAnswerComparison | None = None
+        answer_attempt_id = ""
+        compare_answer_ms = 0
         if analysis.contains_answer_attempt and not analysis.is_low_confidence():
             attempt = AnswerAttempt(
                 answer_attempt_id=f"{request.request_id}:answer",
@@ -112,6 +141,7 @@ class HiddenWorldRuntime:
                 revision=request.state_revision,
                 text=analysis.answer_attempt_text,
             )
+            answer_attempt_id = attempt.answer_attempt_id
             tool_runtime = CompareAnswerRuntime(
                 request_id=request.request_id,
                 session_id=request.session_id,
@@ -122,7 +152,9 @@ class HiddenWorldRuntime:
                 analysis=analysis,
                 attempts={attempt.answer_attempt_id: attempt},
             )
+            compare_started = perf_counter()
             answer_public = tool_runtime.execute(attempt.answer_attempt_id)
+            compare_answer_ms = _elapsed_ms(compare_started)
             answer_internal = tool_runtime.internal_result
 
         ruled_out_this_turn = _new_items(
@@ -147,6 +179,14 @@ class HiddenWorldRuntime:
             contradictions=(answer_internal.contradictions if answer_internal is not None else []),
         )
 
+        public_trace = _public_trace_before_mentor(
+            analysis_contains_answer=analysis.contains_answer_attempt,
+            answer_attempt_id=answer_attempt_id,
+            answer_public=answer_public,
+            compare_answer_ms=compare_answer_ms,
+        )
+        await _emit_public_trace(on_public_trace, public_trace)
+
         mentor_started = perf_counter()
         mentor_deps = MentorDeps(
             public_scenario=request.public_scenario,
@@ -169,6 +209,9 @@ class HiddenWorldRuntime:
         )
         mentor_ms = _elapsed_ms(mentor_started)
         mentor_action = mentor_result.output
+        final_trace = _public_trace_after_mentor(start_sequence=len(public_trace) + 1)
+        public_trace.extend(final_trace)
+        await _emit_public_trace(on_public_trace, final_trace)
 
         return AgentTurnResult(
             request_id=request.request_id,
@@ -180,10 +223,7 @@ class HiddenWorldRuntime:
                 projected_state,
                 reply=mentor_action.reply,
             ),
-            public_trace=_public_trace(
-                analysis_contains_answer=analysis.contains_answer_attempt,
-                compared=answer_public is not None,
-            ),
+            public_trace=public_trace,
             internal_verification=verification,
             internal_audit=AuditTrace(
                 reason_codes=_reason_codes(analysis, observations, answer_public),
@@ -283,9 +323,7 @@ def _state_proposals(before: LearnerState, after: LearnerState, *, reply: str) -
         for item in _new_items(before.ruled_out_hypotheses, after.ruled_out_hypotheses)
     )
     if after.current_hypothesis and after.current_hypothesis != before.current_hypothesis:
-        proposals.append(
-            Proposal(kind="set_current_hypothesis", hypothesis_id=after.current_hypothesis)
-        )
+        proposals.append(Proposal(kind="set_current_hypothesis", hypothesis_id=after.current_hypothesis))
     if after.effective_turns != before.effective_turns:
         proposals.append(
             Proposal(kind="advance_effective_turn", value=after.effective_turns - before.effective_turns)
@@ -298,37 +336,108 @@ def _state_proposals(before: LearnerState, after: LearnerState, *, reply: str) -
     return proposals
 
 
-def _public_trace(*, analysis_contains_answer: bool, compared: bool) -> list[PublicTraceEvent]:
+def _public_trace_before_mentor(
+    *,
+    analysis_contains_answer: bool,
+    answer_attempt_id: str,
+    answer_public: PublicAnswerComparison | None,
+    compare_answer_ms: int,
+) -> list[PublicTraceEvent]:
     trace = [
         PublicTraceEvent(
             sequence=1,
             kind="reasoning_summary_completed",
             summary="已完成本轮公开意图与动作识别。",
+            reasoning=PublicReasoningSummary(
+                stage="understanding_message",
+                text="已根据你的原话识别本轮希望验证的公开方向。",
+            ),
         ),
         PublicTraceEvent(
             sequence=2,
             kind="reasoning_summary_completed",
             summary="已根据公开观察更新本轮排查进展。",
+            reasoning=PublicReasoningSummary(
+                stage="checking_observations",
+                text="已核对本轮动作产生的公开观察，并更新可继续使用的事实。",
+            ),
         ),
     ]
     sequence = 3
-    if analysis_contains_answer and compared:
-        trace.append(
-            PublicTraceEvent(
-                sequence=sequence,
-                kind="tool_completed",
-                summary="答案对比工具已返回公开辅导信号。",
-                tool_name="compare_answer",
-            )
+    if analysis_contains_answer and answer_public is not None:
+        tool_payload = ToolEventPayload(
+            name="compare_answer",
+            redacted_arguments={"answer_attempt_id": answer_attempt_id},
+            duration_ms=compare_answer_ms,
+            result=answer_public,
         )
-        sequence += 1
-    trace.extend(
-        [
-            PublicTraceEvent(sequence=sequence, kind="mentor_buffered", summary="导师回复已完成私有缓冲。"),
-            PublicTraceEvent(sequence=sequence + 1, kind="guard_passed", summary="回复已通过安全校验。"),
-        ]
+        trace.extend(
+            [
+                PublicTraceEvent(
+                    sequence=sequence,
+                    kind="tool_started",
+                    status="started",
+                    summary="正在对比本轮答案表述与已公开证据。",
+                    tool=tool_payload.model_copy(update={"result": None, "duration_ms": 0}),
+                    tool_name="compare_answer",
+                ),
+                PublicTraceEvent(
+                    sequence=sequence + 1,
+                    kind="tool_result",
+                    summary="答案对比工具已返回公开辅导信号。",
+                    tool=tool_payload,
+                    tool_name="compare_answer",
+                    duration_ms=compare_answer_ms,
+                ),
+                PublicTraceEvent(
+                    sequence=sequence + 2,
+                    kind="tool_completed",
+                    summary="答案对比工具调用完成。",
+                    tool=tool_payload,
+                    tool_name="compare_answer",
+                    duration_ms=compare_answer_ms,
+                ),
+            ]
+        )
+        sequence += 3
+    trace.append(
+        PublicTraceEvent(
+            sequence=sequence,
+            kind="response_summary",
+            status="running",
+            summary="正在根据公开事实整理导师回复。",
+            reasoning=PublicReasoningSummary(
+                stage="composing_reply",
+                text="正在把已公开观察整理成下一步可执行的引导。",
+            ),
+        )
     )
     return trace
+
+
+def _public_trace_after_mentor(*, start_sequence: int) -> list[PublicTraceEvent]:
+    return [
+        PublicTraceEvent(
+            sequence=start_sequence,
+            kind="mentor_buffered",
+            summary="导师回复已完成私有缓冲。",
+        ),
+        PublicTraceEvent(
+            sequence=start_sequence + 1,
+            kind="guard_passed",
+            summary="回复已通过安全校验。",
+        ),
+    ]
+
+
+async def _emit_public_trace(
+    callback: PublicTraceCallback | None,
+    events: list[PublicTraceEvent],
+) -> None:
+    if callback is None:
+        return
+    for event in events:
+        await callback(event)
 
 
 def _reason_codes(analysis, observations, answer_public) -> list[str]:

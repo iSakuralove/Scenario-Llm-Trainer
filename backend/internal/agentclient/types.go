@@ -78,11 +78,35 @@ type Proposal struct {
 }
 
 type PublicTraceEvent struct {
-	Sequence   int    `json:"sequence"`
-	Kind       string `json:"kind"`
-	Summary    string `json:"summary"`
-	ToolName   string `json:"tool_name"`
-	DurationMS int    `json:"duration_ms"`
+	Sequence   int                     `json:"sequence"`
+	Kind       string                  `json:"kind"`
+	Status     string                  `json:"status"`
+	Summary    string                  `json:"summary"`
+	Text       string                  `json:"text"`
+	Reasoning  *PublicReasoningSummary `json:"reasoning,omitempty"`
+	Tool       *ToolEventPayload       `json:"tool,omitempty"`
+	ToolName   string                  `json:"tool_name"`
+	DurationMS int                     `json:"duration_ms"`
+}
+
+type PublicReasoningSummary struct {
+	Stage string `json:"stage"`
+	Text  string `json:"text"`
+}
+
+type ToolEventPayload struct {
+	Name              string                  `json:"name"`
+	RedactedArguments map[string]string       `json:"redacted_arguments"`
+	DurationMS        int                     `json:"duration_ms"`
+	Result            *PublicAnswerComparison `json:"result,omitempty"`
+}
+
+type PublicAnswerComparison struct {
+	Tool          string   `json:"tool"`
+	Status        string   `json:"status"`
+	UserPoints    []string `json:"user_points"`
+	SupportStatus string   `json:"support_status"`
+	NextAction    string   `json:"next_action"`
 }
 
 type VerificationResult struct {

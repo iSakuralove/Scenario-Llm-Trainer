@@ -56,6 +56,7 @@ import type {
   UserRole,
   InterviewSessionDetailResponse,
 } from '../types'
+import type { ScenarioRunEvent } from '../types/agentRun'
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api/v1'
 const REQUEST_TIMEOUT_MS = 90000
@@ -84,6 +85,17 @@ export interface ScenarioMessageResponse {
   response_meta: ScenarioMessage['response_meta']
   session_status: string
   session: ScenarioSession
+  run_events?: ScenarioRunEvent[]
+}
+
+export class ScenarioRunFailure extends Error {
+  code: string
+
+  constructor(code: string, message: string) {
+    super(message)
+    this.name = 'ScenarioRunFailure'
+    this.code = code
+  }
 }
 
 export interface ScenarioGenerationJobResponse {
@@ -377,9 +389,8 @@ async function requestStream<T>(
 async function requestScenarioMessageStream(
   token: string,
   sessionId: string,
-  content: string,
-  onDelta: (chunk: string) => void,
-  onStage?: (stage: StreamStage) => void,
+  payload: { content: string; requestId: string; stateRevision: number; afterSequence?: number },
+  onRunEvent: (event: ScenarioRunEvent) => void,
   allowAuthRetry = true,
 ): Promise<ScenarioMessageResponse> {
   const controller = new AbortController()
@@ -392,12 +403,17 @@ async function requestScenarioMessageStream(
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({
+        content: payload.content,
+        request_id: payload.requestId,
+        state_revision: payload.stateRevision,
+        after_sequence: payload.afterSequence ?? 0,
+      }),
       signal: controller.signal,
     })
     if (allowAuthRetry && response.status === 401 && shouldAttemptAuthRefresh(`/scenarios/sessions/${sessionId}/messages`, token)) {
       const session = await refreshAuthSession()
-      return requestScenarioMessageStream(session.access_token, sessionId, content, onDelta, onStage, false)
+      return requestScenarioMessageStream(session.access_token, sessionId, payload, onRunEvent, false)
     }
     if (!response.ok) {
       throw new Error(await readErrorMessage(response, '流式消息请求失败'))
@@ -420,13 +436,12 @@ async function requestScenarioMessageStream(
         const rawEvent = buffer.slice(0, boundary)
         buffer = buffer.slice(boundary + 2)
         const parsed = parseSSEEvent(rawEvent)
-        if (parsed.event === 'delta') {
-          const data = JSON.parse(parsed.data) as { chunk?: string }
-          if (data.chunk) onDelta(data.chunk)
-        }
-        if (parsed.event === 'stage') {
-          const data = JSON.parse(parsed.data) as Partial<StreamStage>
-          if (data.step || data.message) onStage?.({ step: String(data.step ?? ''), message: String(data.message ?? '') })
+        if (parsed.event === 'run_event') {
+          const event = JSON.parse(parsed.data) as ScenarioRunEvent
+          onRunEvent(event)
+          if (event.kind === 'turn_failed') {
+            throw new ScenarioRunFailure(event.error_code || 'turn_failed', event.summary || '本轮处理失败')
+          }
         }
         if (parsed.event === 'finish') {
           finalPayload = JSON.parse(parsed.data) as ScenarioMessageResponse
@@ -649,6 +664,7 @@ function normalizeScenarioSession(session: ScenarioSession): ScenarioSession {
   return {
     ...session,
     revealed_clue_ids: session.revealed_clue_ids ?? [],
+    state_revision: session.state_revision ?? 0,
     evaluation_result: normalizeScenarioEvaluation(session.evaluation_result),
   }
 }

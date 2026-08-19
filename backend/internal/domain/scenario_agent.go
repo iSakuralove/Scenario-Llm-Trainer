@@ -20,6 +20,38 @@ type ScenarioLearnerState struct {
 	RecentOpenings     []string `json:"recent_openings"`
 }
 
+type ScenarioPublicReasoningSummary struct {
+	Stage string `json:"stage"`
+	Text  string `json:"text"`
+}
+
+type ScenarioPublicAnswerComparison struct {
+	Tool          string   `json:"tool"`
+	Status        string   `json:"status"`
+	UserPoints    []string `json:"user_points"`
+	SupportStatus string   `json:"support_status"`
+	NextAction    string   `json:"next_action"`
+}
+
+type ScenarioToolEventPayload struct {
+	Name              string                          `json:"name"`
+	RedactedArguments map[string]string               `json:"redacted_arguments"`
+	DurationMS        int                             `json:"duration_ms"`
+	Result            *ScenarioPublicAnswerComparison `json:"result,omitempty"`
+}
+
+type ScenarioRunEvent struct {
+	RequestID string                          `json:"request_id"`
+	Sequence  int                             `json:"sequence"`
+	Kind      string                          `json:"kind"`
+	Status    string                          `json:"status"`
+	Text      string                          `json:"text,omitempty"`
+	Summary   string                          `json:"summary,omitempty"`
+	Reasoning *ScenarioPublicReasoningSummary `json:"reasoning,omitempty"`
+	Tool      *ScenarioToolEventPayload       `json:"tool,omitempty"`
+	ErrorCode string                          `json:"error_code,omitempty"`
+}
+
 func (state ScenarioLearnerState) Normalized() ScenarioLearnerState {
 	if state.CollectedEvidence == nil {
 		state.CollectedEvidence = []string{}

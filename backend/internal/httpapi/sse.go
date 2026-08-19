@@ -34,6 +34,9 @@ func (s *sseWriter) event(name string, data interface{}) {
 func (s *sseWriter) stage(step, message string) {
 	s.event("stage", map[string]string{"step": step, "message": message})
 }
+func (s *sseWriter) runEvent(event domain.ScenarioRunEvent) {
+	s.event("run_event", event)
+}
 
 // 只丢空串，不丢纯空白：真流式下单个空格本身就是一个 token，
 // 按空白过滤会把它吞掉，拼出来的文本就和最终落库内容不一致了。
