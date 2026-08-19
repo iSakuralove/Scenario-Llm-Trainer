@@ -8,7 +8,12 @@ import json
 
 from pydantic_ai import models
 
-from hiddenworld.agents.models import build_deepseek_model, build_glm_model, build_xuan_model
+from hiddenworld.agents.models import (
+    XUAN_MODEL_IDS,
+    build_deepseek_model,
+    build_glm_model,
+    build_xuan_model,
+)
 from hiddenworld.bank.loader import FIXED_BANK_IDS
 from hiddenworld.evals.goldens import run_interpreter_goldens
 from hiddenworld.evals.judge import run_transcript_judge
@@ -38,7 +43,7 @@ def _parser() -> argparse.ArgumentParser:
         choices=("none", "same", "deepseek", "glm", "xuan"),
         default="none",
     )
-    parser.add_argument("--xuan-model", choices=("grok-4.5", "deepseek-v4-flash-0731"))
+    parser.add_argument("--xuan-model", choices=XUAN_MODEL_IDS)
     parser.add_argument("--deadline-seconds", type=float, default=15.0)
     return parser
 

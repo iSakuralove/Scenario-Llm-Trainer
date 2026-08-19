@@ -15,8 +15,8 @@ DEEPSEEK_MODEL_ID = "deepseek-v4-flash"
 GLM_MODEL_ID = "glm-4.7"
 ZAI_BASE_URL = "https://api.z.ai/api/paas/v4"
 GLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
-XUAN_BASE_URL = "https://elysiver.h-e.top/v1"
-XUAN_MODEL_IDS = ("grok-4.5", "deepseek-v4-flash-0731")
+XUAN_BASE_URL = "https://ai.centos.hk/v1"
+XUAN_MODEL_IDS = ("gpt-5.6-terra", "grok-4.5", "deepseek-v4-flash-0731")
 
 
 class ModelConfigurationError(ValueError):

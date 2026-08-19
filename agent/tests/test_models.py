@@ -45,7 +45,10 @@ def test_glm_model_pairs_zai_key_with_zai_route(monkeypatch) -> None:
     assert str(model.client.base_url) == "https://api.z.ai/api/paas/v4/"
 
 
-@pytest.mark.parametrize("model_id", ["grok-4.5", "deepseek-v4-flash-0731"])
+@pytest.mark.parametrize(
+    "model_id",
+    ["gpt-5.6-terra", "grok-4.5", "deepseek-v4-flash-0731"],
+)
 def test_xuan_model_uses_openai_compatible_route_and_locked_models(
     monkeypatch,
     model_id: str,
@@ -59,7 +62,7 @@ def test_xuan_model_uses_openai_compatible_route_and_locked_models(
     assert isinstance(model, OpenAIChatModel)
     assert model.model_name == model_id
     assert model.system == "openai"
-    assert str(model.client.base_url) == "https://elysiver.h-e.top/v1/"
+    assert str(model.client.base_url) == "https://ai.centos.hk/v1/"
     assert model.client.max_retries == 0
 
 
