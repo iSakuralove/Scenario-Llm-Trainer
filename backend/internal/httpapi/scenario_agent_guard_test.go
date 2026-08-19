@@ -69,3 +69,21 @@ func TestScenarioReplyGuardAllowsPublicScenarioFactsAndBlocksHiddenNumbers(t *te
 		t.Fatal("unreleased hidden numeric fact was not rejected")
 	}
 }
+
+func TestScenarioReplyGuardAllowsRootComponentWhenPubliclyNamed(t *testing.T) {
+	world := &domain.HiddenWorld{
+		RootCause: domain.RootCause{ID: "RC_PRIVATE", Component: "orders", Description: "private root marker"},
+		EvidenceGraph: []domain.EvidenceNode{
+			{EvidenceID: "E_PRIVATE", Content: "隐藏配置 idx_orders_v2"},
+		},
+	}
+	publicScenario := &domain.PublicScenario{
+		Title:       "订单列表变慢",
+		Description: "orders 表的请求响应变慢。",
+		Environment: "MySQL orders",
+	}
+	state := domain.ScenarioLearnerState{}.Normalized()
+	if err := validateScenarioReply("可以先围绕 orders 表的公开现象继续观察。", world, publicScenario, state); err != nil {
+		t.Fatalf("publicly named root component should be allowed: %v", err)
+	}
+}

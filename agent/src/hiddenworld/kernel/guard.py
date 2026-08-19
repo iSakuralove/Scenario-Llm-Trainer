@@ -79,11 +79,17 @@ def extract_forbidden_entities(
     for source in sources:
         entities.extend(_sensitive_tokens(source))
     public_entities: set[str] = set()
+    public_text = "\n".join(_public_scenario_sources(public_scenario)) if public_scenario else ""
     if public_scenario is not None:
         for source in _public_scenario_sources(public_scenario):
             public_entities.update(_entity_key(token) for token in _sensitive_tokens(source))
     return _unique_non_empty(
-        [entity for entity in entities if _entity_key(entity) not in public_entities]
+        [
+            entity
+            for entity in entities
+            if _entity_key(entity) not in public_entities
+            and not _contains_entity(public_text, entity)
+        ]
     )
 
 

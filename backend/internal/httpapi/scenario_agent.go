@@ -328,13 +328,15 @@ func validateScenarioReply(
 		entities = append(entities, extractScenarioSensitiveTokens(source)...)
 	}
 	publicEntities := map[string]bool{}
-	for _, source := range scenarioPublicScenarioSources(publicScenario) {
+	publicSources := scenarioPublicScenarioSources(publicScenario)
+	publicText := strings.Join(publicSources, "\n")
+	for _, source := range publicSources {
 		for _, entity := range extractScenarioSensitiveTokens(source) {
 			publicEntities[scenarioEntityKey(entity)] = true
 		}
 	}
 	for entity := range stringSet(entities) {
-		if publicEntities[scenarioEntityKey(entity)] {
+		if publicEntities[scenarioEntityKey(entity)] || scenarioReplyContainsEntity(publicText, entity) {
 			continue
 		}
 		if scenarioReplyContainsEntity(reply, entity) {

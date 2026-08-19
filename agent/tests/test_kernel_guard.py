@@ -102,6 +102,30 @@ def test_guard_allows_public_and_released_numeric_facts(
     ) == action
 
 
+def test_guard_allows_root_component_when_publicly_named(
+    hidden_world, teaching_constraints
+) -> None:
+    from hiddenworld.contracts import PublicScenario
+
+    public_scenario = PublicScenario(
+        title="订单列表变慢",
+        description="orders 表的请求响应变慢。",
+        environment="MySQL orders",
+    )
+    entities = extract_forbidden_entities(
+        hidden_world,
+        released_evidence_ids=[],
+        public_scenario=public_scenario,
+    )
+    assert hidden_world.root_cause.component not in entities
+    action = mentor_action("可以先围绕 orders 表的公开现象继续观察。")
+    assert Guard().validate(
+        action,
+        constraints=teaching_constraints,
+        context=GuardContext(forbidden_entities=entities),
+    ) == action
+
+
 def test_guard_rejects_unreleased_numeric_fact_with_unit(
     hidden_world, public_scenario, teaching_constraints
 ) -> None:
