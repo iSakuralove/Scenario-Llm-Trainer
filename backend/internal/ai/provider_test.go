@@ -68,6 +68,27 @@ func TestConfigFromEnvRegistersGLMProvider(t *testing.T) {
 	}
 }
 
+func TestConfigFromEnvGLMWinsWhenConfiguredAlongsideDeepSeek(t *testing.T) {
+	t.Setenv("LLM_BASE_URL", "")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "")
+	t.Setenv("JIANYI_API_KEY", "")
+	t.Setenv("DEEPSEEK_KEY", "stale-deepseek-key")
+	t.Setenv("GLM_API_KEY", "glm-test-key")
+	t.Setenv("GLM_BASE_URL", "")
+	t.Setenv("GLM_MODEL", "")
+	t.Setenv("QWEN_API_KEY", "")
+	t.Setenv("ERNIE_API_KEY", "")
+
+	cfg := ConfigFromEnv()
+	if cfg.Provider != ProviderGLM {
+		t.Fatalf("expected glm to win over unavailable deepseek, got %s", cfg.Provider)
+	}
+	if cfg.APIKey != "glm-test-key" || cfg.Model != defaultGLMModel {
+		t.Fatalf("expected glm credentials and default model, got %+v", cfg)
+	}
+}
+
 func TestGLMProviderUsesV4ChatCompletionsEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/paas/v4/chat/completions" {

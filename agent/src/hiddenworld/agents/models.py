@@ -11,7 +11,7 @@ from pydantic_ai.providers.deepseek import DeepSeekProvider
 from pydantic_ai.providers.zai import ZaiProvider
 
 DEEPSEEK_MODEL_ID = "deepseek-v4-flash"
-GLM_MODEL_ID = "glm-5.2"
+GLM_MODEL_ID = "glm-4.7"
 
 
 class ModelConfigurationError(ValueError):
@@ -34,15 +34,23 @@ def build_deepseek_model(*, api_key: str | None = None) -> OpenAIChatModel:
 
 
 def build_glm_model(*, api_key: str | None = None) -> ZaiModel:
-    key = api_key or os.getenv("ZAI_API_KEY")
+    key = api_key or os.getenv("ZAI_API_KEY") or os.getenv("GLM_API_KEY")
+    if key:
+        key = key.strip()
     if not key:
-        raise ModelConfigurationError("ZAI_API_KEY is required")
+        raise ModelConfigurationError("ZAI_API_KEY or GLM_API_KEY is required")
+    base_url = (
+        os.getenv("ZAI_BASE_URL")
+        or os.getenv("GLM_BASE_URL")
+        or "https://api.z.ai/api/paas/v4"
+    ).strip()
     client = AsyncOpenAI(
         api_key=key,
-        base_url="https://api.z.ai/api/paas/v4",
+        base_url=base_url,
         max_retries=0,
     )
     return ZaiModel(
         GLM_MODEL_ID,
         provider=ZaiProvider(openai_client=client),
+        settings={"thinking": False},
     )

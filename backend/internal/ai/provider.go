@@ -30,7 +30,7 @@ const (
 	defaultERNIEBaseURL     = "https://qianfan.baidubce.com/v2"
 	defaultERNIEModel       = "ernie-4.0-turbo-8k"
 	defaultGLMBaseURL       = "https://open.bigmodel.cn/api/paas/v4"
-	defaultGLMModel         = "glm-5.3"
+	defaultGLMModel         = "glm-4.7"
 )
 
 type Config struct {
@@ -344,7 +344,9 @@ func ConfigFromEnv() Config {
 			StreamEnabled:    cfg.StreamEnabled,
 			StreamConfigured: true,
 		}
-		if cfg.Provider == "" {
+		// GLM 是当前可用的主模型；即使环境中残留不可用的 DeepSeek，
+		// 只要配置了 GLM，就优先使用 GLM，避免每轮先命中失效 provider。
+		if cfg.Provider == "" || glmKey != "" {
 			cfg.Provider = ProviderGLM
 			cfg.APIKey = glmKey
 			cfg.BaseURL = strings.TrimSpace(os.Getenv("GLM_BASE_URL"))

@@ -17,6 +17,16 @@ def test_glm_model_uses_native_zai_model_and_disables_sdk_retries() -> None:
     model = build_glm_model(api_key="test-zai-key")
 
     assert isinstance(model, ZaiModel)
-    assert model.model_name == "glm-5.2"
+    assert model.model_name == "glm-4.7"
     assert model.system == "zai"
     assert model.client.max_retries == 0
+
+
+def test_glm_model_accepts_project_glm_environment_alias(monkeypatch) -> None:
+    monkeypatch.delenv("ZAI_API_KEY", raising=False)
+    monkeypatch.setenv("GLM_API_KEY", "test-glm-key")
+    monkeypatch.setenv("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+
+    model = build_glm_model()
+
+    assert str(model.client.base_url) == "https://open.bigmodel.cn/api/paas/v4/"

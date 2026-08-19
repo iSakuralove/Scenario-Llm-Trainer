@@ -133,7 +133,7 @@ def _runtime_from_env() -> HiddenWorldRuntime:
 
 
 def _model_for_provider(env_name: str):
-    provider = os.getenv(env_name, "deepseek").strip().lower()
+    provider = os.getenv(env_name, "glm").strip().lower()
     if provider == "deepseek":
         return build_deepseek_model()
     if provider in {"glm", "zai"}:

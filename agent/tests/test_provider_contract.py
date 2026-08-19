@@ -78,7 +78,7 @@ def test_ct01_provider_profile_snapshot() -> None:
         provider="deepseek",
         model_id="deepseek-v4-flash",
     )
-    _assert_profile_snapshot(build_glm_model(api_key="test"), provider="zai", model_id="glm-5.2")
+    _assert_profile_snapshot(build_glm_model(api_key="test"), provider="zai", model_id="glm-4.7")
 
 
 @pytest.mark.asyncio

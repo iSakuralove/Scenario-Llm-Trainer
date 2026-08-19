@@ -11,6 +11,9 @@ export function aiModeLabel(status: AIStatus | null) {
   if (status.provider === 'deepseek') {
     return `DeepSeek ${status.model}`
   }
+  if (status.provider === 'glm') {
+    return `GLM ${status.model}`
+  }
   if (status.provider === 'openai_compatible') {
     return `第三方中转 ${status.model}`
   }
@@ -51,9 +54,12 @@ export function aiCapabilitySummary(status: AIStatus | null) {
   return parts.join(' · ')
 }
 
+const defaultGLMModelLabel = 'glm-4.7'
+
 export function aiProviderLabel(provider?: string, fallbackUsed?: boolean) {
   if (fallbackUsed) return 'Mock LLM 兜底'
   if (provider === 'deepseek') return 'DeepSeek deepseek-v4-flash'
+  if (provider === 'glm') return `GLM ${defaultGLMModelLabel}`
   if (provider === 'openai_compatible') return '第三方中转站'
   return provider || '未知来源'
 }

@@ -1,7 +1,7 @@
 """真实 DeepSeek / GLM 契约验收。
 
 默认不运行；需要在当前 shell 显式提供 ``DEEPSEEK_API_KEY`` 和/或
-``ZAI_API_KEY``，再执行 ``pytest -m live``。测试只断言跨 provider 的硬契约，
+``ZAI_API_KEY`` / ``GLM_API_KEY``，再执行 ``pytest -m live``。测试只断言跨 provider 的硬契约，
 不比较自然语言文案、步骤数或模型排名。
 """
 
@@ -26,8 +26,9 @@ def _provider_cases() -> list[tuple[str, str]]:
     cases: list[tuple[str, str]] = []
     if os.getenv("DEEPSEEK_API_KEY"):
         cases.append(("deepseek", os.environ["DEEPSEEK_API_KEY"]))
-    if os.getenv("ZAI_API_KEY"):
-        cases.append(("glm", os.environ["ZAI_API_KEY"]))
+    glm_key = os.getenv("ZAI_API_KEY") or os.getenv("GLM_API_KEY")
+    if glm_key:
+        cases.append(("glm", glm_key))
     return cases
 
 
@@ -36,7 +37,7 @@ def live_provider(request: pytest.FixtureRequest):
     keys = dict(_provider_cases())
     provider = str(request.param)
     if provider not in keys:
-        variable = "DEEPSEEK_API_KEY" if provider == "deepseek" else "ZAI_API_KEY"
+        variable = "DEEPSEEK_API_KEY" if provider == "deepseek" else "ZAI_API_KEY or GLM_API_KEY"
         pytest.skip(f"未提供 {variable}，跳过真实 provider 契约测试")
     models.ALLOW_MODEL_REQUESTS = True
     if provider == "deepseek":
