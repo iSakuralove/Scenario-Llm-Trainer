@@ -26,6 +26,7 @@ from hiddenworld.evals import (
     load_golden_cases,
     run_interpreter_goldens,
     run_trajectory,
+    run_transcript_judge,
 )
 from hiddenworld.runtime import HiddenWorldRuntime
 
@@ -221,6 +222,61 @@ async def test_eval_runner_supports_multi_turn_without_exposing_hidden_world() -
     assert report.behavior.question_type_entropy == 0.0
     assert report.behavior.max_stalled_turns == 2
     assert report.behavior.leak_rate == 0.0
+
+
+@pytest.mark.asyncio
+async def test_trajectory_runner_enforces_per_turn_deadline() -> None:
+    async def slow_model(_messages, _info) -> ModelResponse:
+        await asyncio.sleep(0.05)
+        return ModelResponse(parts=[TextPart("{}")])
+
+    question = load_fixed_question("hw-db-index-001")
+    runtime = HiddenWorldRuntime(
+        interpreter=create_interpreter_agent(FunctionModel(slow_model)),
+        mentor=create_mentor_agent(FunctionModel(slow_model)),
+    )
+    report = await run_trajectory(
+        runtime,
+        question,
+        FIXED_TRAJECTORIES[0],
+        provider="slow",
+        request_prefix="deadline",
+        deadline_seconds=0.001,
+    )
+    assert report.turns == 0
+    assert report.error_code == "provider_timeout"
+
+
+@pytest.mark.asyncio
+async def test_llm_judge_reports_verdict_without_transcript_or_reason() -> None:
+    case = ADAPTIVE_TRAJECTORIES[0]
+    trajectory = TrajectoryReport(
+        provider="glm",
+        question_id="hw-db-index-001",
+        case_id=case.case_id,
+        kind=case.kind,
+        turns=3,
+    )
+    trajectory._judge_transcript = [
+        {"role": "student", "content": "我不知道从哪里开始。"},
+        {"role": "mentor", "content": "先选一条公开现象，说说你想验证什么。"},
+        {"role": "student", "content": "我想先看请求耗时。"},
+        {"role": "mentor", "content": "可以，先核对耗时变化发生在哪个范围。"},
+        {"role": "student", "content": "只在订单列表接口。"},
+        {"role": "mentor", "content": "这个范围已经收窄，再补一条直接观察。"},
+    ]
+    report = await run_transcript_judge(
+        MatrixReport("glm", [trajectory]),
+        TestModel(custom_output_args={"reason": "能适应新手并逐轮推进。", "pass": True, "score": 1.0}),
+        judge_provider="test",
+    )
+    public = report.public_dict()
+    assert public["total"] == 1
+    assert public["passed"] == 1
+    assert public["failures"] == []
+    serialized = json.dumps(public, ensure_ascii=False)
+    assert "transcript" not in serialized
+    assert "能适应新手" not in serialized
 
 
 def test_provider_comparison_accepts_equivalent_behavior_without_ranking() -> None:

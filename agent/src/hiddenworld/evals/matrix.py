@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -202,6 +203,7 @@ class TrajectoryReport:
     behavior: BehaviorMetrics = field(default_factory=BehaviorMetrics)
     _mentor_replies: list[str] = field(default_factory=list, repr=False)
     _leak_count: int = field(default=0, repr=False)
+    _judge_transcript: list[dict[str, str]] = field(default_factory=list, repr=False)
 
     @property
     def passed(self) -> bool:
@@ -448,6 +450,7 @@ async def run_trajectory(
     *,
     provider: str,
     request_prefix: str,
+    deadline_seconds: float = 15.0,
 ) -> TrajectoryReport:
     started = perf_counter()
     report = TrajectoryReport(provider, question.question_id, case.case_id, case.kind)
@@ -456,17 +459,20 @@ async def run_trajectory(
     try:
         for turn_index, message in enumerate(case.messages, start=1):
             rendered_message = _render_message(message, question)
-            result = await runtime.run_turn(
-                AgentTurnRequest(
-                    request_id=f"{request_prefix}-{case.case_id}-{turn_index}",
-                    session_id=f"eval-{provider}-{question.question_id}-{case.case_id}",
-                    state_revision=turn_index - 1,
-                    public_scenario=question.public_scenario,
-                    hidden_world=question.hidden_world,
-                    learner_state=state,
-                    transcript=transcript,
-                    user_message=rendered_message,
-                )
+            result = await asyncio.wait_for(
+                runtime.run_turn(
+                    AgentTurnRequest(
+                        request_id=f"{request_prefix}-{case.case_id}-{turn_index}",
+                        session_id=f"eval-{provider}-{question.question_id}-{case.case_id}",
+                        state_revision=turn_index - 1,
+                        public_scenario=question.public_scenario,
+                        hidden_world=question.hidden_world,
+                        learner_state=state,
+                        transcript=transcript,
+                        user_message=rendered_message,
+                    )
+                ),
+                timeout=max(deadline_seconds, 0.001),
             )
             violation_start = len(report.violations)
             report.violations.extend(
@@ -483,6 +489,12 @@ async def run_trajectory(
             )
             state = apply_proposals_for_eval(state, result.proposals)
             report._mentor_replies.append(result.reply)
+            report._judge_transcript.extend(
+                [
+                    {"role": "student", "content": rendered_message},
+                    {"role": "mentor", "content": result.reply},
+                ]
+            )
             report.behavior = BehaviorMetrics(
                 max_stalled_turns=max(report.behavior.max_stalled_turns, state.stalled_turns),
                 action_count=report.behavior.action_count
@@ -525,6 +537,7 @@ async def run_matrix(
     *,
     question_ids: Sequence[str] = FIXED_BANK_IDS,
     trajectories: Sequence[TrajectoryCase] = ALL_TRAJECTORIES,
+    deadline_seconds: float = 15.0,
 ) -> MatrixReport:
     runtime = HiddenWorldRuntime(
         interpreter=create_interpreter_agent(model),
@@ -540,6 +553,7 @@ async def run_matrix(
                 case,
                 provider=provider,
                 request_prefix=f"matrix-{provider}-{question_id}",
+                deadline_seconds=deadline_seconds,
             )
             reports.append(report)
             if report.error_code.startswith("provider_"):

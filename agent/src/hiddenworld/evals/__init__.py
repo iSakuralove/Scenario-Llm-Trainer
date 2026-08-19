@@ -7,6 +7,7 @@ from .goldens import (
     load_golden_cases,
     run_interpreter_goldens,
 )
+from .judge import TranscriptJudgeReport, run_transcript_judge
 from .matrix import (
     ADAPTIVE_TRAJECTORIES,
     ALL_TRAJECTORIES,
@@ -38,6 +39,7 @@ __all__ = [
     "TrajectoryCase",
     "TrajectoryComparison",
     "TrajectoryReport",
+    "TranscriptJudgeReport",
     "apply_proposals_for_eval",
     "build_interpreter_dataset",
     "check_result_hard_contract",
@@ -45,5 +47,6 @@ __all__ = [
     "load_golden_cases",
     "run_interpreter_goldens",
     "run_matrix",
+    "run_transcript_judge",
     "run_trajectory",
 ]

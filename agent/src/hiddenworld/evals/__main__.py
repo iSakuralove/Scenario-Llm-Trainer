@@ -9,7 +9,9 @@ import json
 from pydantic_ai import models
 
 from hiddenworld.agents.models import build_deepseek_model, build_glm_model
+from hiddenworld.bank.loader import FIXED_BANK_IDS
 from hiddenworld.evals.goldens import run_interpreter_goldens
+from hiddenworld.evals.judge import run_transcript_judge
 from hiddenworld.evals.matrix import (
     ADAPTIVE_TRAJECTORIES,
     ALL_TRAJECTORIES,
@@ -25,6 +27,17 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--provider", choices=("deepseek", "glm", "all"), default="all")
     parser.add_argument("--suite", choices=("goldens", "matrix", "all"), default="all")
     parser.add_argument("--tracks", choices=("fixed", "adaptive", "all"), default="all")
+    parser.add_argument("--question-id", action="append", choices=FIXED_BANK_IDS)
+    parser.add_argument(
+        "--case-id",
+        action="append",
+        choices=sorted(item.case_id for item in ALL_TRAJECTORIES),
+    )
+    parser.add_argument(
+        "--judge-provider",
+        choices=("none", "same", "deepseek", "glm"),
+        default="none",
+    )
     parser.add_argument("--deadline-seconds", type=float, default=15.0)
     return parser
 
@@ -32,12 +45,22 @@ def _parser() -> argparse.ArgumentParser:
 async def _run(args: argparse.Namespace) -> None:
     models.ALLOW_MODEL_REQUESTS = True
     providers = ("deepseek", "glm") if args.provider == "all" else (args.provider,)
-    tracks = {
+    track_cases = {
         "fixed": FIXED_TRAJECTORIES,
         "adaptive": ADAPTIVE_TRAJECTORIES,
         "all": ALL_TRAJECTORIES,
     }[args.tracks]
-    output: dict[str, object] = {"suite": args.suite, "providers": {}}
+    selected_case_ids = set(args.case_id or ())
+    tracks = tuple(item for item in track_cases if not selected_case_ids or item.case_id in selected_case_ids)
+    if not tracks:
+        raise SystemExit("--case-id 与 --tracks 没有交集")
+    question_ids = tuple(args.question_id or FIXED_BANK_IDS)
+    output: dict[str, object] = {
+        "suite": args.suite,
+        "question_ids": list(question_ids),
+        "case_ids": [item.case_id for item in tracks],
+        "providers": {},
+    }
     matrix_reports: dict[str, MatrixReport] = {}
     for provider in providers:
         try:
@@ -53,17 +76,40 @@ async def _run(args: argparse.Namespace) -> None:
                 deadline_seconds=args.deadline_seconds,
             )
             provider_output["goldens"] = golden_report.public_dict()
-        if args.suite in ("matrix", "all") and not (
-            golden_report is not None and golden_report.error_code
-        ):
-            matrix_report = await run_matrix(provider, model, trajectories=tracks)
+        if args.suite in ("matrix", "all") and not (golden_report is not None and golden_report.error_code):
+            matrix_report = await run_matrix(
+                provider,
+                model,
+                question_ids=question_ids,
+                trajectories=tracks,
+                deadline_seconds=args.deadline_seconds,
+            )
             matrix_reports[provider] = matrix_report
             provider_output["matrix"] = matrix_report.public_dict()
+            if args.judge_provider != "none":
+                judge_provider = provider if args.judge_provider == "same" else args.judge_provider
+                try:
+                    judge_model = (
+                        model
+                        if judge_provider == provider
+                        else (build_deepseek_model() if judge_provider == "deepseek" else build_glm_model())
+                    )
+                    provider_output["judge"] = (
+                        await run_transcript_judge(
+                            matrix_report,
+                            judge_model,
+                            judge_provider=judge_provider,
+                            deadline_seconds=args.deadline_seconds,
+                        )
+                    ).public_dict()
+                except Exception as exc:  # credentials are intentionally summarized
+                    provider_output["judge"] = {"error_code": type(exc).__name__.lower()}
         output["providers"][provider] = provider_output
     if args.provider == "all" and args.suite in ("matrix", "all"):
         output["comparison"] = compare_provider_matrices(
             matrix_reports.get("deepseek"),
             matrix_reports.get("glm"),
+            question_ids=question_ids,
             trajectories=tracks,
         ).public_dict()
     print(json.dumps(output, ensure_ascii=False, indent=2))
