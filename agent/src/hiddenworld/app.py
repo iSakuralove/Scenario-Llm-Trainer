@@ -17,6 +17,7 @@ from hiddenworld.agents.models import (
     ModelConfigurationError,
     build_deepseek_model,
     build_glm_model,
+    build_xuan_model,
 )
 from hiddenworld.contracts import AgentTurnRequest, AgentTurnResult, ContractVersionMismatch
 from hiddenworld.runtime import HiddenWorldRuntime, TurnDeadlineExceeded
@@ -138,6 +139,8 @@ def _model_for_provider(env_name: str):
         return build_deepseek_model()
     if provider in {"glm", "zai"}:
         return build_glm_model()
+    if provider == "xuan":
+        return build_xuan_model()
     raise ModelConfigurationError(f"unsupported provider configured in {env_name}")
 
 

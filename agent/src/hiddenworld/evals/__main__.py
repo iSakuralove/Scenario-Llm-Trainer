@@ -8,7 +8,7 @@ import json
 
 from pydantic_ai import models
 
-from hiddenworld.agents.models import build_deepseek_model, build_glm_model
+from hiddenworld.agents.models import build_deepseek_model, build_glm_model, build_xuan_model
 from hiddenworld.bank.loader import FIXED_BANK_IDS
 from hiddenworld.evals.goldens import run_interpreter_goldens
 from hiddenworld.evals.judge import run_transcript_judge
@@ -24,7 +24,7 @@ from hiddenworld.evals.matrix import (
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="HiddenWorld 阶段 5 评测入口")
-    parser.add_argument("--provider", choices=("deepseek", "glm", "all"), default="all")
+    parser.add_argument("--provider", choices=("deepseek", "glm", "xuan", "all"), default="all")
     parser.add_argument("--suite", choices=("goldens", "matrix", "all"), default="all")
     parser.add_argument("--tracks", choices=("fixed", "adaptive", "all"), default="all")
     parser.add_argument("--question-id", action="append", choices=FIXED_BANK_IDS)
@@ -35,9 +35,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--judge-provider",
-        choices=("none", "same", "deepseek", "glm"),
+        choices=("none", "same", "deepseek", "glm", "xuan"),
         default="none",
     )
+    parser.add_argument("--xuan-model", choices=("grok-4.5", "deepseek-v4-flash-0731"))
     parser.add_argument("--deadline-seconds", type=float, default=15.0)
     return parser
 
@@ -64,7 +65,12 @@ async def _run(args: argparse.Namespace) -> None:
     matrix_reports: dict[str, MatrixReport] = {}
     for provider in providers:
         try:
-            model = build_deepseek_model() if provider == "deepseek" else build_glm_model()
+            if provider == "deepseek":
+                model = build_deepseek_model()
+            elif provider == "glm":
+                model = build_glm_model()
+            else:
+                model = build_xuan_model(model=args.xuan_model)
         except Exception as exc:  # credentials are intentionally summarized
             output["providers"][provider] = {"error_code": type(exc).__name__.lower()}
             continue
@@ -89,11 +95,14 @@ async def _run(args: argparse.Namespace) -> None:
             if args.judge_provider != "none":
                 judge_provider = provider if args.judge_provider == "same" else args.judge_provider
                 try:
-                    judge_model = (
-                        model
-                        if judge_provider == provider
-                        else (build_deepseek_model() if judge_provider == "deepseek" else build_glm_model())
-                    )
+                    if judge_provider == provider:
+                        judge_model = model
+                    elif judge_provider == "deepseek":
+                        judge_model = build_deepseek_model()
+                    elif judge_provider == "glm":
+                        judge_model = build_glm_model()
+                    else:
+                        judge_model = build_xuan_model(model=args.xuan_model)
                     provider_output["judge"] = (
                         await run_transcript_judge(
                             matrix_report,
