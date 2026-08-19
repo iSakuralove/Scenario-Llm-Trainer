@@ -25,12 +25,24 @@ def test_glm_model_uses_native_zai_model_and_disables_sdk_retries() -> None:
 
 def test_glm_model_accepts_project_glm_environment_alias(monkeypatch) -> None:
     monkeypatch.delenv("ZAI_API_KEY", raising=False)
+    monkeypatch.setenv("ZAI_BASE_URL", "https://api.z.ai/api/paas/v4")
     monkeypatch.setenv("GLM_API_KEY", "test-glm-key")
     monkeypatch.setenv("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
 
     model = build_glm_model()
 
     assert str(model.client.base_url) == "https://open.bigmodel.cn/api/paas/v4/"
+
+
+def test_glm_model_pairs_zai_key_with_zai_route(monkeypatch) -> None:
+    monkeypatch.setenv("ZAI_API_KEY", "test-zai-key")
+    monkeypatch.setenv("ZAI_BASE_URL", "https://api.z.ai/api/paas/v4")
+    monkeypatch.setenv("GLM_API_KEY", "test-glm-key")
+    monkeypatch.setenv("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+
+    model = build_glm_model()
+
+    assert str(model.client.base_url) == "https://api.z.ai/api/paas/v4/"
 
 
 @pytest.mark.parametrize("model_id", ["grok-4.5", "deepseek-v4-flash-0731"])

@@ -13,6 +13,8 @@ from pydantic_ai.providers.zai import ZaiProvider
 
 DEEPSEEK_MODEL_ID = "deepseek-v4-flash"
 GLM_MODEL_ID = "glm-4.7"
+ZAI_BASE_URL = "https://api.z.ai/api/paas/v4"
+GLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 XUAN_BASE_URL = "https://elysiver.h-e.top/v1"
 XUAN_MODEL_IDS = ("grok-4.5", "deepseek-v4-flash-0731")
 
@@ -37,16 +39,24 @@ def build_deepseek_model(*, api_key: str | None = None) -> OpenAIChatModel:
 
 
 def build_glm_model(*, api_key: str | None = None) -> ZaiModel:
-    key = api_key or os.getenv("ZAI_API_KEY") or os.getenv("GLM_API_KEY")
-    if key:
-        key = key.strip()
-    if not key:
+    explicit_key = (api_key or "").strip()
+    zai_key = (os.getenv("ZAI_API_KEY") or "").strip()
+    glm_key = (os.getenv("GLM_API_KEY") or "").strip()
+    if explicit_key:
+        key = explicit_key
+        base_url = (
+            os.getenv("ZAI_BASE_URL")
+            or os.getenv("GLM_BASE_URL")
+            or ZAI_BASE_URL
+        ).strip()
+    elif zai_key:
+        key = zai_key
+        base_url = (os.getenv("ZAI_BASE_URL") or ZAI_BASE_URL).strip()
+    elif glm_key:
+        key = glm_key
+        base_url = (os.getenv("GLM_BASE_URL") or GLM_BASE_URL).strip()
+    else:
         raise ModelConfigurationError("ZAI_API_KEY or GLM_API_KEY is required")
-    base_url = (
-        os.getenv("ZAI_BASE_URL")
-        or os.getenv("GLM_BASE_URL")
-        or "https://api.z.ai/api/paas/v4"
-    ).strip()
     client = AsyncOpenAI(
         api_key=key,
         base_url=base_url,
