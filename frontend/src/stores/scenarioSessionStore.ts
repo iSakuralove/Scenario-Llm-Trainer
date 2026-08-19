@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { api, ScenarioRunFailure } from '../api/client'
+import type { ScenarioMessageResponse } from '../api/client'
 import type { ScenarioMessage, ScenarioQuestion, ScenarioSession } from '../types'
 import type { ScenarioRunEvent } from '../types/agentRun'
 
@@ -8,6 +9,13 @@ interface ScenarioActiveRun {
   userContent: string
   events: ScenarioRunEvent[]
 }
+
+interface PersistedScenarioRun extends ScenarioActiveRun {
+  stateRevision: number
+  updatedAt: number
+}
+
+const PENDING_RUN_TTL_MS = 30 * 60 * 1000
 
 interface ScenarioSessionState {
   sessionId: string
@@ -20,6 +28,13 @@ interface ScenarioSessionState {
   sendError: string
   activeRun: ScenarioActiveRun | null
   completedRuns: Record<string, ScenarioRunEvent[]>
+  _connectRun: (
+    token: string,
+    sessionId: string,
+    run: ScenarioActiveRun,
+    stateRevision: number,
+  ) => Promise<ScenarioMessageResponse>
+  _applyRunResult: (sessionId: string, requestId: string, result: ScenarioMessageResponse) => void
   hydrate: (token: string, sessionId: string, optimistic?: { question?: ScenarioQuestion | null; session?: ScenarioSession | null }) => Promise<void>
   sendMessage: (token: string, sessionId: string, content: string) => Promise<void>
   quit: (token: string, sessionId: string) => Promise<{ status: string; session: ScenarioSession }>
@@ -44,23 +59,100 @@ function emptyState() {
 export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) => ({
   ...emptyState(),
 
+  // Keep the request identity across a browser refresh. The server owns idempotency;
+  // the client only stores public run events needed to resume the visible stream.
+  _connectRun: async (token, sessionId, run, stateRevision) => {
+    const onRunEvent = (event: ScenarioRunEvent) => {
+      let nextRun: ScenarioActiveRun | null = null
+      set((state) => {
+        if (state.activeRun?.requestId !== run.requestId) return state
+        nextRun = {
+          ...state.activeRun,
+          events: appendRunEvent(state.activeRun.events, event),
+        }
+        return { ...state, activeRun: nextRun }
+      })
+      if (nextRun) persistPendingRun(sessionId, nextRun, stateRevision)
+    }
+
+    try {
+      return await api.sendScenarioMessageStream(
+        token,
+        sessionId,
+        {
+          content: run.userContent,
+          requestId: run.requestId,
+          stateRevision,
+          afterSequence: latestSequence(run.events),
+        },
+        onRunEvent,
+      )
+    } catch (err) {
+      if (err instanceof ScenarioRunFailure) throw err
+      const afterSequence = latestSequence(get().activeRun?.events ?? run.events)
+      return api.sendScenarioMessageStream(
+        token,
+        sessionId,
+        {
+          content: run.userContent,
+          requestId: run.requestId,
+          stateRevision,
+          afterSequence,
+        },
+        onRunEvent,
+      )
+    }
+  },
+
+  _applyRunResult: (sessionId, requestId, result) => {
+    clearPendingRun(sessionId, requestId)
+    set((state) => ({
+      ...state,
+      session: result.session,
+      messages: state.messages.some((message) => message.id === result.message.id)
+        ? state.messages
+        : [...state.messages, result.message],
+      activeRun: null,
+      isSending: false,
+      completedRuns: {
+        ...state.completedRuns,
+        [result.message.id]: normalizeRunEvents(
+          result.run_events ?? result.message.response_meta.run_events ?? state.activeRun?.events ?? [],
+        ),
+      },
+    }))
+  },
+
   hydrate: async (token, sessionId, optimistic) => {
     const hasOptimistic = Boolean(optimistic?.question && optimistic?.session)
+    const pendingRun = readPendingRun(sessionId)
     set(() => ({
       ...emptyState(),
       sessionId,
       question: optimistic?.question ?? null,
       session: optimistic?.session ?? null,
+      activeRun: pendingRun
+        ? { requestId: pendingRun.requestId, userContent: pendingRun.userContent, events: pendingRun.events }
+        : null,
+      isSending: Boolean(pendingRun),
       isLoading: true,
     }))
     try {
       const detail = await api.scenarioSessionDetail(token, sessionId)
+      const committedPendingRun = pendingRun && (detail.messages ?? []).some(
+        (message) => message.response_meta.request_id === pendingRun.requestId,
+      )
+      const stalePendingRun = pendingRun && !committedPendingRun && detail.session.state_revision > pendingRun.stateRevision
       set((state) => ({
         ...state,
         sessionId,
         question: detail.session.question_snapshot,
         session: detail.session,
         messages: detail.messages ?? [],
+        activeRun: committedPendingRun || stalePendingRun || !pendingRun
+          ? null
+          : { requestId: pendingRun.requestId, userContent: pendingRun.userContent, events: pendingRun.events },
+        isSending: Boolean(pendingRun && !committedPendingRun && !stalePendingRun),
         completedRuns: Object.fromEntries(
           (detail.messages ?? [])
             .filter((message) => (message.response_meta.run_events?.length ?? 0) > 0)
@@ -68,6 +160,23 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
         ),
         isLoading: false,
       }))
+      if (committedPendingRun) {
+        clearPendingRun(sessionId, pendingRun.requestId)
+      } else if (stalePendingRun) {
+        clearPendingRun(sessionId, pendingRun.requestId)
+      } else if (pendingRun) {
+        try {
+          const result = await get()._connectRun(token, sessionId, pendingRun, pendingRun.stateRevision)
+          get()._applyRunResult(sessionId, pendingRun.requestId, result)
+        } catch (err) {
+          if (err instanceof ScenarioRunFailure) clearPendingRun(sessionId, pendingRun.requestId)
+          set((state) => ({
+            ...state,
+            isSending: false,
+            sendError: err instanceof Error ? err.message : '恢复排查消息失败',
+          }))
+        }
+      }
     } catch (err) {
       set((state) => ({
         ...state,
@@ -89,50 +198,15 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
       activeRun: { requestId: createRequestId(), userContent, events: [] },
     }))
 
-    const requestId = get().activeRun?.requestId ?? createRequestId()
+    const activeRun = get().activeRun ?? { requestId: createRequestId(), userContent, events: [] }
+    const requestId = activeRun.requestId
     const stateRevision = get().session?.state_revision ?? 0
-    const onRunEvent = (event: ScenarioRunEvent) => {
-      set((state) => ({
-        ...state,
-        activeRun: state.activeRun?.requestId === requestId
-          ? { ...state.activeRun, events: appendRunEvent(state.activeRun.events, event) }
-          : state.activeRun,
-      }))
-    }
+    persistPendingRun(sessionId, activeRun, stateRevision)
     try {
-      let result
-      try {
-        result = await api.sendScenarioMessageStream(
-          token,
-          sessionId,
-          { content: userContent, requestId, stateRevision },
-          onRunEvent,
-        )
-      } catch (err) {
-        if (err instanceof ScenarioRunFailure) throw err
-        const afterSequence = latestSequence(get().activeRun?.events ?? [])
-        result = await api.sendScenarioMessageStream(
-          token,
-          sessionId,
-          { content: userContent, requestId, stateRevision, afterSequence },
-          onRunEvent,
-        )
-      }
-
-      set((state) => ({
-        ...state,
-        session: result.session,
-        messages: [...state.messages, result.message],
-        activeRun: null,
-        isSending: false,
-        completedRuns: {
-          ...state.completedRuns,
-          [result.message.id]: normalizeRunEvents(
-            result.run_events ?? result.message.response_meta.run_events ?? state.activeRun?.events ?? [],
-          ),
-        },
-      }))
+      const result = await get()._connectRun(token, sessionId, activeRun, stateRevision)
+      get()._applyRunResult(sessionId, requestId, result)
     } catch (err) {
+      if (err instanceof ScenarioRunFailure) clearPendingRun(sessionId, requestId)
       set((state) => ({
         ...state,
         isSending: false,
@@ -146,6 +220,7 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
     set((state) => ({ ...state, isQuitting: true, sendError: '' }))
     try {
       const result = await api.quitScenarioSession(token, sessionId)
+      clearPendingRun(sessionId)
       set((state) => ({
         ...state,
         isQuitting: false,
@@ -184,4 +259,72 @@ function normalizeRunEvents(events: ScenarioRunEvent[]) {
 
 function latestSequence(events: ScenarioRunEvent[]) {
   return events.reduce((latest, event) => Math.max(latest, event.sequence), 0)
+}
+
+function pendingRunStorageKey(sessionId: string) {
+  return `hiddenworld:scenario:pending-run:${sessionId}`
+}
+
+function readPendingRun(sessionId: string): PersistedScenarioRun | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.sessionStorage.getItem(pendingRunStorageKey(sessionId))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<PersistedScenarioRun>
+    if (
+      typeof parsed.requestId !== 'string'
+      || typeof parsed.userContent !== 'string'
+      || typeof parsed.stateRevision !== 'number'
+      || typeof parsed.updatedAt !== 'number'
+      || !Array.isArray(parsed.events)
+    ) {
+      clearPendingRun(sessionId)
+      return null
+    }
+    if (Date.now() - parsed.updatedAt > PENDING_RUN_TTL_MS) {
+      clearPendingRun(sessionId)
+      return null
+    }
+    return {
+      requestId: parsed.requestId,
+      userContent: parsed.userContent,
+      events: normalizeRunEvents(parsed.events as ScenarioRunEvent[]),
+      stateRevision: parsed.stateRevision,
+      updatedAt: parsed.updatedAt,
+    }
+  } catch {
+    clearPendingRun(sessionId)
+    return null
+  }
+}
+
+function persistPendingRun(sessionId: string, run: ScenarioActiveRun, stateRevision: number) {
+  if (typeof window === 'undefined') return
+  try {
+    const payload: PersistedScenarioRun = {
+      ...run,
+      events: normalizeRunEvents(run.events),
+      stateRevision,
+      updatedAt: Date.now(),
+    }
+    window.sessionStorage.setItem(pendingRunStorageKey(sessionId), JSON.stringify(payload))
+  } catch {
+    // Storage can be unavailable in private browsing; in-memory recovery still works.
+  }
+}
+
+function clearPendingRun(sessionId: string, requestId?: string) {
+  if (typeof window === 'undefined') return
+  try {
+    if (requestId) {
+      const raw = window.sessionStorage.getItem(pendingRunStorageKey(sessionId))
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<PersistedScenarioRun>
+        if (parsed.requestId && parsed.requestId !== requestId) return
+      }
+    }
+    window.sessionStorage.removeItem(pendingRunStorageKey(sessionId))
+  } catch {
+    // Ignore storage cleanup failures.
+  }
 }
