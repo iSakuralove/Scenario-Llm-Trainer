@@ -767,6 +767,68 @@
 }
 
 @media (max-width: 720px) {
+  .app-shell {
+    display: block;
+    min-height: 100svh;
+  }
+
+  .sidebar {
+    position: static;
+    height: auto;
+    gap: 12px;
+    padding: 12px 14px 10px;
+  }
+
+  .sidebar-brand-row {
+    align-items: center;
+  }
+
+  .sidebar .brand {
+    min-width: 0;
+    gap: 9px;
+  }
+
+  .sidebar .brand-mark {
+    width: 34px;
+    flex: 0 0 34px;
+  }
+
+  .sidebar .brand strong,
+  .sidebar .brand small {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sidebar .nav-list {
+    display: flex;
+    gap: 7px;
+    min-width: 0;
+    margin: 0 -2px;
+    padding: 0 2px 2px;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  .sidebar .nav-list a {
+    flex: 0 0 auto;
+    min-height: 36px;
+    padding: 8px 10px;
+    white-space: nowrap;
+  }
+
+  .sidebar-status-card,
+  .user-strip {
+    display: none;
+  }
+
+  .workspace,
+  .sidebar-collapsed .workspace {
+    min-width: 0;
+    padding: 12px;
+  }
+
   .auth-layout {
     grid-template-columns: 1fr;
     min-height: auto;
