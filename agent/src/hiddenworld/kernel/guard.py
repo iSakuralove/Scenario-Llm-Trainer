@@ -6,11 +6,18 @@ import re
 import unicodedata
 from collections.abc import Collection
 
-from hiddenworld.contracts import GuardContext, HiddenWorld, MentorAction, TeachingConstraints
+from hiddenworld.contracts import (
+    GuardContext,
+    HiddenWorld,
+    MentorAction,
+    PublicScenario,
+    TeachingConstraints,
+)
 
 _HAN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 _IDENTIFIER = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_.:/-]{2,})(?![A-Za-z0-9_])")
 _NUMBER = re.compile(r"(?<!\d)(\d+(?:[.,]\d+)*)(?!\d)")
+_NUMBER_ENTITY = re.compile(r"\d+(?:[.,]\d+)*")
 _CHINESE_COMPONENT = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]{1,8}(?:表|服务|接口|主库|从库|索引|字段)")
 
 
@@ -54,18 +61,40 @@ class Guard:
 def extract_forbidden_entities(
     world: HiddenWorld,
     *,
-    released_evidence: Collection[str],
+    released_evidence_ids: Collection[str],
+    public_scenario: PublicScenario | None = None,
 ) -> list[str]:
-    """从根因与未释放证据提取 Guard 需要比对的最小实体。"""
+    """从根因与未释放证据提取 Guard 需要比对的最小实体。
 
-    released = set(released_evidence)
+    ``released_evidence_ids`` 始终是服务端维护的 evidence id 集合，不接受证据
+    正文。题面里已经公开的实体必须从禁词集合移除，否则 Mentor 复述公开事实时
+    会被误判为泄露。
+    """
+
+    released = set(released_evidence_ids)
     sources = [world.root_cause.description]
     sources.extend(node.content for node in world.evidence_graph if node.evidence_id not in released)
 
     entities = [world.root_cause.id, world.root_cause.component]
     for source in sources:
         entities.extend(_sensitive_tokens(source))
-    return _unique_non_empty(entities)
+    public_entities: set[str] = set()
+    if public_scenario is not None:
+        for source in _public_scenario_sources(public_scenario):
+            public_entities.update(_entity_key(token) for token in _sensitive_tokens(source))
+    return _unique_non_empty(
+        [entity for entity in entities if _entity_key(entity) not in public_entities]
+    )
+
+
+def _public_scenario_sources(public_scenario: PublicScenario) -> list[str]:
+    return [
+        public_scenario.title,
+        public_scenario.description,
+        public_scenario.environment,
+        *public_scenario.initial_symptoms,
+        public_scenario.architecture_diagram,
+    ]
 
 
 def _sensitive_tokens(text: str) -> list[str]:
@@ -94,12 +123,14 @@ def _unique_non_empty(values: list[str]) -> list[str]:
 
 
 def _contains_entity(text: str, entity: str) -> bool:
-    normalized_entity = unicodedata.normalize("NFKC", entity).strip().casefold()
+    normalized_entity = _entity_key(entity)
     if not normalized_entity:
         return False
     normalized_text = unicodedata.normalize("NFKC", text).casefold()
+    if _NUMBER_ENTITY.fullmatch(normalized_entity):
+        pattern = re.compile(rf"(?<!\d){re.escape(normalized_entity)}(?!\d)")
+        return pattern.search(normalized_text) is not None
     if _HAN.search(normalized_entity):
-        normalized_entity = re.sub(r"\s+", "", normalized_entity)
         normalized_text = re.sub(r"\s+", "", normalized_text)
         return any(
             token == normalized_entity
@@ -110,6 +141,13 @@ def _contains_entity(text: str, entity: str) -> bool:
         re.IGNORECASE,
     )
     return pattern.search(normalized_text) is not None
+
+
+def _entity_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).strip().casefold()
+    if _HAN.search(normalized):
+        return re.sub(r"\s+", "", normalized)
+    return normalized
 
 
 def _dictionary_tokens(text: str, dictionary: list[str]) -> list[str]:

@@ -193,7 +193,7 @@ class HiddenWorldRuntime:
             transcript=request.transcript,
             learner_state=_learner_view(request, projected_state),
             constraints=constraints,
-            released_evidence=_released_evidence(request, projected_state),
+            released_evidence=_released_evidence_text(request, projected_state),
             answer_comparison=answer_public,
             guard_only=GuardContext(
                 forbidden_entities=_forbidden_entities(request, projected_state),
@@ -277,7 +277,7 @@ def _learner_view(request: AgentTurnRequest, state: LearnerState) -> LearnerStat
     )
 
 
-def _released_evidence(request: AgentTurnRequest, state: LearnerState) -> list[str]:
+def _released_evidence_text(request: AgentTurnRequest, state: LearnerState) -> list[str]:
     released = set(state.collected_evidence)
     return [node.content for node in request.hidden_world.evidence_graph if node.evidence_id in released]
 
@@ -285,7 +285,8 @@ def _released_evidence(request: AgentTurnRequest, state: LearnerState) -> list[s
 def _forbidden_entities(request: AgentTurnRequest, state: LearnerState) -> list[str]:
     return extract_forbidden_entities(
         request.hidden_world,
-        released_evidence=state.collected_evidence,
+        released_evidence_ids=state.collected_evidence,
+        public_scenario=request.public_scenario,
     )
 
 

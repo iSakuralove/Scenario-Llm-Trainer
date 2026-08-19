@@ -69,12 +69,56 @@ def test_guard_rejects_release_outside_approved_subset(teaching_constraints) -> 
     assert "E_DDL_DIFF" not in str(caught.value)
 
 
-def test_forbidden_entity_extraction_catches_partial_identifiers_and_numbers(hidden_world) -> None:
-    entities = extract_forbidden_entities(hidden_world, released_evidence=["E_CPU_NORMAL"])
+def test_forbidden_entity_extraction_catches_partial_identifiers_and_numbers(
+    hidden_world, public_scenario
+) -> None:
+    entities = extract_forbidden_entities(
+        hidden_world,
+        released_evidence_ids=["E_CPU_NORMAL"],
+        public_scenario=public_scenario,
+    )
 
     assert "idx_user_created" in entities
     assert "240" in entities
     assert hidden_world.root_cause.component in entities
+
+
+def test_guard_allows_public_and_released_numeric_facts(
+    hidden_world, public_scenario, teaching_constraints
+) -> None:
+    entities = extract_forbidden_entities(
+        hidden_world,
+        released_evidence_ids=["E_SLOW_SQL"],
+        public_scenario=public_scenario,
+    )
+
+    assert "P99" not in entities
+    assert "3.8" not in entities
+    action = mentor_action("慢查询日志里这条 SQL 平均耗时 3.8s，接口 P99 约 4s。")
+    assert Guard().validate(
+        action,
+        constraints=teaching_constraints,
+        context=GuardContext(forbidden_entities=entities),
+    ) == action
+
+
+def test_guard_rejects_unreleased_numeric_fact_with_unit(
+    hidden_world, public_scenario, teaching_constraints
+) -> None:
+    entities = extract_forbidden_entities(
+        hidden_world,
+        released_evidence_ids=[],
+        public_scenario=public_scenario,
+    )
+
+    assert "3.8" in entities
+    with pytest.raises(GuardViolation) as caught:
+        Guard().validate(
+            mentor_action("慢查询平均耗时 3.8s。"),
+            constraints=teaching_constraints,
+            context=GuardContext(forbidden_entities=entities),
+        )
+    assert caught.value.code == "entity_leak"
 
 
 def test_guard_normalizes_spacing_in_mixed_chinese_english_entities(teaching_constraints) -> None:
