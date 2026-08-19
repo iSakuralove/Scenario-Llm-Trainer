@@ -2,7 +2,7 @@
   "question_id": "hw-k8s-io-001",
   "domain": "devops",
   "difficulty": "L3",
-  "scenario_type": "availability",
+  "scenario_type": "troubleshooting",
   "tags": ["Kubernetes", "磁盘 IO", "容器", "发布"],
   "source": "fixed_hiddenworld",
   "version": 1,

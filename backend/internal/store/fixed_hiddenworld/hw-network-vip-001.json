@@ -2,7 +2,7 @@
   "question_id": "hw-network-vip-001",
   "domain": "network",
   "difficulty": "L3",
-  "scenario_type": "availability",
+  "scenario_type": "troubleshooting",
   "tags": ["网络", "VIP", "发布变更", "超时"],
   "source": "fixed_hiddenworld",
   "version": 1,

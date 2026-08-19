@@ -2,7 +2,7 @@
   "question_id": "hw-cache-key-001",
   "domain": "backend",
   "difficulty": "L3",
-  "scenario_type": "correctness",
+  "scenario_type": "troubleshooting",
   "tags": ["Redis", "缓存键", "多租户", "数据串读"],
   "source": "fixed_hiddenworld",
   "version": 1,

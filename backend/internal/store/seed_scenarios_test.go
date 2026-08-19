@@ -54,6 +54,9 @@ func TestSeedScenariosLoadTheFixedHiddenWorldBank(t *testing.T) {
 		if item.Status != "active" || item.Source != "fixed_hiddenworld" || item.Version != 1 {
 			t.Fatalf("unexpected fixed question metadata: %+v", item)
 		}
+		if item.ScenarioType != "troubleshooting" && item.ScenarioType != "performance" {
+			t.Fatalf("fixed HiddenWorld question must use a supported troubleshooting type, got %q for %s", item.ScenarioType, item.ID)
+		}
 		if item.CreatedBy != "user-admin" || item.Content.ModelVersion != "hiddenworld.v1" {
 			t.Fatalf("unexpected fixed question ownership/version: %+v", item)
 		}
