@@ -63,7 +63,7 @@ services:
       GLM_API_KEY: ${GLM_API_KEY:-}
       GLM_BASE_URL: ${GLM_BASE_URL:-}
       GLM_MODEL: ${GLM_MODEL:-glm-4.7}
-      XUAN_BASE_URL: ${XUAN_BASE_URL:-https://elysiver.h-e.top/}
+      XUAN_BASE_URL: ${XUAN_BASE_URL:-https://elysiver.h-e.top/v1}
       XUAN_API_KEY: ${XUAN_API_KEY:-}
       XUAN_MODEL: ${XUAN_MODEL:-grok-4.5}
     ports:

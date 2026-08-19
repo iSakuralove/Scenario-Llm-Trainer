@@ -13,7 +13,7 @@ from pydantic_ai.providers.zai import ZaiProvider
 
 DEEPSEEK_MODEL_ID = "deepseek-v4-flash"
 GLM_MODEL_ID = "glm-4.7"
-XUAN_BASE_URL = "https://elysiver.h-e.top/"
+XUAN_BASE_URL = "https://elysiver.h-e.top/v1"
 XUAN_MODEL_IDS = ("grok-4.5", "deepseek-v4-flash-0731")
 
 

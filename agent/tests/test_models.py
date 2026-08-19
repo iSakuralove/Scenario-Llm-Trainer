@@ -34,17 +34,20 @@ def test_glm_model_accepts_project_glm_environment_alias(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize("model_id", ["grok-4.5", "deepseek-v4-flash-0731"])
-def test_xuan_model_uses_openai_compatible_route_and_locked_models(model_id: str) -> None:
+def test_xuan_model_uses_openai_compatible_route_and_locked_models(
+    monkeypatch,
+    model_id: str,
+) -> None:
+    monkeypatch.delenv("XUAN_BASE_URL", raising=False)
     model = build_xuan_model(
         api_key="test-xuan-key",
-        base_url="https://elysiver.h-e.top/",
         model=model_id,
     )
 
     assert isinstance(model, OpenAIChatModel)
     assert model.model_name == model_id
     assert model.system == "openai"
-    assert str(model.client.base_url) == "https://elysiver.h-e.top/"
+    assert str(model.client.base_url) == "https://elysiver.h-e.top/v1/"
     assert model.client.max_retries == 0
 
 
