@@ -36,6 +36,18 @@ def test_first_fixed_question_loads_and_validates() -> None:
     assert question.model_version == CONTRACT_VERSION
 
 
+def test_all_fixed_questions_load_and_validate() -> None:
+    questions = list_fixed_questions()
+
+    assert {question.question_id for question in questions} == set(FIXED_BANK_IDS)
+    for question in questions:
+        assert question.source == "fixed_hiddenworld"
+        assert question.status == "active"
+        assert question.version == 1
+        assert question.model_version == CONTRACT_VERSION
+        assert question.scenario_type in {"troubleshooting", "performance"}
+
+
 def test_first_fixed_question_meets_bank_scale() -> None:
     """006 定下的固定题最小规模。"""
     world = load_fixed_question(FIRST_FIXED_ID).hidden_world

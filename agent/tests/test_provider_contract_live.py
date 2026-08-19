@@ -15,7 +15,7 @@ from pydantic_ai import models
 from hiddenworld.agents.interpreter import create_interpreter_agent
 from hiddenworld.agents.mentor import create_mentor_agent
 from hiddenworld.agents.models import build_deepseek_model, build_glm_model
-from hiddenworld.bank.loader import load_fixed_question
+from hiddenworld.bank.loader import FIXED_BANK_IDS, load_fixed_question
 from hiddenworld.contracts import AgentTurnRequest, LearnerState
 from hiddenworld.runtime import HiddenWorldRuntime
 
@@ -45,10 +45,17 @@ def live_provider(request: pytest.FixtureRequest):
     return provider, build_glm_model(api_key=keys[provider])
 
 
+@pytest.fixture(params=FIXED_BANK_IDS)
+def fixed_question_id(request: pytest.FixtureRequest) -> str:
+    return str(request.param)
+
+
 @pytest.mark.asyncio
-async def test_live_fixed_and_adaptive_trajectories_keep_hard_contract(live_provider) -> None:
+async def test_live_fixed_and_adaptive_trajectories_keep_hard_contract(
+    live_provider, fixed_question_id: str
+) -> None:
     provider, model = live_provider
-    question = load_fixed_question("hw-db-index-001")
+    question = load_fixed_question(fixed_question_id)
     runtime = HiddenWorldRuntime(
         interpreter=create_interpreter_agent(model),
         mentor=create_mentor_agent(model),
@@ -56,7 +63,7 @@ async def test_live_fixed_and_adaptive_trajectories_keep_hard_contract(live_prov
 
     fixed = await runtime.run_turn(
         AgentTurnRequest(
-            request_id=f"live-{provider}-fixed",
+            request_id=f"live-{provider}-{fixed_question_id}-fixed",
             session_id=f"live-{provider}",
             state_revision=0,
             public_scenario=question.public_scenario,
@@ -67,7 +74,7 @@ async def test_live_fixed_and_adaptive_trajectories_keep_hard_contract(live_prov
     )
     adaptive = await runtime.run_turn(
         AgentTurnRequest(
-            request_id=f"live-{provider}-adaptive",
+            request_id=f"live-{provider}-{fixed_question_id}-adaptive",
             session_id=f"live-{provider}",
             state_revision=1,
             public_scenario=question.public_scenario,
