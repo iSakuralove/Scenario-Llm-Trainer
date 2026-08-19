@@ -27,6 +27,7 @@ type Store interface {
 	ListScenarioMessages(sessionID string) []domain.ScenarioMessage
 	ListScenarioSessionsForUser(userID string) []domain.ScenarioSession
 	GetScenarioAgentTurn(sessionID, requestID string) (domain.ScenarioAgentTurnRecord, bool)
+	ListScenarioAgentTurns(sessionID string) []domain.ScenarioAgentTurnRecord
 	CommitScenarioAgentTurn(commit domain.ScenarioAgentTurnCommit) (domain.ScenarioAgentTurnCommitResult, error)
 
 	FindInterviewQuestion(domainName, difficulty, questionType string) (*domain.InterviewQuestion, bool)

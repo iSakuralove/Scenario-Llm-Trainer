@@ -583,6 +583,19 @@ func (s *Server) evaluateScenarioAnswer(user *domain.User, sessionID, answer str
 		CurrentTurn: session.CurrentTurn,
 		VectorStore: vectorStore,
 	})
+	parallelScore := scoreScenarioWithHiddenWorld(
+		question,
+		session,
+		answer,
+		s.store.ListScenarioAgentTurns(sessionID),
+	)
+	s.store.RecordAuditEvent(domain.AuditEvent{
+		ActorID:      user.ID,
+		Action:       "scenario.scoring_parallel_compare",
+		ResourceType: "scenario_session",
+		ResourceID:   sessionID,
+		Metadata:     parallelScore.auditMetadata(score),
+	})
 	evaluation := &domain.ScenarioEvaluation{
 		IsCorrect:         score.Accuracy >= 70,
 		MatchDegree:       score.Accuracy,

@@ -63,6 +63,14 @@ func TestScenarioEvaluationIncludesEvidenceChainScoringReport(t *testing.T) {
 	if len(report.EvidenceEvents) < 3 || len(report.MatchedDocuments) == 0 {
 		t.Fatalf("expected evidence events and matches, got %+v", report)
 	}
+	auditEvents := dataStore.ListAuditEvents(20)
+	if len(auditEvents) == 0 || auditEvents[0].Action != "scenario.scoring_parallel_compare" {
+		t.Fatalf("expected parallel scoring audit event, got %+v", auditEvents)
+	}
+	metadata := auditEvents[0].Metadata
+	if metadata["legacy_total"] == "" || metadata["status"] != "insufficient_data" {
+		t.Fatalf("expected legacy score with explicit unavailable aggregate, got %+v", metadata)
+	}
 }
 
 func TestScenarioEvaluationPenalizesRootGuessWithoutEvidenceChain(t *testing.T) {

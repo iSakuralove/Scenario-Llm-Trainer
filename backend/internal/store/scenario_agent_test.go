@@ -85,4 +85,8 @@ func TestMemoryStoreScenarioAgentTurnIsAtomicIdempotentAndRevisioned(t *testing.
 	if len(dataStore.ListScenarioMessages(session.ID)) != 1 {
 		t.Fatal("revision conflict must not partially write a message")
 	}
+	turns := dataStore.ListScenarioAgentTurns(session.ID)
+	if len(turns) != 1 || turns[0].RequestID != "request-1" {
+		t.Fatalf("expected one ordered agent turn, got %+v", turns)
+	}
 }
