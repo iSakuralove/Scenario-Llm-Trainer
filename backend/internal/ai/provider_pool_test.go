@@ -11,7 +11,7 @@ import (
 )
 
 func TestProviderCapabilityRegistryIncludesPriorityAndTasks(t *testing.T) {
-	for _, provider := range []string{ProviderDeepSeek, ProviderQwen, ProviderERNIE, ProviderOpenAICompatible, ProviderMock} {
+	for _, provider := range []string{ProviderDeepSeek, ProviderGLM, ProviderQwen, ProviderERNIE, ProviderOpenAICompatible, ProviderMock} {
 		info := ProviderInfo{Provider: provider, Model: provider}
 		capability := capabilityForProvider(info, true)
 		if capability.Provider != provider {
@@ -219,6 +219,9 @@ func TestProviderPoolSnapshotMarksUnconfiguredProvidersDisabled(t *testing.T) {
 	}
 	if got := pool.ProviderByName(ProviderQwen); got == nil || got.Enabled {
 		t.Fatalf("expected qwen to exist but be disabled, got %+v", got)
+	}
+	if got := pool.ProviderByName(ProviderGLM); got == nil || got.Enabled {
+		t.Fatalf("expected glm to exist but be disabled, got %+v", got)
 	}
 	if got := pool.ProviderByName(ProviderERNIE); got == nil || got.Enabled {
 		t.Fatalf("expected ernie to exist but be disabled, got %+v", got)

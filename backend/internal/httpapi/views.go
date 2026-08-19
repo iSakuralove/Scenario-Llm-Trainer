@@ -79,6 +79,9 @@ func canViewFullScenario(question *domain.ScenarioQuestion, user *domain.User) b
 	if question == nil || user == nil {
 		return false
 	}
+	if question.Content.ModelVersion == domain.HiddenWorldContractVersion {
+		return user.Role == domain.RoleAdmin || user.Role == domain.RoleInstructor
+	}
 	return user.Role == domain.RoleAdmin || user.Role == domain.RoleInstructor || user.ID == question.CreatedBy
 }
 func scenarioView(question *domain.ScenarioQuestion, user *domain.User) domain.ScenarioQuestionView {

@@ -18,6 +18,7 @@ const (
 	ProviderDeepSeek         = "deepseek"
 	ProviderQwen             = "qwen"
 	ProviderERNIE            = "ernie"
+	ProviderGLM              = "glm"
 
 	defaultDeepSeekBaseURL  = "https://api.deepseek.com"
 	defaultDeepSeekModel    = "deepseek-v4-flash"
@@ -28,6 +29,8 @@ const (
 	defaultQwenModel        = "qwen-plus"
 	defaultERNIEBaseURL     = "https://qianfan.baidubce.com/v2"
 	defaultERNIEModel       = "ernie-4.0-turbo-8k"
+	defaultGLMBaseURL       = "https://open.bigmodel.cn/api/paas/v4"
+	defaultGLMModel         = "glm-5.3"
 )
 
 type Config struct {
@@ -96,33 +99,41 @@ type ScenarioGenerationRequest struct {
 }
 
 type ScenarioGenerationConstraints struct {
-	Title         string
-	Description   string
-	TopicScope    []string
-	RootCauseHint string
-	EvidenceHints []string
-	ClueHints     []string
+	TitleHint          string
+	DescriptionHint    string
+	TopicScope         []string
+	HypothesisHints    []string
+	ObservationHints   []string
+	EvidencePathHints  []string
+	MisconceptionHints []string
+	SolutionHints      []string
 }
 
 func (c ScenarioGenerationConstraints) ActiveFields() []string {
-	fields := make([]string, 0, 6)
-	if strings.TrimSpace(c.Title) != "" {
-		fields = append(fields, "title")
+	fields := make([]string, 0, 8)
+	if strings.TrimSpace(c.TitleHint) != "" {
+		fields = append(fields, "title_hint")
 	}
-	if strings.TrimSpace(c.Description) != "" {
-		fields = append(fields, "description")
+	if strings.TrimSpace(c.DescriptionHint) != "" {
+		fields = append(fields, "description_hint")
 	}
 	if len(c.TopicScope) > 0 {
 		fields = append(fields, "topic_scope")
 	}
-	if strings.TrimSpace(c.RootCauseHint) != "" {
-		fields = append(fields, "root_cause_hint")
+	if len(c.HypothesisHints) > 0 {
+		fields = append(fields, "hypothesis_hints")
 	}
-	if len(c.EvidenceHints) > 0 {
-		fields = append(fields, "evidence_hints")
+	if len(c.ObservationHints) > 0 {
+		fields = append(fields, "observation_hints")
 	}
-	if len(c.ClueHints) > 0 {
-		fields = append(fields, "clue_hints")
+	if len(c.EvidencePathHints) > 0 {
+		fields = append(fields, "evidence_path_hints")
+	}
+	if len(c.MisconceptionHints) > 0 {
+		fields = append(fields, "misconception_hints")
+	}
+	if len(c.SolutionHints) > 0 {
+		fields = append(fields, "solution_hints")
 	}
 	return fields
 }
@@ -227,6 +238,7 @@ func ConfigFromEnv() Config {
 	jianyiKey := strings.TrimSpace(os.Getenv("JIANYI_API_KEY"))
 	qwenKey := strings.TrimSpace(os.Getenv("QWEN_API_KEY"))
 	ernieKey := strings.TrimSpace(os.Getenv("ERNIE_API_KEY"))
+	glmKey := strings.TrimSpace(os.Getenv("GLM_API_KEY"))
 	cfg := Config{
 		Provider:         "",
 		BaseURL:          strings.TrimSpace(os.Getenv("LLM_BASE_URL")),
@@ -318,6 +330,27 @@ func ConfigFromEnv() Config {
 			cfg.Model = strings.TrimSpace(os.Getenv("ERNIE_MODEL"))
 		}
 	}
+	if glmKey != "" {
+		providerConfigs[ProviderGLM] = Config{
+			Provider:         ProviderGLM,
+			APIKey:           glmKey,
+			BaseURL:          strings.TrimSpace(os.Getenv("GLM_BASE_URL")),
+			Model:            strings.TrimSpace(os.Getenv("GLM_MODEL")),
+			Timeout:          cfg.Timeout,
+			Temperature:      cfg.Temperature,
+			TopP:             cfg.TopP,
+			TopK:             cfg.TopK,
+			MaxTokens:        cfg.MaxTokens,
+			StreamEnabled:    cfg.StreamEnabled,
+			StreamConfigured: true,
+		}
+		if cfg.Provider == "" {
+			cfg.Provider = ProviderGLM
+			cfg.APIKey = glmKey
+			cfg.BaseURL = strings.TrimSpace(os.Getenv("GLM_BASE_URL"))
+			cfg.Model = strings.TrimSpace(os.Getenv("GLM_MODEL"))
+		}
+	}
 	if cfg.APIKey != "" && cfg.BaseURL != "" && strings.TrimSpace(cfg.Provider) == ProviderOpenAICompatible {
 		providerConfigs[ProviderOpenAICompatible] = Config{
 			Provider:         ProviderOpenAICompatible,
@@ -386,6 +419,13 @@ func NormalizeConfig(cfg Config) Config {
 		}
 		if cfg.Model == "" {
 			cfg.Model = defaultERNIEModel
+		}
+	case ProviderGLM:
+		if cfg.BaseURL == "" {
+			cfg.BaseURL = defaultGLMBaseURL
+		}
+		if cfg.Model == "" {
+			cfg.Model = defaultGLMModel
 		}
 	case ProviderOpenAICompatible:
 		if cfg.BaseURL == "" {
@@ -527,7 +567,7 @@ func (r *Router) GenerateScenario(ctx context.Context, req ScenarioGenerationReq
 		RouterTaskScenarioGenerate,
 		withDomain(req.Domain),
 		withUserID(req.UserID),
-		withSchema(SchemaScenarioQuestion),
+		withSchema(SchemaHiddenWorldQuestion),
 		withPrompt("scenario_generate"),
 	)
 	value, meta, err := r.call(ctx, routerReq, func(provider Provider) (interface{}, error) {
@@ -723,10 +763,16 @@ func taskModelOverride(req RouterRequest, provider ProviderInfo) string {
 }
 
 func taskTimeoutOverride(req RouterRequest, provider ProviderInfo, current time.Duration) time.Duration {
-	if req.Task == RouterTaskScenarioGenerate && provider.Provider == ProviderDeepSeek && current < scenarioGenerateTimeout {
+	// 生题任务需要输出大 JSON，对系统调优过的真实 provider（DeepSeek/GLM）放宽超时下限；
+	// 其余 provider（含用户自定义的中转站）保持显式配置不变。
+	if req.Task == RouterTaskScenarioGenerate && isTunedScenarioProvider(provider.Provider) && current < scenarioGenerateTimeout {
 		return scenarioGenerateTimeout
 	}
 	return current
+}
+
+func isTunedScenarioProvider(providerName string) bool {
+	return providerName == ProviderDeepSeek || providerName == ProviderGLM
 }
 
 func isTerminalScenarioGenerateError(err error) bool {
@@ -752,6 +798,27 @@ func isTerminalTaskError(req RouterRequest, err error) bool {
 		return isTerminalScenarioGenerateError(err)
 	}
 	return false
+}
+
+// shouldStopFallback reports whether the router must stop retrying after err.
+// 严格失败任务（如生题）允许在真实 provider 之间轮转，但绝不降级到 mock 模板题；
+// 用户主动取消则立即终止，不再尝试任何 provider。
+func shouldStopFallback(req RouterRequest, err error, providers []Provider, failedIndex int) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	if !isTerminalTaskError(req, err) {
+		return false
+	}
+	for i := failedIndex + 1; i < len(providers); i++ {
+		if providers[i].Info().Provider != ProviderMock {
+			return false
+		}
+	}
+	return true
 }
 
 func providerWithTaskModel(provider Provider, req RouterRequest) Provider {
@@ -881,7 +948,7 @@ func (r *Router) call(ctx context.Context, req RouterRequest, fn func(Provider) 
 				return value, meta, nil
 			}
 		}
-		if isTerminalTaskError(req, err) {
+		if shouldStopFallback(req, err, providers, index) {
 			attempt := fallbackAttempt(info, attemptStarted, time.Now(), err, firstErr)
 			attempts = append(attempts, attempt)
 			r.recordProviderHealth(info.Provider, err)
@@ -1273,6 +1340,9 @@ func (r *Router) providerPoolSnapshot(info ProviderInfo) ProviderPoolSnapshot {
 		if providerName == ProviderDeepSeek && strings.TrimSpace(providerInfo.Model) == "" {
 			providerInfo.Model = defaultDeepSeekModel
 		}
+		if providerName == ProviderGLM && strings.TrimSpace(providerInfo.Model) == "" {
+			providerInfo.Model = defaultGLMModel
+		}
 		if providerName == ProviderOpenAICompatible && strings.TrimSpace(providerInfo.Model) == "" {
 			providerInfo.Model = defaultJianyiModel
 		}
@@ -1320,7 +1390,7 @@ func (r *Router) providerPoolSnapshot(info ProviderInfo) ProviderPoolSnapshot {
 }
 
 func providerFallbackOrder() []string {
-	return []string{ProviderDeepSeek, ProviderQwen, ProviderERNIE, ProviderOpenAICompatible, ProviderMock}
+	return []string{ProviderDeepSeek, ProviderGLM, ProviderQwen, ProviderERNIE, ProviderOpenAICompatible, ProviderMock}
 }
 
 func enrichProviderInfo(info ProviderInfo, streamEnabled bool, telemetry *routerTelemetryStore) ProviderInfo {

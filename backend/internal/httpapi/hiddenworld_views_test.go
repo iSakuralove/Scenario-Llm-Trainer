@@ -92,3 +92,26 @@ func TestStudentScenarioDetailOnlyReturnsPublicHiddenWorldProjection(t *testing.
 		t.Fatalf("rendering public view mutated private compatibility evidence: %+v", stored.Content.KeyEvidence)
 	}
 }
+
+func TestHiddenWorldCreatorCannotReadPrivateWorldThroughDetailEndpoint(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+	question := dataStore.AddScenario(domain.ScenarioQuestion{
+		ID: "hw-creator-private-test", Title: "生成题", Description: "公开题面", Domain: "database", Difficulty: "L2",
+		ScenarioType: "troubleshooting", Tags: []string{"AI生成"}, Status: "active", Source: "llm_generated", CreatedBy: "user-demo", Version: 1,
+		Content: domain.ScenarioContent{
+			ModelVersion:   domain.HiddenWorldContractVersion,
+			PublicScenario: &domain.PublicScenario{Title: "生成题", Description: "公开题面", InitialSymptoms: []string{}, ArchitectureDiagram: ""},
+			HiddenWorld:    &domain.HiddenWorld{RootCause: domain.RootCause{ID: "RC_PRIVATE", Category: "behavior", Component: "service", Description: "私有根因"}},
+		},
+	})
+	status, env := requestJSON(t, handler, http.MethodGet, "/api/v1/scenarios/"+question.ID, token, nil)
+	if status != http.StatusOK {
+		t.Fatalf("scenario detail status=%d message=%s", status, env.Message)
+	}
+	raw := string(env.Data)
+	if strings.Contains(raw, "hidden_world") || strings.Contains(raw, "RC_PRIVATE") || strings.Contains(raw, "私有根因") {
+		t.Fatalf("creator should not receive hidden world: %s", raw)
+	}
+}

@@ -46,7 +46,7 @@ func TestSeededScenarioGeneratePromptUsesStructuredDefault(t *testing.T) {
 	if !ok {
 		t.Fatal("expected scenario_generate prompt template")
 	}
-	for _, token := range []string{`"architecture_diagram_spec"`, `"reveal_strategy"`, `"root_cause_keywords"`} {
+	for _, token := range []string{`"public_scenario"`, `"hidden_world"`, `"evidence_graph"`, `"observations"`, `"misconception_rules"`} {
 		if !strings.Contains(template.Default, token) || !strings.Contains(template.Content, token) {
 			t.Fatalf("expected seeded scenario_generate prompt to contain %s, got %+v", token, template)
 		}

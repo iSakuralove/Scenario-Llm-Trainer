@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"encoding/json"
 	"time"
 )
 
@@ -212,7 +211,7 @@ type PublicScenario struct {
 	Description         string   `json:"description"`
 	Environment         string   `json:"environment,omitempty"`
 	InitialSymptoms     []string `json:"initial_symptoms"`
-	ArchitectureDiagram string   `json:"architecture_diagram,omitempty"`
+	ArchitectureDiagram string   `json:"architecture_diagram"`
 }
 
 type HiddenWorld struct {
@@ -253,7 +252,7 @@ type Observation struct {
 	IsNegative              bool     `json:"is_negative"`
 	YieldsEvidence          []string `json:"yields_evidence"`
 	RulesOut                []string `json:"rules_out"`
-	UnmetPrerequisiteResult string   `json:"unmet_prerequisite_result,omitempty"`
+	UnmetPrerequisiteResult string   `json:"unmet_prerequisite_result"`
 }
 
 type SolutionRubric struct {
@@ -333,10 +332,10 @@ type ScenarioMessage struct {
 }
 
 type ResponseMeta struct {
-	ResponseType string          `json:"response_type"`
-	RequestID    string          `json:"request_id,omitempty"`
-	Revision     int             `json:"revision"`
-	PublicTrace  json.RawMessage `json:"public_trace,omitempty"`
+	ResponseType string             `json:"response_type"`
+	RequestID    string             `json:"request_id,omitempty"`
+	Revision     int                `json:"revision"`
+	RunEvents    []ScenarioRunEvent `json:"run_events,omitempty"`
 }
 
 type AgentTrace struct {
@@ -548,6 +547,7 @@ type AIJob struct {
 	Stage            string     `json:"stage"`
 	Progress         int        `json:"progress"`
 	ErrorMessage     string     `json:"error_message,omitempty"`
+	ValidationErrors []string   `json:"validation_errors,omitempty"`
 	Provider         string     `json:"provider,omitempty"`
 	Model            string     `json:"model,omitempty"`
 	Validated        bool       `json:"validated"`

@@ -26,7 +26,7 @@ func TestSetPromptOverrideRejectsUnstructuredScenarioGeneratePrompt(t *testing.T
 	if renderErr != nil {
 		t.Fatal(renderErr)
 	}
-	for _, token := range []string{`"architecture_diagram_spec"`, `"reveal_strategy"`, `"root_cause_keywords"`} {
+	for _, token := range []string{`"public_scenario"`, `"hidden_world"`, `"evidence_graph"`, `"observations"`, `"misconception_rules"`} {
 		if !strings.Contains(rendered, token) {
 			t.Fatalf("expected built-in structured prompt to contain %s, got %s", token, rendered)
 		}

@@ -95,13 +95,14 @@ func ValidateManagedPromptContent(name, text string) error {
 		`"title"`,
 		`"description"`,
 		`"content"`,
-		`"root_cause"`,
-		`"root_cause_keywords"`,
-		`"architecture_diagram_spec"`,
-		`"reveal_strategy"`,
-		`"surface_clues"`,
-		`"deep_clues"`,
-		`"distractors"`,
+		`"model_version"`,
+		`"public_scenario"`,
+		`"hidden_world"`,
+		`"sufficient_evidence_sets"`,
+		`"evidence_graph"`,
+		`"observations"`,
+		`"solution_rubric"`,
+		`"misconception_rules"`,
 	}
 	missing := []string{}
 	for _, token := range required {

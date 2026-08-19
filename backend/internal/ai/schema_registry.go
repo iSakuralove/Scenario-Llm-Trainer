@@ -13,6 +13,7 @@ import (
 
 const (
 	SchemaScenarioQuestion       = "scenario_question"
+	SchemaHiddenWorldQuestion    = "hiddenworld_question"
 	SchemaScenarioContentPreview = "scenario_content_preview"
 	SchemaInterviewFeedback      = "interview_feedback"
 	SchemaInterviewOpening       = "interview_opening"
@@ -137,6 +138,15 @@ func projectDomainValueForSchema(schemaName string, value interface{}) interface
 				})
 			}
 		}
+	case SchemaHiddenWorldQuestion:
+		switch typed := value.(type) {
+		case domain.ScenarioQuestion:
+			return hiddenWorldQuestionSchemaProjection(typed)
+		case *domain.ScenarioQuestion:
+			if typed != nil {
+				return hiddenWorldQuestionSchemaProjection(*typed)
+			}
+		}
 	case SchemaScenarioContentPreview:
 		switch typed := value.(type) {
 		case domain.ScenarioContent:
@@ -148,6 +158,23 @@ func projectDomainValueForSchema(schemaName string, value interface{}) interface
 		}
 	}
 	return value
+}
+
+func hiddenWorldQuestionSchemaProjection(question domain.ScenarioQuestion) map[string]interface{} {
+	content := question.Content
+	return map[string]interface{}{
+		"title":         question.Title,
+		"description":   question.Description,
+		"domain":        question.Domain,
+		"difficulty":    question.Difficulty,
+		"scenario_type": question.ScenarioType,
+		"tags":          question.Tags,
+		"content": map[string]interface{}{
+			"model_version": content.ModelVersion,
+			"public_scenario": content.PublicScenario,
+			"hidden_world":    content.HiddenWorld,
+		},
+	}
 }
 
 func scenarioQuestionSchemaProjection(question domain.ScenarioQuestion) map[string]interface{} {
@@ -221,6 +248,7 @@ func loadJSONSchemas() map[string]schemaEntry {
 		description string
 	}{
 		{SchemaScenarioQuestion, "schemas/scenario_question.schema.json", "SC-03 scenario content", "Scenario generation JSON Schema"},
+		{SchemaHiddenWorldQuestion, "schemas/hiddenworld_question.schema.json", "SC-03 hiddenworld.v1 scenario content", "HiddenWorld scenario generation JSON Schema"},
 		{SchemaScenarioContentPreview, "schemas/scenario_content_preview.schema.json", "CM-02 community preview", "Community preview JSON Schema"},
 		{SchemaInterviewFeedback, "schemas/interview_feedback.schema.json", "IV-05 interview feedback", "Interview feedback JSON Schema"},
 		{SchemaInterviewOpening, "schemas/interview_opening.schema.json", "IV-opening interview opening rewrite", "Interview opening rewrite JSON Schema"},

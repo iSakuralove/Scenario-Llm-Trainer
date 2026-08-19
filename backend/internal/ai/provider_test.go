@@ -19,6 +19,7 @@ func TestConfigFromEnvDeepSeekDefault(t *testing.T) {
 	t.Setenv("LLM_MODEL", "")
 	t.Setenv("JIANYI_API_KEY", "")
 	t.Setenv("DEEPSEEK_KEY", "deepseek-test-key")
+	t.Setenv("GLM_API_KEY", "")
 
 	cfg := ConfigFromEnv()
 	if cfg.Provider != ProviderDeepSeek {
@@ -32,6 +33,107 @@ func TestConfigFromEnvDeepSeekDefault(t *testing.T) {
 	}
 	if cfg.APIKey != "deepseek-test-key" {
 		t.Fatal("expected DEEPSEEK_KEY to be used")
+	}
+}
+
+func TestConfigFromEnvRegistersGLMProvider(t *testing.T) {
+	t.Setenv("LLM_BASE_URL", "")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "")
+	t.Setenv("JIANYI_API_KEY", "")
+	t.Setenv("DEEPSEEK_KEY", "")
+	t.Setenv("GLM_API_KEY", "glm-test-key")
+	t.Setenv("QWEN_API_KEY", "")
+	t.Setenv("ERNIE_API_KEY", "")
+
+	cfg := ConfigFromEnv()
+	if cfg.Provider != ProviderGLM {
+		t.Fatalf("expected glm to become default provider when deepseek missing, got %s", cfg.Provider)
+	}
+	if cfg.APIKey != "glm-test-key" {
+		t.Fatal("expected GLM_API_KEY to be used")
+	}
+	if cfg.BaseURL != defaultGLMBaseURL {
+		t.Fatalf("expected glm base url %s, got %s", defaultGLMBaseURL, cfg.BaseURL)
+	}
+	if cfg.Model != defaultGLMModel {
+		t.Fatalf("expected glm default model %s, got %s", defaultGLMModel, cfg.Model)
+	}
+	glmCfg, ok := cfg.ProviderConfigs[ProviderGLM]
+	if !ok {
+		t.Fatalf("expected glm provider config registered, got %+v", cfg.ProviderConfigs)
+	}
+	if glmCfg.Provider != ProviderGLM || glmCfg.APIKey != "glm-test-key" || glmCfg.Model != defaultGLMModel {
+		t.Fatalf("unexpected glm provider config %+v", glmCfg)
+	}
+}
+
+func TestGLMProviderUsesV4ChatCompletionsEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/paas/v4/chat/completions" {
+			t.Fatalf("expected glm v4 chat completions path, got %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer glm-test-key" {
+			t.Fatalf("unexpected authorization header %q", got)
+		}
+		var req struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatal(err)
+		}
+		if req.Model != defaultGLMModel {
+			t.Fatalf("expected glm model %s, got %s", defaultGLMModel, req.Model)
+		}
+		_, _ = w.Write([]byte(openAICompatibleScenarioResponse("glm v4 scenario")))
+	}))
+	defer server.Close()
+
+	router := NewRouter(Config{
+		Provider: ProviderGLM,
+		BaseURL:  server.URL + "/api/paas/v4",
+		APIKey:   "glm-test-key",
+		Timeout:  time.Second,
+	})
+
+	question, meta, err := router.GenerateScenario(context.Background(), ScenarioGenerationRequest{
+		Domain:       "database",
+		Difficulty:   "L2",
+		ScenarioType: "troubleshooting",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Provider != ProviderGLM {
+		t.Fatalf("expected glm provider, got %+v", meta)
+	}
+	if question.Title != "glm v4 scenario" {
+		t.Fatalf("unexpected question %+v", question)
+	}
+}
+
+func TestChatCompletionsBaseURLVersionHandling(t *testing.T) {
+	cases := []struct {
+		name     string
+		baseURL  string
+		expected string
+	}{
+		{"empty stays empty", "", ""},
+		{"plain host appends v1", "https://api.deepseek.com", "https://api.deepseek.com/v1"},
+		{"trailing slash trimmed", "https://api.deepseek.com/", "https://api.deepseek.com/v1"},
+		{"v1 kept as is", "https://example.com/v1", "https://example.com/v1"},
+		{"v4 kept as is", "https://open.bigmodel.cn/api/paas/v4", "https://open.bigmodel.cn/api/paas/v4"},
+		{"v2 kept as is", "https://qianfan.baidubce.com/v2", "https://qianfan.baidubce.com/v2"},
+		{"full endpoint stripped", "https://open.bigmodel.cn/api/paas/v4/chat/completions", "https://open.bigmodel.cn/api/paas/v4"},
+		{"v1beta kept as is", "https://example.com/v1beta", "https://example.com/v1beta"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			got := chatCompletionsBaseURL(tt.baseURL, ProviderGLM)
+			if got != tt.expected {
+				t.Fatalf("chatCompletionsBaseURL(%q) = %q, want %q", tt.baseURL, got, tt.expected)
+			}
+		})
 	}
 }
 
@@ -119,6 +221,7 @@ func TestConfigFromEnvJianyiCompatible(t *testing.T) {
 	t.Setenv("LLM_MODEL", "")
 	t.Setenv("JIANYI_API_KEY", "jianyi-test-key")
 	t.Setenv("DEEPSEEK_KEY", "")
+	t.Setenv("GLM_API_KEY", "")
 
 	cfg := ConfigFromEnv()
 	if cfg.Provider != ProviderOpenAICompatible {
@@ -141,6 +244,7 @@ func TestConfigFromEnvRegistersQwenAndERNIEProviders(t *testing.T) {
 	t.Setenv("LLM_MODEL", "")
 	t.Setenv("JIANYI_API_KEY", "")
 	t.Setenv("DEEPSEEK_KEY", "")
+	t.Setenv("GLM_API_KEY", "")
 	t.Setenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode")
 	t.Setenv("QWEN_API_KEY", "qwen-test-key")
 	t.Setenv("QWEN_MODEL", "qwen-max")
@@ -275,6 +379,144 @@ func TestGenerateScenarioDoesNotForceStreamWhenGlobalStreamEnabled(t *testing.T)
 	}
 	if question.Title != "non stream deepseek scenario" {
 		t.Fatalf("unexpected question %+v", question)
+	}
+}
+
+// 模拟真实故障转移场景：DeepSeek(主) 调用失败 → 自动切换 GLM 生成题目 → 返回结果。
+// 生题是 StrictFailure 任务，但允许在真实 provider 之间轮转（只拦 mock 降级）。
+func TestScenarioGenerateFallsBackFromDeepSeekToGLM(t *testing.T) {
+	deepSeekCalls := 0
+	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		deepSeekCalls++
+		http.Error(w, "deepseek auth rejected", http.StatusUnauthorized)
+	}))
+	defer deepSeek.Close()
+
+	glmCalls := 0
+	glm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		glmCalls++
+		if r.URL.Path != "/api/paas/v4/chat/completions" {
+			t.Fatalf("expected glm v4 endpoint, got %s", r.URL.Path)
+		}
+		var req struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatal(err)
+		}
+		if req.Model != "glm-fallback-model" {
+			t.Fatalf("expected glm model, got %s", req.Model)
+		}
+		_, _ = w.Write([]byte(openAICompatibleScenarioResponse("glm 接管生成的题目")))
+	}))
+	defer glm.Close()
+
+	router := NewRouter(Config{
+		Provider: ProviderDeepSeek,
+		BaseURL:  deepSeek.URL,
+		APIKey:   "invalid-deepseek-key",
+		Model:    defaultDeepSeekModel,
+		Timeout:  time.Second,
+		ProviderConfigs: map[string]Config{
+			ProviderGLM: {
+				Provider: ProviderGLM,
+				BaseURL:  glm.URL + "/api/paas/v4",
+				APIKey:   "glm-key",
+				Model:    "glm-fallback-model",
+				Timeout:  time.Second,
+			},
+		},
+	})
+
+	question, meta, err := router.GenerateScenario(context.Background(), ScenarioGenerationRequest{
+		Domain:       "database",
+		Difficulty:   "L2",
+		ScenarioType: "troubleshooting",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deepSeekCalls != 1 {
+		t.Fatalf("expected exactly one deepseek attempt, got %d", deepSeekCalls)
+	}
+	if glmCalls != 1 {
+		t.Fatalf("expected glm to take over after deepseek failure, calls=%d", glmCalls)
+	}
+	if question.Title != "glm 接管生成的题目" {
+		t.Fatalf("unexpected question title %+v", question)
+	}
+	if !meta.FallbackUsed || meta.Provider != ProviderGLM || meta.Model != "glm-fallback-model" {
+		t.Fatalf("expected glm fallback meta, got %+v", meta)
+	}
+	if meta.ErrorType != "auth" {
+		t.Fatalf("expected auth error from deepseek attempt, got %+v", meta)
+	}
+
+	attempts := router.Info().ProviderPool.RecentAttempts
+	if len(attempts) < 2 || attempts[0].Provider != ProviderDeepSeek || attempts[0].Success || attempts[1].Provider != ProviderGLM || !attempts[1].Success {
+		t.Fatalf("expected deepseek failure then glm success attempts, got %+v", attempts)
+	}
+}
+
+// 生题链上只剩 mock 兜底时，严格失败仍然生效（不降级到模板题）。
+func TestScenarioGenerateStrictFailureStillBlocksMock(t *testing.T) {
+	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "deepseek unavailable", http.StatusBadGateway)
+	}))
+	defer deepSeek.Close()
+
+	router := NewRouter(Config{
+		Provider: ProviderDeepSeek,
+		BaseURL:  deepSeek.URL,
+		APIKey:   "deepseek-key",
+		Model:    defaultDeepSeekModel,
+		Timeout:  time.Second,
+	})
+
+	_, meta, err := router.GenerateScenario(context.Background(), ScenarioGenerationRequest{
+		Domain:       "database",
+		Difficulty:   "L2",
+		ScenarioType: "troubleshooting",
+	})
+	if err == nil {
+		t.Fatal("expected strict failure without mock fallback")
+	}
+	if meta.Provider == ProviderMock || meta.FallbackUsed {
+		t.Fatalf("scenario generate must not degrade to mock, got %+v", meta)
+	}
+}
+
+// GLM 请求必须显式关闭思考模式：思考模型生题动辄 30s+，会触发 75s 超时导致回退失败。
+func TestGLMRequestDisablesThinkingMode(t *testing.T) {
+	var gotThinking map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Thinking map[string]string `json:"thinking"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatal(err)
+		}
+		gotThinking = req.Thinking
+		_, _ = w.Write([]byte(openAICompatibleScenarioResponse("thinking off scenario")))
+	}))
+	defer server.Close()
+
+	router := NewRouter(Config{
+		Provider: ProviderGLM,
+		BaseURL:  server.URL + "/api/paas/v4",
+		APIKey:   "glm-test-key",
+		Timeout:  time.Second,
+	})
+	_, _, err := router.GenerateScenario(context.Background(), ScenarioGenerationRequest{
+		Domain:       "database",
+		Difficulty:   "L2",
+		ScenarioType: "troubleshooting",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotThinking == nil || gotThinking["type"] != "disabled" {
+		t.Fatalf("expected thinking disabled for glm provider, got %+v", gotThinking)
 	}
 }
 
@@ -443,13 +685,13 @@ func TestOpenAICompatibleScenarioRequest(t *testing.T) {
 	if meta.Provider != ProviderOpenAICompatible || meta.FallbackUsed {
 		t.Fatalf("unexpected meta %+v", meta)
 	}
-	if question.Title == "" || question.Content.RootCause == "" {
+	if question.Title == "" || question.Content.PublicScenario == nil || question.Content.HiddenWorld == nil {
 		t.Fatalf("unexpected question %+v", question)
 	}
 }
 
 func TestNewOpenAICompatibleProviderPreservesProviderName(t *testing.T) {
-	for _, provider := range []string{ProviderDeepSeek, ProviderQwen, ProviderERNIE, ProviderOpenAICompatible} {
+	for _, provider := range []string{ProviderDeepSeek, ProviderGLM, ProviderQwen, ProviderERNIE, ProviderOpenAICompatible} {
 		item := NewOpenAICompatibleProvider(Config{
 			Provider:      provider,
 			BaseURL:       "https://example.com",
@@ -689,7 +931,7 @@ func TestRouterInfoExposesDecisionTelemetry(t *testing.T) {
 		t.Fatalf("expected one recent decision, got %+v", info.Telemetry.RecentDecisions)
 	}
 	decision := info.Telemetry.RecentDecisions[0]
-	if decision.Schema != SchemaScenarioQuestion || decision.Validation.Status != "passed" {
+	if decision.Schema != SchemaHiddenWorldQuestion || decision.Validation.Status != "passed" {
 		t.Fatalf("unexpected decision validation %+v", decision)
 	}
 	if decision.Context.Version != "router-v1" {
@@ -771,12 +1013,14 @@ func TestMockProviderUsesScenarioConstraints(t *testing.T) {
 		Tags:         []string{"AI生成", "database"},
 		UserID:       "user-demo",
 		Constraints: ScenarioGenerationConstraints{
-			Title:         "约束标题",
-			Description:   "约束描述",
-			TopicScope:    []string{"主从复制", "读流量"},
-			RootCauseHint: "从库延迟",
-			EvidenceHints: []string{"证据一"},
-			ClueHints:     []string{"线索一"},
+			TitleHint:          "约束标题",
+			DescriptionHint:    "约束描述",
+			TopicScope:         []string{"主从复制", "读流量"},
+			HypothesisHints:    []string{"从库延迟"},
+			ObservationHints:   []string{"主库正常"},
+			EvidencePathHints:  []string{"证据一"},
+			MisconceptionHints: []string{"缓存命中率"},
+			SolutionHints:      []string{"修复复制链路"},
 		},
 	})
 	if err != nil {
@@ -788,13 +1032,13 @@ func TestMockProviderUsesScenarioConstraints(t *testing.T) {
 	if !strings.Contains(question.Description, "约束描述") || !strings.Contains(question.Description, "主从复制") {
 		t.Fatalf("expected constrained description, got %q", question.Description)
 	}
-	if question.Content.RootCause == "" || !strings.Contains(question.Content.RootCause, "从库延迟") {
-		t.Fatalf("expected constrained root cause, got %q", question.Content.RootCause)
+	if question.Content.HiddenWorld == nil || question.Content.HiddenWorld.Hypotheses[0].Label != "从库延迟" {
+		t.Fatalf("expected constrained hypothesis, got %+v", question.Content.HiddenWorld)
 	}
-	if len(question.Content.KeyEvidence) == 0 || question.Content.KeyEvidence[0] != "证据一" {
-		t.Fatalf("expected evidence hint to be prepended, got %+v", question.Content.KeyEvidence)
+	if question.Content.HiddenWorld == nil || !strings.Contains(question.Content.HiddenWorld.EvidenceGraph[2].Content, "证据一") {
+		t.Fatalf("expected evidence path hint to be reflected, got %+v", question.Content.HiddenWorld)
 	}
-	if len(question.Content.RevealStrategy.SurfaceClues) == 0 || question.Content.RevealStrategy.SurfaceClues[0].Content != "线索一" {
-		t.Fatalf("expected clue hint to be added, got %+v", question.Content.RevealStrategy.SurfaceClues)
+	if question.Content.HiddenWorld == nil || !strings.Contains(question.Content.HiddenWorld.Observations[0].Result, "主库正常") {
+		t.Fatalf("expected observation hint to be reflected, got %+v", question.Content.HiddenWorld)
 	}
 }

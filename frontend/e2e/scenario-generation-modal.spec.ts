@@ -70,9 +70,9 @@ test('scenario generation modal sends constraints payload and shows source badge
   await dialog.getByLabel('标题约束').fill('E2E L4 约束标题')
   await dialog.getByLabel('描述约束').fill('E2E 约束描述')
   await dialog.getByLabel('细分主题').fill('主从复制\n读流量')
-  await dialog.getByLabel('根因提示').fill('从库延迟')
-  await dialog.getByLabel('证据提示').fill('Seconds_Behind_Master 上升\n读请求超时')
-  await dialog.getByLabel('线索提示').fill('主库正常\n慢 SQL 不明显')
+  await dialog.getByLabel('假设提示').fill('从库延迟')
+  await dialog.getByLabel('观察提示').fill('主库正常\n慢 SQL 不明显')
+  await dialog.getByLabel('证据路径提示').fill('Seconds_Behind_Master 上升\n读请求超时')
   await dialog.getByRole('button', { name: '开始生成' }).click()
 
   await expect(page.locator('.scenario-card').first()).toContainText('L4')
@@ -82,12 +82,12 @@ test('scenario generation modal sends constraints payload and shows source badge
   expect(requestPayload.scenario_type).toBe('troubleshooting')
   expect(requestPayload.tags).toBeUndefined()
   expect(requestPayload.constraints).toEqual({
-    title: 'E2E L4 约束标题',
-    description: 'E2E 约束描述',
+    title_hint: 'E2E L4 约束标题',
+    description_hint: 'E2E 约束描述',
     topic_scope: ['主从复制', '读流量'],
-    root_cause_hint: '从库延迟',
-    evidence_hints: ['Seconds_Behind_Master 上升', '读请求超时'],
-    clue_hints: ['主库正常', '慢 SQL 不明显'],
+    hypothesis_hints: ['从库延迟'],
+    observation_hints: ['主库正常', '慢 SQL 不明显'],
+    evidence_path_hints: ['Seconds_Behind_Master 上升', '读请求超时'],
   })
   await expectNoWhiteScreen(page)
 })

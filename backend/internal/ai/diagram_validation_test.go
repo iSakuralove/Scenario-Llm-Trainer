@@ -102,38 +102,9 @@ func TestPrepareScenarioQuestionUsesFallbackForInvalidStructuredSpec(t *testing.
 }
 
 func TestPrepareHiddenWorldScenarioNormalizesPublicDiagramAndRebuildsCompatibilityProjection(t *testing.T) {
-	question := validScenarioQuestionSample()
-	question.Content = domain.ScenarioContent{
-		ModelVersion: "hiddenworld.v1",
-		PublicScenario: &domain.PublicScenario{
-			Title:               "订单查询变慢",
-			Description:         "接口延迟显著升高。",
-			InitialSymptoms:     []string{"应用资源正常"},
-			ArchitectureDiagram: "```mermaid\ngraph TD\nA[API] --> B[DB]\n```",
-		},
-		HiddenWorld: &domain.HiddenWorld{
-			RootCause: domain.RootCause{
-				ID:                     "RC_INDEX",
-				Category:               "data",
-				Component:              "mysql.orders",
-				Description:            "索引缺失",
-				SufficientEvidenceSets: [][]string{{"E_EXPLAIN"}},
-				AcceptedHypotheses:     []string{"H_INDEX"},
-			},
-			Hypotheses: []domain.Hypothesis{
-				{HypothesisID: "H_INDEX", Label: "索引问题"},
-				{HypothesisID: "H_OTHER", Label: "其他原因"},
-			},
-			EvidenceGraph: []domain.EvidenceNode{
-				{EvidenceID: "E_EXPLAIN", Content: "type=ALL", Category: "data", ObtainedBy: []string{"inspect:data.explain"}},
-			},
-			Observations: []domain.Observation{
-				{Action: "inspect:data.explain", Result: "type=ALL", YieldsEvidence: []string{"E_EXPLAIN"}},
-			},
-			SolutionRubric: domain.SolutionRubric{RequiredActions: []string{"补建索引"}},
-		},
-		RootCause: "不应保留的旧字段",
-	}
+	question := validHiddenWorldQuestionSample()
+	question.Content.PublicScenario.ArchitectureDiagram = "```mermaid\ngraph TD\nA[API] --> B[DB]\n```"
+	question.Content.RootCause = "不应保留的旧字段"
 
 	prepared := PrepareScenarioQuestion(question)
 	if prepared.Content.PublicScenario == nil {
@@ -145,7 +116,7 @@ func TestPrepareHiddenWorldScenarioNormalizesPublicDiagramAndRebuildsCompatibili
 	if prepared.Content.HiddenWorld == nil {
 		t.Fatal("expected hidden_world to survive preparation")
 	}
-	if prepared.Content.RootCause != "索引缺失" {
+	if prepared.Content.RootCause != "连接池排队导致请求等待。" {
 		t.Fatalf("expected compatibility root cause to be rebuilt from hidden_world: %+v", prepared.Content)
 	}
 	if prepared.Content.ArchitectureDiagram != "graph TD\nA[API] --> B[DB]" {

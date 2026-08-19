@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -66,8 +67,8 @@ func TestScenarioGenerationJobCompletes(t *testing.T) {
 	if payload.Job.Status != domain.AIJobStatusCompleted || payload.Question.ID == "" {
 		t.Fatalf("unexpected job payload: %+v", payload)
 	}
-	if payload.Question.Content.ArchitectureDiagram == "" {
-		t.Fatalf("expected generated question content, got %+v", payload.Question)
+	if payload.Question.Content.PublicScenario == nil || payload.Question.Content.HiddenWorld != nil {
+		t.Fatalf("expected public-only generated question content, got %+v", payload.Question)
 	}
 	events := dataStore.ListAuditEvents(20)
 	foundAudit := false
@@ -170,12 +171,13 @@ func TestScenarioGenerationAcceptsConstraintsAndPersistsAuditMetadata(t *testing
 		"difficulty":    "L3",
 		"scenario_type": "troubleshooting",
 		"constraints": map[string]interface{}{
-			"title":           "约束标题",
-			"description":     "约束描述",
-			"topic_scope":     []string{"主从复制", "读流量"},
-			"root_cause_hint": "从库延迟",
-			"evidence_hints":  []string{"Seconds_Behind_Master 上升"},
-			"clue_hints":      []string{"主库正常"},
+			"title_hint":          "约束标题",
+			"description_hint":    "约束描述",
+			"topic_scope":         []string{"主从复制", "读流量"},
+			"hypothesis_hints":    []string{"从库延迟"},
+			"observation_hints":   []string{"主库正常"},
+			"evidence_path_hints": []string{"Seconds_Behind_Master 上升"},
+			"solution_hints":      []string{"修复复制链路"},
 		},
 	})
 	if status != http.StatusOK {
@@ -201,7 +203,7 @@ func TestScenarioGenerationAcceptsConstraintsAndPersistsAuditMetadata(t *testing
 		if event.Metadata["creator_role"] != domain.RoleStudent {
 			t.Fatalf("expected creator_role student, got %+v", event.Metadata)
 		}
-		if !strings.Contains(event.Metadata["constraint_fields"], "title") {
+		if !strings.Contains(event.Metadata["constraint_fields"], "title_hint") {
 			t.Fatalf("expected constraint fields to include title, got %+v", event.Metadata)
 		}
 		return
@@ -219,7 +221,7 @@ func TestScenarioGenerationRejectsSensitiveConstraintText(t *testing.T) {
 		"difficulty":    "L2",
 		"scenario_type": "troubleshooting",
 		"constraints": map[string]interface{}{
-			"description": "生产密码 password=Secret123!",
+			"description_hint": "生产密码 password=Secret123!",
 		},
 	})
 	if status != http.StatusBadRequest {
@@ -241,7 +243,7 @@ func TestScenarioGenerationRejectsDuplicateTitleConstraint(t *testing.T) {
 		"difficulty":    existing.Difficulty,
 		"scenario_type": existing.ScenarioType,
 		"constraints": map[string]interface{}{
-			"title": existing.Title,
+			"title_hint": existing.Title,
 		},
 	})
 	if status != http.StatusConflict {
@@ -462,7 +464,9 @@ func TestScenarioGenerationJobReportsTimeoutWithoutMockFallback(t *testing.T) {
 }
 
 func TestScenarioGenerationJobReportsValidationFailureWithoutMockFallback(t *testing.T) {
+	var calls int32
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"not json"}}]}`))
 	}))
 	defer provider.Close()
@@ -503,6 +507,12 @@ func TestScenarioGenerationJobReportsValidationFailureWithoutMockFallback(t *tes
 	}
 	if !strings.Contains(job.ErrorMessage, "结构") && !strings.Contains(job.ErrorMessage, "校验") {
 		t.Fatalf("expected actionable validation message, got %+v", job)
+	}
+	if got := atomic.LoadInt32(&calls); got != 3 {
+		t.Fatalf("expected initial attempt plus two validation retries, got %d calls", got)
+	}
+	if len(job.ValidationErrors) != 3 || job.ResultQuestionID != "" {
+		t.Fatalf("expected structured validation errors and no persisted question, got %+v", job)
 	}
 }
 
@@ -575,7 +585,7 @@ func waitForAIJobStatus(t *testing.T, dataStore store.Store, jobID string, expec
 }
 
 func openAICompatibleScenarioResponse(title string) string {
-	content := `{"title":` + quoteJSON(title) + `,"description":"用于验证情景题生成任务模型记录的题目。","domain":"database","difficulty":"L2","scenario_type":"troubleshooting","tags":["数据库","生成题"],"content":{"root_cause":"数据库连接池耗尽导致请求排队。","root_cause_keywords":["连接池","排队"],"key_evidence":["活跃连接接近上限"],"standard_procedure":["查看接口耗时","检查连接池指标"],"architecture_diagram":"","architecture_diagram_spec":{"direction":"TD","nodes":[{"id":"API","label":"API"},{"id":"Pool","label":"DB Pool"},{"id":"DB","label":"数据库(主库)"}],"edges":[{"from":"API","to":"Pool"},{"from":"Pool","to":"DB"}]},"reference_links":["连接池监控"],"reveal_strategy":{"surface_clues":[{"clue_id":"c1","trigger_keywords":["连接池"],"content":"活跃连接接近上限。","is_distractor":false}],"deep_clues":[{"clue_id":"c2","trigger_keywords":["排队"],"content":"等待队列持续增长。","is_distractor":false}],"distractors":[{"clue_id":"d1","trigger_keywords":["网络"],"content":"网络延迟正常。","is_distractor":true}]}}}`
+	content := `{"title":` + quoteJSON(title) + `,"description":"用于验证情景题生成任务模型记录的题目。","domain":"database","difficulty":"L2","scenario_type":"troubleshooting","tags":["数据库","生成题"],"content":{"model_version":"hiddenworld.v1","public_scenario":{"title":` + quoteJSON(title) + `,"description":"用于验证情景题生成任务模型记录的题目。","environment":"订单服务与数据库组成的模拟链路。","initial_symptoms":["接口响应时间上升"],"architecture_diagram":""},"hidden_world":{"root_cause":{"id":"RC_POOL","category":"resource","component":"数据库连接池","description":"连接池排队导致请求等待。","sufficient_evidence_sets":[["E_SLOW","E_POOL"],["E_RELEASE","E_CONFIG"]],"accepted_hypotheses":["H_POOL"],"solution_requirements":["确认连接池容量并修复排队原因"]},"hypotheses":[{"hypothesis_id":"H_POOL","label":"连接池问题"},{"hypothesis_id":"H_CPU","label":"数据库资源压力"},{"hypothesis_id":"H_NETWORK","label":"网络抖动"},{"hypothesis_id":"H_OTHER","label":"其他"}],"evidence_graph":[{"evidence_id":"E_SLOW","content":"接口等待时间升高。","category":"logs","prerequisites":[],"obtained_by":["inspect:logs.slow"]},{"evidence_id":"E_POOL","content":"连接池活跃数接近上限。","category":"resource","prerequisites":["E_SLOW"],"obtained_by":["inspect:resource.pool"]},{"evidence_id":"E_RELEASE","content":"异常前有连接配置变更。","category":"change","prerequisites":[],"obtained_by":["inspect:change.release"]},{"evidence_id":"E_CONFIG","content":"变更后的连接配置与预期不一致。","category":"change","prerequisites":["E_RELEASE"],"obtained_by":["inspect:change.config"]},{"evidence_id":"E_CPU","content":"数据库 CPU 正常。","category":"metrics","prerequisites":[],"obtained_by":["inspect:metrics.cpu"]},{"evidence_id":"E_NETWORK","content":"网络延迟稳定。","category":"dependency","prerequisites":[],"obtained_by":["inspect:dependency.network"]}],"observations":[{"action":"inspect:logs.slow","result":"日志显示接口等待时间升高。","is_negative":false,"yields_evidence":["E_SLOW"],"rules_out":[],"unmet_prerequisite_result":""},{"action":"inspect:resource.pool","result":"连接池活跃数接近上限。","is_negative":false,"yields_evidence":["E_POOL"],"rules_out":[],"unmet_prerequisite_result":"还没有先定位到具体接口。"},{"action":"inspect:change.release","result":"异常前有连接配置变更。","is_negative":false,"yields_evidence":["E_RELEASE"],"rules_out":[],"unmet_prerequisite_result":""},{"action":"inspect:change.config","result":"变更后的连接配置存在差异。","is_negative":false,"yields_evidence":["E_CONFIG"],"rules_out":[],"unmet_prerequisite_result":"还没有可对比的变更记录。"},{"action":"inspect:metrics.cpu","result":"CPU 正常，没有资源饱和迹象。","is_negative":true,"yields_evidence":["E_CPU"],"rules_out":["H_CPU"],"unmet_prerequisite_result":""},{"action":"inspect:dependency.network","result":"网络稳定，没有依赖抖动迹象。","is_negative":true,"yields_evidence":["E_NETWORK"],"rules_out":["H_NETWORK"],"unmet_prerequisite_result":""}],"solution_rubric":{"required_actions":["确认连接池容量并修复排队原因"],"verification_steps":["观察接口 P95 延迟回落"],"rollback_notes":["保留原配置以便回滚"]},"misconception_rules":[{"misconception_id":"M_CPU","pattern_hypotheses":["H_CPU"],"why_wrong":"CPU 指标正常，不能解释等待队列。"}]}}}`
 	return `{"choices":[{"message":{"role":"assistant","content":` + quoteJSON(content) + `}}]}`
 }
 
@@ -611,10 +621,10 @@ func TestScenarioMessageSSE(t *testing.T) {
 		t.Fatalf("sse status=%d body=%s", rr.Code, rr.Body.String())
 	}
 	raw := rr.Body.String()
-	if !strings.Contains(raw, "event: stage") || !strings.Contains(raw, "event: finish") {
-		t.Fatalf("expected stage and finish events, got %s", raw)
+	if !strings.Contains(raw, "event: run_event") || !strings.Contains(raw, `"kind":"proposal_approved"`) || !strings.Contains(raw, "event: finish") {
+		t.Fatalf("expected ordered run events and finish event, got %s", raw)
 	}
-	streamed := collectSSEDeltaText(t, raw)
+	streamed := collectScenarioReplyText(t, raw)
 	if streamed == "" {
 		t.Fatalf("expected the teaching reply to be streamed as delta events, got %s", raw)
 	}
@@ -629,6 +639,33 @@ func TestScenarioMessageSSE(t *testing.T) {
 	if !strings.Contains(raw[finishIndex:], quoteJSON(streamed)) {
 		t.Fatalf("streamed text %q should match the persisted assistant content: %s", streamed, raw[finishIndex:])
 	}
+}
+
+func collectScenarioReplyText(t *testing.T, raw string) string {
+	t.Helper()
+	var builder strings.Builder
+	lastSequence := 0
+	for _, block := range strings.Split(raw, "\n\n") {
+		if !strings.HasPrefix(strings.TrimSpace(block), "event: run_event") {
+			continue
+		}
+		_, data, ok := strings.Cut(block, "data: ")
+		if !ok {
+			continue
+		}
+		var event domain.ScenarioRunEvent
+		if err := json.Unmarshal([]byte(strings.TrimSpace(data)), &event); err != nil {
+			t.Fatalf("invalid run_event payload %q: %v", data, err)
+		}
+		if event.Sequence <= lastSequence {
+			t.Fatalf("run event sequence is not monotonic: previous=%d current=%d", lastSequence, event.Sequence)
+		}
+		lastSequence = event.Sequence
+		if event.Kind == "reply_delta" {
+			builder.WriteString(event.Text)
+		}
+	}
+	return builder.String()
 }
 
 func collectSSEDeltaText(t *testing.T, raw string) string {

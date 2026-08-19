@@ -82,25 +82,48 @@ export interface ResumeDocument {
 }
 
 export interface ScenarioGenerationConstraints {
-  title?: string
-  description?: string
+  title_hint?: string
+  description_hint?: string
   topic_scope?: string[]
-  root_cause_hint?: string
-  evidence_hints?: string[]
-  clue_hints?: string[]
+  hypothesis_hints?: string[]
+  observation_hints?: string[]
+  evidence_path_hints?: string[]
+  misconception_hints?: string[]
+  solution_hints?: string[]
 }
 
 export interface ScenarioContent {
+  model_version?: string
+  public_scenario?: PublicScenario
+  hidden_world?: HiddenWorld
+  // 社区结构化预览仍使用这些字段；排查工坊 public projection 不返回它们。
   root_cause?: string
   root_cause_keywords?: string[]
   key_evidence?: string[]
   standard_procedure?: string[]
-  reveal_strategy: RevealStrategy
-  architecture_diagram: string
+  reveal_strategy?: RevealStrategy
+  architecture_diagram?: string
   architecture_diagram_spec?: ArchitectureDiagramSpec
   diagram_status?: 'validated' | 'normalized' | 'fallback' | string
   diagram_warnings?: string[]
-  reference_links: string[]
+  reference_links?: string[]
+}
+
+export interface PublicScenario {
+  title: string
+  description: string
+  environment?: string
+  initial_symptoms: string[]
+  architecture_diagram: string
+}
+
+export interface HiddenWorld {
+  root_cause: Record<string, unknown>
+  hypotheses: Array<Record<string, unknown>>
+  evidence_graph: Array<Record<string, unknown>>
+  observations: Array<Record<string, unknown>>
+  solution_rubric: Record<string, unknown>
+  misconception_rules: Array<Record<string, unknown>>
 }
 
 export interface ArchitectureDiagramSpec {
@@ -388,6 +411,7 @@ export interface AIJob {
   stage: string
   progress: number
   error_message?: string
+  validation_errors?: string[]
   provider?: string
   model?: string
   validated: boolean

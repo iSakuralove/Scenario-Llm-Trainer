@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"situational-teaching/backend/internal/agentclient"
-	"situational-teaching/backend/internal/ai"
-	"situational-teaching/backend/internal/domain"
-	"situational-teaching/backend/internal/store"
 	"strings"
 	"time"
+
+	"situational-teaching/backend/internal/agentclient"
+	"situational-teaching/backend/internal/domain"
+	"situational-teaching/backend/internal/store"
 )
 
 func (s *Server) handleScenarios(w http.ResponseWriter, r *http.Request, user *domain.User, suffix string) {
@@ -81,17 +81,9 @@ func (s *Server) handleScenarios(w http.ResponseWriter, r *http.Request, user *d
 			writeScenarioGenerationValidationError(w, err)
 			return
 		}
-		question, llmMeta, err := s.llmRouter().GenerateScenario(r.Context(), ai.ScenarioGenerationRequest{
-			Domain:       normalized.Domain,
-			Difficulty:   normalized.Difficulty,
-			ScenarioType: normalized.ScenarioType,
-			Tags:         normalized.Tags,
-			Constraints:  normalized.toAIConstraints(),
-			UserID:       user.ID,
-			Nonce:        fmt.Sprintf("%d", time.Now().UnixNano()),
-		})
+		question, llmMeta, validationErrors, err := s.generateScenarioWithRetries(r.Context(), user.ID, normalized)
 		if err != nil {
-			writeError(w, http.StatusBadGateway, scenarioGenerationErrorMessage(err, llmMeta))
+			writeScenarioGenerationFailure(w, http.StatusBadGateway, scenarioGenerationErrorMessage(err, llmMeta), validationErrors)
 			return
 		}
 		created := s.store.AddScenario(question)
@@ -99,7 +91,7 @@ func (s *Server) handleScenarios(w http.ResponseWriter, r *http.Request, user *d
 		writeOK(w, map[string]interface{}{
 			"question_id":   created.ID,
 			"status":        "active",
-			"question":      scenarioView(&created, user),
+			"question":      scenarioPublicView(&created),
 			"provider":      llmMeta.Provider,
 			"model":         llmMeta.Model,
 			"validated":     llmMeta.Validated,

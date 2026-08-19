@@ -18,12 +18,14 @@ export interface ScenarioGenerationDraft {
   domain: string
   difficulty: string
   scenarioType: string
-  title: string
-  description: string
+  titleHint: string
+  descriptionHint: string
   topicScope: string
-  rootCauseHint: string
-  evidenceHints: string
-  clueHints: string
+  hypothesisHints: string
+  observationHints: string
+  evidencePathHints: string
+  misconceptionHints: string
+  solutionHints: string
   advancedOpen: boolean
 }
 
@@ -35,6 +37,7 @@ interface GenerationSummary {
 
 interface GenerationFailureSummary {
   message: string
+  validationErrors: string[]
   provider: string
   model: string
   jobId: string
@@ -109,12 +112,14 @@ const defaultGenerationDraft: ScenarioGenerationDraft = {
   domain: 'database',
   difficulty: 'L2',
   scenarioType: 'troubleshooting',
-  title: '',
-  description: '',
+  titleHint: '',
+  descriptionHint: '',
   topicScope: '',
-  rootCauseHint: '',
-  evidenceHints: '',
-  clueHints: '',
+  hypothesisHints: '',
+  observationHints: '',
+  evidencePathHints: '',
+  misconceptionHints: '',
+  solutionHints: '',
   advancedOpen: false,
 }
 
@@ -491,15 +496,20 @@ function buildScenarioGenerationPayload(
   fallbackDifficulty: string,
 ): ScenarioGenerationPayload {
   const constraints: ScenarioGenerationConstraints = {}
-  if (draft.title.trim()) constraints.title = draft.title.trim()
-  if (draft.description.trim()) constraints.description = draft.description.trim()
+  if (draft.titleHint.trim()) constraints.title_hint = draft.titleHint.trim()
+  if (draft.descriptionHint.trim()) constraints.description_hint = draft.descriptionHint.trim()
   const topicScope = linesFromText(draft.topicScope)
   if (topicScope.length > 0) constraints.topic_scope = topicScope
-  if (draft.rootCauseHint.trim()) constraints.root_cause_hint = draft.rootCauseHint.trim()
-  const evidenceHints = linesFromText(draft.evidenceHints)
-  if (evidenceHints.length > 0) constraints.evidence_hints = evidenceHints
-  const clueHints = linesFromText(draft.clueHints)
-  if (clueHints.length > 0) constraints.clue_hints = clueHints
+  const hypothesisHints = linesFromText(draft.hypothesisHints)
+  if (hypothesisHints.length > 0) constraints.hypothesis_hints = hypothesisHints
+  const observationHints = linesFromText(draft.observationHints)
+  if (observationHints.length > 0) constraints.observation_hints = observationHints
+  const evidencePathHints = linesFromText(draft.evidencePathHints)
+  if (evidencePathHints.length > 0) constraints.evidence_path_hints = evidencePathHints
+  const misconceptionHints = linesFromText(draft.misconceptionHints)
+  if (misconceptionHints.length > 0) constraints.misconception_hints = misconceptionHints
+  const solutionHints = linesFromText(draft.solutionHints)
+  if (solutionHints.length > 0) constraints.solution_hints = solutionHints
 
   const payload: ScenarioGenerationPayload = {
     domain: draft.domain || fallbackDomain || defaultGenerationDraft.domain,
@@ -516,11 +526,14 @@ function validateScenarioGenerationDraft(payload: ScenarioGenerationPayload) {
   if (!payload.domain) return '请选择领域'
   if (!payload.difficulty) return '请选择生成难度'
   if (!payload.scenario_type) return '请选择题型'
-  if (payload.constraints?.title && payload.constraints.title.length > 80) return '标题约束不能超过 80 个字符'
-  if (payload.constraints?.description && payload.constraints.description.length > 240) return '描述约束不能超过 240 个字符'
+  if (payload.constraints?.title_hint && payload.constraints.title_hint.length > 80) return '标题约束不能超过 80 个字符'
+  if (payload.constraints?.description_hint && payload.constraints.description_hint.length > 240) return '描述约束不能超过 240 个字符'
   if ((payload.constraints?.topic_scope?.length ?? 0) > 6) return '细分主题最多 6 项'
-  if ((payload.constraints?.evidence_hints?.length ?? 0) > 6) return '证据提示最多 6 项'
-  if ((payload.constraints?.clue_hints?.length ?? 0) > 6) return '线索提示最多 6 项'
+  if ((payload.constraints?.hypothesis_hints?.length ?? 0) > 8) return '假设提示最多 8 项'
+  if ((payload.constraints?.observation_hints?.length ?? 0) > 8) return '观察提示最多 8 项'
+  if ((payload.constraints?.evidence_path_hints?.length ?? 0) > 8) return '证据路径提示最多 8 项'
+  if ((payload.constraints?.misconception_hints?.length ?? 0) > 6) return '误解提示最多 6 项'
+  if ((payload.constraints?.solution_hints?.length ?? 0) > 8) return '解决方案提示最多 8 项'
   return ''
 }
 
@@ -584,6 +597,7 @@ function buildGenerationFailureSummary(job: AIJob | null, err: unknown): Generat
   const message = err instanceof Error ? err.message : '题目生成失败'
   return {
     message,
+    validationErrors: job?.validation_errors ?? [],
     provider: job?.provider ?? '',
     model: job?.model ?? '',
     jobId: job?.id ?? '',

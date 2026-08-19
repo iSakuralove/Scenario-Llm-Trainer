@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -25,12 +26,14 @@ type scenarioGenerationPayload struct {
 }
 
 type scenarioGenerationConstraintsPayload struct {
-	Title         string   `json:"title"`
-	Description   string   `json:"description"`
-	TopicScope    []string `json:"topic_scope"`
-	RootCauseHint string   `json:"root_cause_hint"`
-	EvidenceHints []string `json:"evidence_hints"`
-	ClueHints     []string `json:"clue_hints"`
+	TitleHint          string   `json:"title_hint"`
+	DescriptionHint    string   `json:"description_hint"`
+	TopicScope         []string `json:"topic_scope"`
+	HypothesisHints    []string `json:"hypothesis_hints"`
+	ObservationHints   []string `json:"observation_hints"`
+	EvidencePathHints  []string `json:"evidence_path_hints"`
+	MisconceptionHints []string `json:"misconception_hints"`
+	SolutionHints      []string `json:"solution_hints"`
 }
 
 type scenarioGenerationValidationError struct {
@@ -67,19 +70,23 @@ func normalizeScenarioGenerationConstraints(input *scenarioGenerationConstraints
 		return nil
 	}
 	normalized := &scenarioGenerationConstraintsPayload{
-		Title:         strings.TrimSpace(input.Title),
-		Description:   strings.TrimSpace(input.Description),
-		TopicScope:    normalizeScenarioGenerationHints(input.TopicScope, 6),
-		RootCauseHint: strings.TrimSpace(input.RootCauseHint),
-		EvidenceHints: normalizeScenarioGenerationHints(input.EvidenceHints, 6),
-		ClueHints:     normalizeScenarioGenerationHints(input.ClueHints, 6),
+		TitleHint:          strings.TrimSpace(input.TitleHint),
+		DescriptionHint:    strings.TrimSpace(input.DescriptionHint),
+		TopicScope:         normalizeScenarioGenerationHints(input.TopicScope, 6),
+		HypothesisHints:    normalizeScenarioGenerationHints(input.HypothesisHints, 8),
+		ObservationHints:   normalizeScenarioGenerationHints(input.ObservationHints, 8),
+		EvidencePathHints:  normalizeScenarioGenerationHints(input.EvidencePathHints, 8),
+		MisconceptionHints: normalizeScenarioGenerationHints(input.MisconceptionHints, 6),
+		SolutionHints:      normalizeScenarioGenerationHints(input.SolutionHints, 8),
 	}
-	if normalized.Title == "" &&
-		normalized.Description == "" &&
+	if normalized.TitleHint == "" &&
+		normalized.DescriptionHint == "" &&
 		len(normalized.TopicScope) == 0 &&
-		normalized.RootCauseHint == "" &&
-		len(normalized.EvidenceHints) == 0 &&
-		len(normalized.ClueHints) == 0 {
+		len(normalized.HypothesisHints) == 0 &&
+		len(normalized.ObservationHints) == 0 &&
+		len(normalized.EvidencePathHints) == 0 &&
+		len(normalized.MisconceptionHints) == 0 &&
+		len(normalized.SolutionHints) == 0 {
 		return nil
 	}
 	return normalized
@@ -105,12 +112,14 @@ func (req scenarioGenerationPayload) toAIConstraints() ai.ScenarioGenerationCons
 		return ai.ScenarioGenerationConstraints{}
 	}
 	return ai.ScenarioGenerationConstraints{
-		Title:         req.Constraints.Title,
-		Description:   req.Constraints.Description,
-		TopicScope:    append([]string{}, req.Constraints.TopicScope...),
-		RootCauseHint: req.Constraints.RootCauseHint,
-		EvidenceHints: append([]string{}, req.Constraints.EvidenceHints...),
-		ClueHints:     append([]string{}, req.Constraints.ClueHints...),
+		TitleHint:          req.Constraints.TitleHint,
+		DescriptionHint:    req.Constraints.DescriptionHint,
+		TopicScope:         append([]string{}, req.Constraints.TopicScope...),
+		HypothesisHints:    append([]string{}, req.Constraints.HypothesisHints...),
+		ObservationHints:   append([]string{}, req.Constraints.ObservationHints...),
+		EvidencePathHints:  append([]string{}, req.Constraints.EvidencePathHints...),
+		MisconceptionHints: append([]string{}, req.Constraints.MisconceptionHints...),
+		SolutionHints:      append([]string{}, req.Constraints.SolutionHints...),
 	}
 }
 func (s *Server) validateScenarioGenerationRequest(r *http.Request, user *domain.User, req scenarioGenerationPayload) error {
@@ -121,9 +130,8 @@ func (s *Server) validateScenarioGenerationRequest(r *http.Request, user *domain
 		name  string
 		value string
 	}{
-		{name: "title", value: req.Constraints.Title},
-		{name: "description", value: req.Constraints.Description},
-		{name: "root_cause_hint", value: req.Constraints.RootCauseHint},
+		{name: "title_hint", value: req.Constraints.TitleHint},
+		{name: "description_hint", value: req.Constraints.DescriptionHint},
 	} {
 		if err := s.ensureScenarioGenerationConstraintSafe(r, user, field.name, field.value); err != nil {
 			return err
@@ -134,13 +142,28 @@ func (s *Server) validateScenarioGenerationRequest(r *http.Request, user *domain
 			return err
 		}
 	}
-	for _, item := range req.Constraints.EvidenceHints {
-		if err := s.ensureScenarioGenerationConstraintSafe(r, user, "evidence_hints", item); err != nil {
+	for _, item := range req.Constraints.HypothesisHints {
+		if err := s.ensureScenarioGenerationConstraintSafe(r, user, "hypothesis_hints", item); err != nil {
 			return err
 		}
 	}
-	for _, item := range req.Constraints.ClueHints {
-		if err := s.ensureScenarioGenerationConstraintSafe(r, user, "clue_hints", item); err != nil {
+	for _, item := range req.Constraints.ObservationHints {
+		if err := s.ensureScenarioGenerationConstraintSafe(r, user, "observation_hints", item); err != nil {
+			return err
+		}
+	}
+	for _, item := range req.Constraints.EvidencePathHints {
+		if err := s.ensureScenarioGenerationConstraintSafe(r, user, "evidence_path_hints", item); err != nil {
+			return err
+		}
+	}
+	for _, item := range req.Constraints.MisconceptionHints {
+		if err := s.ensureScenarioGenerationConstraintSafe(r, user, "misconception_hints", item); err != nil {
+			return err
+		}
+	}
+	for _, item := range req.Constraints.SolutionHints {
+		if err := s.ensureScenarioGenerationConstraintSafe(r, user, "solution_hints", item); err != nil {
 			return err
 		}
 	}
@@ -166,7 +189,7 @@ func (s *Server) ensureScenarioGenerationConstraintSafe(r *http.Request, user *d
 func (s *Server) ensureScenarioGenerationNotDuplicate(req scenarioGenerationPayload) error {
 	title := ""
 	if req.Constraints != nil {
-		title = strings.TrimSpace(req.Constraints.Title)
+		title = strings.TrimSpace(req.Constraints.TitleHint)
 	}
 	if title == "" {
 		return nil
@@ -192,6 +215,43 @@ func writeScenarioGenerationValidationError(w http.ResponseWriter, err error) {
 		return
 	}
 	writeError(w, http.StatusBadRequest, err.Error())
+}
+
+func writeScenarioGenerationFailure(w http.ResponseWriter, status int, message string, validationErrors []string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	data := map[string]interface{}{}
+	if len(validationErrors) > 0 {
+		data["validation_errors"] = append([]string{}, validationErrors...)
+	}
+	_ = json.NewEncoder(w).Encode(envelope{Code: status, Message: message, Data: data})
+}
+
+func (s *Server) generateScenarioWithRetries(ctx context.Context, userID string, req scenarioGenerationPayload) (domain.ScenarioQuestion, ai.CallMeta, []string, error) {
+	var question domain.ScenarioQuestion
+	var meta ai.CallMeta
+	var err error
+	validationErrors := []string{}
+	baseNonce := fmt.Sprintf("%d", time.Now().UnixNano())
+	for attempt := 0; attempt < 3; attempt++ {
+		question, meta, err = s.llmRouter().GenerateScenario(ctx, ai.ScenarioGenerationRequest{
+			Domain:       req.Domain,
+			Difficulty:   req.Difficulty,
+			ScenarioType: req.ScenarioType,
+			Tags:         req.Tags,
+			Constraints:  req.toAIConstraints(),
+			UserID:       userID,
+			Nonce:        fmt.Sprintf("%s-%d", baseNonce, attempt),
+		})
+		if err == nil {
+			return question, meta, validationErrors, nil
+		}
+		if meta.ErrorType != "validation" {
+			return question, meta, validationErrors, err
+		}
+		validationErrors = append(validationErrors, ai.Sanitize(err.Error()))
+	}
+	return question, meta, validationErrors, err
 }
 func normalizeScenarioGenerationTags(tags []string, domainName string) []string {
 	cleaned := make([]string, 0, len(tags))
@@ -263,15 +323,7 @@ func (s *Server) runScenarioGenerationJob(jobID, userID string, req scenarioGene
 	if canceled := s.loadCancelableAIJob(jobID); canceled != nil && canceled.Status == domain.AIJobStatusCanceled {
 		return
 	}
-	question, llmMeta, err := s.llmRouter().GenerateScenario(ctx, ai.ScenarioGenerationRequest{
-		Domain:       req.Domain,
-		Difficulty:   req.Difficulty,
-		ScenarioType: req.ScenarioType,
-		Tags:         req.Tags,
-		Constraints:  req.toAIConstraints(),
-		UserID:       userID,
-		Nonce:        fmt.Sprintf("%d", time.Now().UnixNano()),
-	})
+	question, llmMeta, validationErrors, err := s.generateScenarioWithRetries(ctx, userID, req)
 	if err != nil {
 		if ctx.Err() == context.Canceled {
 			if canceled := s.loadCancelableAIJob(jobID); canceled != nil && canceled.Status == domain.AIJobStatusCanceled {
@@ -283,6 +335,7 @@ func (s *Server) runScenarioGenerationJob(jobID, userID string, req scenarioGene
 		job.Stage = scenarioGenerationFailureStage(llmMeta)
 		job.Progress = 100
 		job.ErrorMessage = scenarioGenerationErrorMessage(err, llmMeta)
+		job.ValidationErrors = append([]string{}, validationErrors...)
 		if strings.TrimSpace(llmMeta.Provider) != "" {
 			job.Provider = llmMeta.Provider
 		}
@@ -458,7 +511,9 @@ func (s *Server) aiJobPayload(job *domain.AIJob, user *domain.User) map[string]i
 	if job != nil && job.ResultQuestionID != "" {
 		if question, ok := s.store.GetScenario(job.ResultQuestionID); ok {
 			payload["question_id"] = question.ID
-			payload["question"] = scenarioView(question, user)
+			// 生成任务的轮询响应属于用户可见生成协议，只返回 public_scenario；
+			// 创建者身份不能扩大 HiddenWorld 的读取范围。
+			payload["question"] = scenarioPublicView(question)
 		}
 	}
 	return payload

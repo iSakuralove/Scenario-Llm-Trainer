@@ -10,34 +10,63 @@
   "scenario_type": "{{.ScenarioType}}",
   "tags": ["..."],
   "content": {
-    "root_cause": "...",
-    "root_cause_keywords": ["..."],
-    "key_evidence": ["..."],
-    "standard_procedure": ["..."],
-    "architecture_diagram": "",
-    "architecture_diagram_spec": {
-      "direction": "TD",
-      "nodes": [{"id":"Client","label":"客户端"}, {"id":"Service","label":"服务(示例)"}],
-      "edges": [{"from":"Client","to":"Service","label":"请求","style":"solid"}]
+    "model_version": "hiddenworld.v1",
+    "public_scenario": {
+      "title": "...",
+      "description": "...",
+      "environment": "...",
+      "initial_symptoms": ["..."],
+      "architecture_diagram": ""
     },
-    "reference_links": ["..."],
-    "reveal_strategy": {
-      "surface_clues": [{"clue_id":"c1","trigger_keywords":["..."],"content":"...","is_distractor":false,"recommended_next_ask":"..."}],
-      "deep_clues": [{"clue_id":"c2","trigger_keywords":["..."],"prerequisite_clues":["c1"],"content":"...","is_distractor":false,"recommended_next_ask":"..."}],
-      "distractors": [{"clue_id":"d1","trigger_keywords":["..."],"content":"...","is_distractor":true}]
+    "hidden_world": {
+      "root_cause": {
+        "id": "RC_...",
+        "category": "...",
+        "component": "...",
+        "description": "...",
+        "sufficient_evidence_sets": [["E_...", "E_..."]],
+        "accepted_hypotheses": ["H_..."],
+        "solution_requirements": ["..."]
+      },
+      "hypotheses": [
+        {"hypothesis_id":"H_...","label":"..."},
+        {"hypothesis_id":"H_OTHER","label":"其他"}
+      ],
+      "evidence_graph": [
+        {"evidence_id":"E_...","content":"...","category":"logs","prerequisites":[],"obtained_by":["inspect:..."]}
+      ],
+      "observations": [
+        {"action":"inspect:...","result":"...","is_negative":false,"yields_evidence":["E_..."],"rules_out":[],"unmet_prerequisite_result":""}
+      ],
+      "solution_rubric": {
+        "required_actions": ["..."],
+        "verification_steps": ["..."],
+        "rollback_notes": ["..."]
+      },
+      "misconception_rules": [
+        {"misconception_id":"M_...","pattern_hypotheses":["H_..."],"why_wrong":"..."}
+      ]
     }
   }
 }
 
 要求：
-- 至少 2 条 surface_clues，至少 1 条 deep_clues，至少 1 条 distractor。
-- root_cause 不要出现在 description 或 clue content 中。
-- 不要手写 Mermaid。必须输出 architecture_diagram_spec，由后端生成 Mermaid。
-- architecture_diagram 必须保留为空字符串。
-- architecture_diagram_spec.direction 只能是 TD 或 LR。
-- architecture_diagram_spec.nodes 至少 2 个，edges 至少 1 条。
-- architecture_diagram_spec.nodes[].id 只能使用英文字母开头的 A-Z/a-z/0-9/_，例如 Client、DNSResolver、BadIP；不要使用中文、连字符或空格作为 id。
-- architecture_diagram_spec.nodes[].label 可以使用中文、括号、冒号、斜杠等业务文本。
-- architecture_diagram_spec.edges[].style 只能省略、solid 或 dotted。
-- 本次生成 nonce：{{.Nonce}}。请围绕该 nonce 自主选择不同故障现象、指标和排查链路，避免重复模板题。
+- root_cause 不要出现在 public_scenario、description、observation.result 或证据 content 中。
+- 必须包含 H_OTHER；H_OTHER 不能放入 accepted_hypotheses。
+- 至少 4 个假设、6 个证据节点、2 条充分证据路径、1 个阴性观察、1 条误解规则。
+- 每个 evidence_id 只能由一个 observation 产出；前置关系不能成环，所有充分证据路径必须可由 observation 走通。
+- 每个干扰假设至少要被一个阴性 observation 的 rules_out 排除。
+- 未覆盖动作也要有自然的中性回应，不得暴露隐藏答案或“系统机制”。
+- public_scenario.architecture_diagram 必须保持为空字符串；不要手写 Mermaid。
+- category 只能使用 logs、metrics、data、change、resource、dependency、behavior 之一。
+- 本次生成 nonce：{{.Nonce}}。请围绕 nonce 自主选择不同故障现象、指标和排查链路，避免重复模板题。
 - 标签参考：{{.TagsText}}。
+- 生成约束（可能为空）：
+  标题方向：{{.TitleHint}}
+  题面方向：{{.DescriptionHint}}
+  主题范围：{{.TopicScopeText}}
+  假设方向：{{.HypothesisHintsText}}
+  观察方向：{{.ObservationHintsText}}
+  证据路径方向：{{.EvidencePathHintsText}}
+  常见误解方向：{{.MisconceptionHintsText}}
+  解决方案方向：{{.SolutionHintsText}}

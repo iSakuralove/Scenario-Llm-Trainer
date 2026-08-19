@@ -107,6 +107,8 @@ export function ScenarioSessionPage() {
     status: 'active',
   }
   const snapshotText = (value = '') => question.is_sanitized ? redactSensitiveText(value) : value
+  const publicScenario = question.content.public_scenario
+  const diagramCode = publicScenario?.architecture_diagram ?? question.content.architecture_diagram ?? ''
   const diagramStatusMessage = getDiagramStatusMessage(question.content.diagram_status)
   const diagramWarningCount = question.content.diagram_warnings?.length ?? 0
   const layoutStyle = {
@@ -181,7 +183,7 @@ export function ScenarioSessionPage() {
             </div>
           )}
           <Suspense fallback={<MermaidLoading />}>
-            <MermaidRenderer code={snapshotText(question.content.architecture_diagram)} />
+            <MermaidRenderer code={snapshotText(diagramCode)} />
           </Suspense>
           <div className="clue-status">
             <span>轮次 {activeSession.current_turn}/{activeSession.max_turns}</span>

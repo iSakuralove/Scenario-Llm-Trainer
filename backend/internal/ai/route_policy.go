@@ -20,12 +20,12 @@ var taskPolicies = map[string]TaskPolicy{
 		Task:            RouterTaskScenarioGenerate,
 		PromptName:      "scenario_generate",
 		PromptVersion:   promptVersionV1,
-		SchemaName:      SchemaScenarioQuestion,
+		SchemaName:      SchemaHiddenWorldQuestion,
 		OutputMode:      OutputModeJSON,
 		StreamAllowed:   false,
 		SafetyPolicy:    SafetyPolicyDefault,
 		ContextStrategy: ContextStrategyDirect,
-		FallbackChain:   []string{ProviderDeepSeek, ProviderOpenAICompatible, ProviderMock},
+		FallbackChain:   []string{ProviderDeepSeek, ProviderGLM, ProviderOpenAICompatible, ProviderMock},
 		StrictFailure:   true,
 	},
 	RouterTaskScenarioReply: {
@@ -37,7 +37,7 @@ var taskPolicies = map[string]TaskPolicy{
 		StreamAllowed:   true,
 		SafetyPolicy:    SafetyPolicyDefault,
 		ContextStrategy: ContextStrategySummaryPlusRecent,
-		FallbackChain:   []string{ProviderDeepSeek, ProviderOpenAICompatible, ProviderMock},
+		FallbackChain:   []string{ProviderDeepSeek, ProviderGLM, ProviderOpenAICompatible, ProviderMock},
 		StrictFailure:   false,
 	},
 	RouterTaskCommunityStructure: {
@@ -49,7 +49,7 @@ var taskPolicies = map[string]TaskPolicy{
 		StreamAllowed:   true,
 		SafetyPolicy:    SafetyPolicyDefault,
 		ContextStrategy: ContextStrategyDirect,
-		FallbackChain:   []string{ProviderDeepSeek, ProviderOpenAICompatible, ProviderMock},
+		FallbackChain:   []string{ProviderDeepSeek, ProviderGLM, ProviderOpenAICompatible, ProviderMock},
 		StrictFailure:   false,
 	},
 	RouterTaskInterviewFeedback: {
@@ -61,7 +61,7 @@ var taskPolicies = map[string]TaskPolicy{
 		StreamAllowed:   true,
 		SafetyPolicy:    SafetyPolicyDefault,
 		ContextStrategy: ContextStrategyRecentWindow,
-		FallbackChain:   []string{ProviderDeepSeek, ProviderOpenAICompatible, ProviderMock},
+		FallbackChain:   []string{ProviderDeepSeek, ProviderGLM, ProviderOpenAICompatible, ProviderMock},
 		StrictFailure:   false,
 	},
 	RouterTaskInterviewOpening: {
@@ -73,7 +73,7 @@ var taskPolicies = map[string]TaskPolicy{
 		StreamAllowed:   false,
 		SafetyPolicy:    SafetyPolicyDefault,
 		ContextStrategy: ContextStrategyDirect,
-		FallbackChain:   []string{ProviderDeepSeek, ProviderOpenAICompatible, ProviderMock},
+		FallbackChain:   []string{ProviderDeepSeek, ProviderGLM, ProviderOpenAICompatible, ProviderMock},
 		StrictFailure:   false,
 	},
 	RouterTaskSensitiveCheck: {
@@ -85,7 +85,7 @@ var taskPolicies = map[string]TaskPolicy{
 		StreamAllowed:   false,
 		SafetyPolicy:    SafetyPolicySensitiveDetection,
 		ContextStrategy: ContextStrategyDirect,
-		FallbackChain:   []string{ProviderDeepSeek, ProviderOpenAICompatible, ProviderMock},
+		FallbackChain:   []string{ProviderDeepSeek, ProviderGLM, ProviderOpenAICompatible, ProviderMock},
 		StrictFailure:   false,
 	},
 	RouterTaskStatusCheck: {

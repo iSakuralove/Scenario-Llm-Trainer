@@ -177,7 +177,7 @@ export function ScenariosPage() {
               {isGenerating
                 ? `任务 ${generationJob?.id.slice(0, 8) || '创建中'}，${aiJobStageLabel(generationJob)}${aiJobModelLabel(generationJob)}，已等待 ${generationElapsed} 秒。完成后会自动插入列表第一位。`
                 : lastGenerationFailure
-                  ? `任务 ${lastGenerationFailure.jobId ? lastGenerationFailure.jobId.slice(0, 8) : '未知'} 失败：${lastGenerationFailure.message}。${formatGenerationFailureMeta(lastGenerationFailure)}`
+                  ? `任务 ${lastGenerationFailure.jobId ? lastGenerationFailure.jobId.slice(0, 8) : '未知'} 失败：${lastGenerationFailure.message}。${lastGenerationFailure.validationErrors.length > 0 ? `校验项：${lastGenerationFailure.validationErrors.join('；')}。` : ''}${formatGenerationFailureMeta(lastGenerationFailure)}`
                   : lastGenerationCanceled
                   ? `任务 ${generationJob?.id.slice(0, 8) || '未知'} 已停止，本次不会写入题库，也不会计入 Router 调用统计。`
                   : `已插入：${lastGenerated?.title}。来源：${aiProviderLabel(lastGenerated?.provider, lastGenerated?.fallbackUsed)}。`}
@@ -410,8 +410,8 @@ export function ScenariosPage() {
                     标题约束
                     <input
                       aria-label="标题约束"
-                      value={generationDraft.title}
-                      onChange={(event) => updateDraft({ title: event.target.value })}
+                      value={generationDraft.titleHint}
+                      onChange={(event) => updateDraft({ titleHint: event.target.value })}
                       placeholder="硬约束，若填写则标题必须遵守"
                     />
                   </label>
@@ -419,9 +419,9 @@ export function ScenariosPage() {
                     描述约束
                     <textarea
                       aria-label="描述约束"
-                      value={generationDraft.description}
-                      onChange={(event) => updateDraft({ description: event.target.value })}
-                      placeholder="可选约束，AI 会参考补全"
+                      value={generationDraft.descriptionHint}
+                      onChange={(event) => updateDraft({ descriptionHint: event.target.value })}
+                      placeholder="可选题面方向，AI 会参考补全"
                     />
                   </label>
                   <label>
@@ -434,30 +434,48 @@ export function ScenariosPage() {
                     />
                   </label>
                   <label>
-                    根因提示
+                    假设提示
                     <textarea
-                      aria-label="根因提示"
-                      value={generationDraft.rootCauseHint}
-                      onChange={(event) => updateDraft({ rootCauseHint: event.target.value })}
-                      placeholder="可选根因方向"
+                      aria-label="假设提示"
+                      value={generationDraft.hypothesisHints}
+                      onChange={(event) => updateDraft({ hypothesisHints: event.target.value })}
+                      placeholder="每行一个候选排查方向，不要填写标准答案"
                     />
                   </label>
                   <label>
-                    证据提示
+                    观察提示
                     <textarea
-                      aria-label="证据提示"
-                      value={generationDraft.evidenceHints}
-                      onChange={(event) => updateDraft({ evidenceHints: event.target.value })}
-                      placeholder="每行一个证据提示"
+                      aria-label="观察提示"
+                      value={generationDraft.observationHints}
+                      onChange={(event) => updateDraft({ observationHints: event.target.value })}
+                      placeholder="每行一个可观察现象或动作结果"
                     />
                   </label>
                   <label>
-                    线索提示
+                    证据路径提示
                     <textarea
-                      aria-label="线索提示"
-                      value={generationDraft.clueHints}
-                      onChange={(event) => updateDraft({ clueHints: event.target.value })}
-                      placeholder="每行一个线索提示"
+                      aria-label="证据路径提示"
+                      value={generationDraft.evidencePathHints}
+                      onChange={(event) => updateDraft({ evidencePathHints: event.target.value })}
+                      placeholder="每行一条能闭合排查的证据路径方向"
+                    />
+                  </label>
+                  <label>
+                    误解提示
+                    <textarea
+                      aria-label="误解提示"
+                      value={generationDraft.misconceptionHints}
+                      onChange={(event) => updateDraft({ misconceptionHints: event.target.value })}
+                      placeholder="每行一个常见但可被证据排除的方向"
+                    />
+                  </label>
+                  <label>
+                    解决方案提示
+                    <textarea
+                      aria-label="解决方案提示"
+                      value={generationDraft.solutionHints}
+                      onChange={(event) => updateDraft({ solutionHints: event.target.value })}
+                      placeholder="每行一个修复、验证或回滚方向"
                     />
                   </label>
                 </div>

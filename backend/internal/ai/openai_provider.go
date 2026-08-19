@@ -41,6 +41,7 @@ type chatCompletionRequest struct {
 	MaxTokens      *int                   `json:"max_tokens,omitempty"`
 	ResponseFormat map[string]string      `json:"response_format,omitempty"`
 	Stream         bool                   `json:"stream,omitempty"`
+	Thinking       map[string]string      `json:"thinking,omitempty"`
 	Extra          map[string]interface{} `json:"-"`
 }
 
@@ -100,7 +101,7 @@ func NewOpenAICompatibleProvider(cfg Config) *OpenAICompatibleProvider {
 		name = ProviderOpenAICompatible
 	}
 	return &OpenAICompatibleProvider{
-		baseURL:     strings.TrimRight(cfg.BaseURL, "/"),
+		baseURL:     chatCompletionsBaseURL(cfg.BaseURL, cfg.Provider),
 		apiKey:      cfg.APIKey,
 		model:       cfg.Model,
 		temperature: cfg.Temperature,
@@ -113,6 +114,44 @@ func NewOpenAICompatibleProvider(cfg Config) *OpenAICompatibleProvider {
 	}
 }
 
+// chatCompletionsBaseURL 解析 chat/completions 的请求根地址。
+// 约定：BaseURL 已包含版本段（如 /v1、/v2、/v4、/api/paas/v4）时直接沿用；
+// 否则按 OpenAI 惯例补 /v1。GLM(智谱) 的兼容端点为
+// https://open.bigmodel.cn/api/paas/v4/chat/completions，传入
+// https://open.bigmodel.cn/api/paas 即可正确拼接。
+func chatCompletionsBaseURL(baseURL string, provider string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasSuffix(trimmed, "/chat/completions") {
+		return strings.TrimSuffix(trimmed, "/chat/completions")
+	}
+	if chatCompletionsAPIVersion(trimmed) != "" {
+		return trimmed
+	}
+	return trimmed + "/v1"
+}
+
+// chatCompletionsAPIVersion 返回 baseURL 末尾的版本段（如 "v1"、"v4"），无则返回空。
+func chatCompletionsAPIVersion(baseURL string) string {
+	lastSegment := baseURL
+	if idx := strings.LastIndex(baseURL, "/"); idx >= 0 {
+		lastSegment = baseURL[idx+1:]
+	}
+	if lastSegment == "v1" || lastSegment == "v2" || lastSegment == "v3" || lastSegment == "v4" {
+		return lastSegment
+	}
+	// 兼容 v1beta 这类带后缀的版本段。
+	if strings.HasPrefix(lastSegment, "v") && len(lastSegment) > 1 {
+		digit := lastSegment[1:2]
+		if digit >= "0" && digit <= "9" {
+			return lastSegment
+		}
+	}
+	return ""
+}
+
 func (p *OpenAICompatibleProvider) Info() ProviderInfo {
 	return ProviderInfo{Provider: p.name, Model: p.model, BaseURL: p.baseURL}
 }
@@ -120,16 +159,24 @@ func (p *OpenAICompatibleProvider) Info() ProviderInfo {
 func (p *OpenAICompatibleProvider) GenerateScenario(ctx context.Context, req ScenarioGenerationRequest) (domain.ScenarioQuestion, error) {
 	var out domainQuestion
 	prompt, err := renderPrompt("scenario_generate", map[string]interface{}{
-		"Domain":       defaultString(req.Domain, "database"),
-		"Difficulty":   defaultString(req.Difficulty, "L2"),
-		"ScenarioType": defaultString(req.ScenarioType, "troubleshooting"),
-		"Nonce":        defaultString(req.Nonce, "none"),
-		"TagsText":     strings.Join(req.Tags, ","),
+		"Domain":                 defaultString(req.Domain, "database"),
+		"Difficulty":             defaultString(req.Difficulty, "L2"),
+		"ScenarioType":           defaultString(req.ScenarioType, "troubleshooting"),
+		"Nonce":                  defaultString(req.Nonce, "none"),
+		"TagsText":               strings.Join(req.Tags, ","),
+		"TitleHint":              req.Constraints.TitleHint,
+		"DescriptionHint":        req.Constraints.DescriptionHint,
+		"TopicScopeText":         strings.Join(req.Constraints.TopicScope, "、"),
+		"HypothesisHintsText":    strings.Join(req.Constraints.HypothesisHints, "、"),
+		"ObservationHintsText":   strings.Join(req.Constraints.ObservationHints, "、"),
+		"EvidencePathHintsText":  strings.Join(req.Constraints.EvidencePathHints, "、"),
+		"MisconceptionHintsText": strings.Join(req.Constraints.MisconceptionHints, "、"),
+		"SolutionHintsText":      strings.Join(req.Constraints.SolutionHints, "、"),
 	})
 	if err != nil {
 		return domain.ScenarioQuestion{}, err
 	}
-	if err := p.completeJSON(ctx, prompt, SchemaScenarioQuestion, &out); err != nil {
+	if err := p.completeJSON(ctx, prompt, SchemaHiddenWorldQuestion, &out); err != nil {
 		return domain.ScenarioQuestion{}, err
 	}
 	question := PrepareScenarioQuestion(out.toDomain(req))
@@ -385,7 +432,7 @@ func (p *OpenAICompatibleProvider) completeJSON(ctx context.Context, prompt stri
 	if err != nil {
 		return err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/v1/chat/completions", bytes.NewReader(payload))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/chat/completions", bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
@@ -441,7 +488,7 @@ func (p *OpenAICompatibleProvider) completeJSONStream(ctx context.Context, promp
 	if err != nil {
 		return err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/v1/chat/completions", bytes.NewReader(payload))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/chat/completions", bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
@@ -515,6 +562,11 @@ func (p *OpenAICompatibleProvider) applySamplingParams(body *chatCompletionReque
 		body.MaxTokens = &maxTokens
 	}
 	body.Stream = forceStream
+	// GLM 思考模型（glm-4.x 系列）默认先推理再输出，生题等结构化任务动辄 30s+；
+	// 显式关闭思考，把延迟压回秒级。仅对 GLM provider 生效，不影响其他厂商。
+	if p.name == ProviderGLM {
+		body.Thinking = map[string]string{"type": "disabled"}
+	}
 }
 
 func readChatCompletionStream(body io.Reader, onDelta func(string)) error {
@@ -560,13 +612,13 @@ func formatScenarioContext(messages []ScenarioContextMessage) string {
 }
 
 type domainQuestion struct {
-	Title        string        `json:"title"`
-	Description  string        `json:"description"`
-	Domain       string        `json:"domain"`
-	Difficulty   string        `json:"difficulty"`
-	ScenarioType string        `json:"scenario_type"`
-	Tags         []string      `json:"tags"`
-	Content      domainContent `json:"content"`
+	Title        string                   `json:"title"`
+	Description  string                   `json:"description"`
+	Domain       string                   `json:"domain"`
+	Difficulty   string                   `json:"difficulty"`
+	ScenarioType string                   `json:"scenario_type"`
+	Tags         []string                 `json:"tags"`
+	Content      hiddenWorldDomainContent `json:"content"`
 }
 
 func (q domainQuestion) toDomain(req ScenarioGenerationRequest) domain.ScenarioQuestion {
@@ -574,14 +626,23 @@ func (q domainQuestion) toDomain(req ScenarioGenerationRequest) domain.ScenarioQ
 	if len(tags) == 0 {
 		tags = req.Tags
 	}
+	publicScenario := q.Content.PublicScenario
+	if strings.TrimSpace(publicScenario.Title) == "" {
+		publicScenario.Title = q.Title
+	}
+	if strings.TrimSpace(publicScenario.Description) == "" {
+		publicScenario.Description = q.Description
+	}
+	publicScenario.ArchitectureDiagram = ""
+	content := q.Content.toDomain(publicScenario)
 	return domain.ScenarioQuestion{
-		Title:        q.Title,
-		Description:  q.Description,
+		Title:        defaultString(q.Title, publicScenario.Title),
+		Description:  defaultString(q.Description, publicScenario.Description),
 		Domain:       defaultString(q.Domain, defaultString(req.Domain, "database")),
 		Difficulty:   defaultString(q.Difficulty, defaultString(req.Difficulty, "L2")),
 		ScenarioType: defaultString(q.ScenarioType, defaultString(req.ScenarioType, "troubleshooting")),
 		Tags:         tags,
-		Content:      q.Content.toDomain(),
+		Content:      content,
 		Status:       "active",
 		Source:       "llm_generated",
 		CreatedBy:    req.UserID,
@@ -589,6 +650,30 @@ func (q domainQuestion) toDomain(req ScenarioGenerationRequest) domain.ScenarioQ
 	}
 }
 
+type hiddenWorldDomainContent struct {
+	ModelVersion   string                `json:"model_version"`
+	PublicScenario domain.PublicScenario `json:"public_scenario"`
+	HiddenWorld    domain.HiddenWorld    `json:"hidden_world"`
+}
+
+func (c hiddenWorldDomainContent) toDomain(publicScenario domain.PublicScenario) domain.ScenarioContent {
+	if c.ModelVersion == "" {
+		c.ModelVersion = domain.HiddenWorldContractVersion
+	}
+	if strings.TrimSpace(c.PublicScenario.Title) == "" {
+		c.PublicScenario = publicScenario
+	}
+	c.PublicScenario.ArchitectureDiagram = ""
+	return domain.ScenarioContent{
+		ModelVersion:   c.ModelVersion,
+		PublicScenario: &c.PublicScenario,
+		HiddenWorld:    &c.HiddenWorld,
+	}
+}
+
+// domainContent remains the DTO for the unrelated community-structure preview.
+// It intentionally keeps the legacy preview schema; only scenario generation is
+// migrated to hiddenworld.v1 in this phase.
 type domainContent struct {
 	RootCause               string                      `json:"root_cause"`
 	RootCauseKeywords       []string                    `json:"root_cause_keywords"`
@@ -636,6 +721,21 @@ type domainClue struct {
 	RecommendedNextAsk string   `json:"recommended_next_ask"`
 }
 
+func convertClues(items []domainClue) []domain.Clue {
+	out := make([]domain.Clue, 0, len(items))
+	for _, item := range items {
+		out = append(out, domain.Clue{
+			ClueID:             item.ClueID,
+			TriggerKeywords:    item.TriggerKeywords,
+			PrerequisiteClues:  item.PrerequisiteClues,
+			Content:            item.Content,
+			IsDistractor:       item.IsDistractor,
+			RecommendedNextAsk: item.RecommendedNextAsk,
+		})
+	}
+	return out
+}
+
 type sensitiveCheckModelOutput struct {
 	Status    string                  `json:"status"`
 	Sanitized bool                    `json:"sanitized"`
@@ -680,19 +780,4 @@ func (out sensitiveCheckModelOutput) toDomain(defaultField string) domain.Sensit
 		Blocked:   shouldBlockSensitiveFindings(findings),
 		Summary:   strings.TrimSpace(out.Summary),
 	}
-}
-
-func convertClues(items []domainClue) []domain.Clue {
-	out := make([]domain.Clue, 0, len(items))
-	for _, item := range items {
-		out = append(out, domain.Clue{
-			ClueID:             item.ClueID,
-			TriggerKeywords:    item.TriggerKeywords,
-			PrerequisiteClues:  item.PrerequisiteClues,
-			Content:            item.Content,
-			IsDistractor:       item.IsDistractor,
-			RecommendedNextAsk: item.RecommendedNextAsk,
-		})
-	}
-	return out
 }

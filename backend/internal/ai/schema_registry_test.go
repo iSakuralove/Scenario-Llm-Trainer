@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,8 +14,8 @@ import (
 
 func TestListJSONSchemasIncludesAllStructuredAITasks(t *testing.T) {
 	schemas := ListJSONSchemas()
-	if len(schemas) != 6 {
-		t.Fatalf("expected 6 schemas, got %d: %+v", len(schemas), schemas)
+	if len(schemas) != 7 {
+		t.Fatalf("expected 7 schemas, got %d: %+v", len(schemas), schemas)
 	}
 	seen := map[string]JSONSchemaInfo{}
 	for _, schema := range schemas {
@@ -26,7 +27,7 @@ func TestListJSONSchemasIncludesAllStructuredAITasks(t *testing.T) {
 			t.Fatalf("schema should be ok: %+v", schema)
 		}
 	}
-	for _, name := range []string{SchemaScenarioQuestion, SchemaScenarioContentPreview, SchemaInterviewFeedback, SchemaInterviewOpening, SchemaScenarioReply, SchemaSensitiveCheck} {
+	for _, name := range []string{SchemaScenarioQuestion, SchemaHiddenWorldQuestion, SchemaScenarioContentPreview, SchemaInterviewFeedback, SchemaInterviewOpening, SchemaScenarioReply, SchemaSensitiveCheck} {
 		if _, ok := seen[name]; !ok {
 			t.Fatalf("missing schema %s in %+v", name, schemas)
 		}
@@ -37,6 +38,10 @@ func TestValidateJSONSchemasWithValidSamples(t *testing.T) {
 	question := validScenarioQuestionSample()
 	if err := ValidateDomainJSONSchema(SchemaScenarioQuestion, question); err != nil {
 		t.Fatalf("scenario question schema should pass: %v", err)
+	}
+	hiddenWorldQuestion := validHiddenWorldQuestionSample()
+	if err := ValidateDomainJSONSchema(SchemaHiddenWorldQuestion, hiddenWorldQuestion); err != nil {
+		t.Fatalf("hiddenworld question schema should pass: %v", err)
 	}
 	if err := ValidateDomainJSONSchema(SchemaScenarioContentPreview, question.Content); err != nil {
 		t.Fatalf("scenario content preview schema should pass: %v", err)
@@ -78,6 +83,23 @@ func TestValidateJSONSchemasRejectInvalidSamples(t *testing.T) {
 	}
 	if err := ValidateJSONSchema(SchemaSensitiveCheck, `{"status":"risk","sanitized":true,"summary":"bad","findings":[{"type":"company","field":"raw_content","excerpt":"ACME","severity":"medium","suggestion":"mask","confidence":2}]}`); err == nil {
 		t.Fatal("expected invalid sensitive confidence to fail")
+	}
+	hidden := validHiddenWorldQuestionSample()
+	hidden.Content.HiddenWorld.RootCause.AcceptedHypotheses = []string{"H_OTHER"}
+	if err := ValidateScenarioQuestion(hidden); err == nil {
+		t.Fatal("expected H_OTHER as accepted hypothesis to fail domain validation")
+	}
+	hidden = validHiddenWorldQuestionSample()
+	hidden.Content.HiddenWorld.EvidenceGraph = nil
+	if err := ValidateScenarioQuestion(hidden); err == nil {
+		t.Fatal("expected empty evidence graph to fail domain validation")
+	}
+	raw := openAICompatibleScenarioJSON("hiddenworld")
+	if err := ValidateJSONSchema(SchemaHiddenWorldQuestion, strings.Replace(raw, `"model_version":"hiddenworld.v1"`, `"model_version":"hiddenworld.v0"`, 1)); err == nil {
+		t.Fatal("expected invalid hiddenworld model_version to fail")
+	}
+	if err := ValidateJSONSchema(SchemaHiddenWorldQuestion, strings.Replace(raw, `"hidden_world":`, `"unknown":"x","hidden_world":`, 1)); err == nil {
+		t.Fatal("expected unknown hiddenworld field to fail")
 	}
 }
 
@@ -251,5 +273,72 @@ func validScenarioQuestionSample() domain.ScenarioQuestion {
 }
 
 func openAICompatibleScenarioJSON(title string) string {
-	return `{"title":` + quoteJSON(title) + `,"description":"用于验证严格 JSON 输出的场景题。","domain":"database","difficulty":"L2","scenario_type":"troubleshooting","tags":["数据库","连接池"],"content":{"root_cause":"数据库连接池耗尽导致请求排队。","root_cause_keywords":["连接池","排队"],"key_evidence":["活跃连接接近上限"],"standard_procedure":["查看接口耗时","检查连接池指标"],"architecture_diagram":"","architecture_diagram_spec":{"direction":"TD","nodes":[{"id":"API","label":"API"},{"id":"Pool","label":"DB Pool"},{"id":"DB","label":"数据库(主库)"}],"edges":[{"from":"API","to":"Pool"},{"from":"Pool","to":"DB"}]},"reference_links":["连接池监控"],"reveal_strategy":{"surface_clues":[{"clue_id":"c1","trigger_keywords":["连接池"],"content":"活跃连接接近上限。","is_distractor":false}],"deep_clues":[{"clue_id":"c2","trigger_keywords":["排队"],"content":"等待队列持续增长。","is_distractor":false}],"distractors":[{"clue_id":"d1","trigger_keywords":["网络"],"content":"网络延迟正常。","is_distractor":true}]}}}`
+	question := validHiddenWorldQuestionSample()
+	question.Title = title
+	question.Content.PublicScenario.Title = title
+	raw, err := json.Marshal(hiddenWorldQuestionSchemaProjection(question))
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}
+
+func validHiddenWorldQuestionSample() domain.ScenarioQuestion {
+	return domain.ScenarioQuestion{
+		Title:        "数据库连接池排队导致接口变慢",
+		Description:  "订单接口在高峰期响应时间突然上升，需要逐步定位。",
+		Domain:       "database",
+		Difficulty:   "L2",
+		ScenarioType: "troubleshooting",
+		Tags:         []string{"数据库", "连接池"},
+		Content: domain.ScenarioContent{
+			ModelVersion: domain.HiddenWorldContractVersion,
+			PublicScenario: &domain.PublicScenario{
+				Title:               "数据库连接池排队导致接口变慢",
+				Description:         "订单接口在高峰期响应时间突然上升，需要逐步定位。",
+				Environment:         "订单服务与数据库组成的模拟链路。",
+				InitialSymptoms:     []string{"接口响应时间上升"},
+				ArchitectureDiagram: "",
+			},
+			HiddenWorld: &domain.HiddenWorld{
+				RootCause: domain.RootCause{
+					ID:                     "RC_POOL",
+					Category:               "resource",
+					Component:              "数据库连接池",
+					Description:            "连接池排队导致请求等待。",
+					SufficientEvidenceSets: [][]string{{"E_SLOW", "E_POOL"}, {"E_RELEASE", "E_CONFIG"}},
+					AcceptedHypotheses:     []string{"H_POOL"},
+					SolutionRequirements:   []string{"确认连接池容量并修复排队原因"},
+				},
+				Hypotheses: []domain.Hypothesis{
+					{HypothesisID: "H_POOL", Label: "连接池问题"},
+					{HypothesisID: "H_CPU", Label: "数据库资源压力"},
+					{HypothesisID: "H_NETWORK", Label: "网络抖动"},
+					{HypothesisID: "H_OTHER", Label: "其他"},
+				},
+				EvidenceGraph: []domain.EvidenceNode{
+					{EvidenceID: "E_SLOW", Content: "接口等待时间升高。", Category: "logs", Prerequisites: []string{}, ObtainedBy: []string{"inspect:logs.slow"}},
+					{EvidenceID: "E_POOL", Content: "连接池活跃数接近上限。", Category: "resource", Prerequisites: []string{"E_SLOW"}, ObtainedBy: []string{"inspect:resource.pool"}},
+					{EvidenceID: "E_RELEASE", Content: "异常前有连接配置变更。", Category: "change", Prerequisites: []string{}, ObtainedBy: []string{"inspect:change.release"}},
+					{EvidenceID: "E_CONFIG", Content: "变更后的连接配置与预期不一致。", Category: "change", Prerequisites: []string{"E_RELEASE"}, ObtainedBy: []string{"inspect:change.config"}},
+					{EvidenceID: "E_CPU", Content: "数据库 CPU 处于正常范围。", Category: "metrics", Prerequisites: []string{}, ObtainedBy: []string{"inspect:metrics.cpu"}},
+					{EvidenceID: "E_NETWORK", Content: "应用到数据库的网络延迟稳定。", Category: "dependency", Prerequisites: []string{}, ObtainedBy: []string{"inspect:dependency.network"}},
+				},
+				Observations: []domain.Observation{
+					{Action: "inspect:logs.slow", Result: "日志显示接口等待时间升高。", YieldsEvidence: []string{"E_SLOW"}, RulesOut: []string{}, UnmetPrerequisiteResult: ""},
+					{Action: "inspect:resource.pool", Result: "连接池活跃数接近上限。", YieldsEvidence: []string{"E_POOL"}, RulesOut: []string{}, UnmetPrerequisiteResult: "还没有先定位到具体接口。"},
+					{Action: "inspect:change.release", Result: "异常前有连接配置变更。", YieldsEvidence: []string{"E_RELEASE"}, RulesOut: []string{}, UnmetPrerequisiteResult: ""},
+					{Action: "inspect:change.config", Result: "变更后的连接配置存在差异。", YieldsEvidence: []string{"E_CONFIG"}, RulesOut: []string{}, UnmetPrerequisiteResult: "还没有可对比的变更记录。"},
+					{Action: "inspect:metrics.cpu", Result: "CPU 正常，没有资源饱和迹象。", IsNegative: true, YieldsEvidence: []string{"E_CPU"}, RulesOut: []string{"H_CPU"}, UnmetPrerequisiteResult: ""},
+					{Action: "inspect:dependency.network", Result: "网络稳定，没有依赖抖动迹象。", IsNegative: true, YieldsEvidence: []string{"E_NETWORK"}, RulesOut: []string{"H_NETWORK"}, UnmetPrerequisiteResult: ""},
+				},
+				SolutionRubric: domain.SolutionRubric{
+					RequiredActions:   []string{"确认连接池容量并修复排队原因"},
+					VerificationSteps: []string{"观察接口 P95 延迟回落"},
+					RollbackNotes:     []string{"保留原配置以便回滚"},
+				},
+				MisconceptionRules: []domain.MisconceptionRule{{MisconceptionID: "M_CPU", PatternHypotheses: []string{"H_CPU"}, WhyWrong: "CPU 指标正常，不能解释等待队列。"}},
+			},
+		},
+	}
 }

@@ -175,22 +175,229 @@ func validateHiddenWorldScenarioContent(content domain.ScenarioContent) error {
 	if strings.TrimSpace(world.RootCause.Description) == "" {
 		return fmt.Errorf("hidden world root cause is required")
 	}
+	if strings.TrimSpace(world.RootCause.ID) == "" || strings.TrimSpace(world.RootCause.Component) == "" {
+		return fmt.Errorf("hidden world root cause identity is required")
+	}
 	if len(world.RootCause.AcceptedHypotheses) == 0 {
 		return fmt.Errorf("hidden world accepted hypotheses are required")
 	}
-	if len(world.RootCause.SufficientEvidenceSets) == 0 {
-		return fmt.Errorf("hidden world sufficient evidence sets are required")
+	if len(world.RootCause.SufficientEvidenceSets) < 2 {
+		return fmt.Errorf("hidden world requires at least two sufficient evidence paths")
 	}
-	if len(world.Hypotheses) == 0 {
-		return fmt.Errorf("hidden world hypotheses are required")
+	if len(world.Hypotheses) < 4 {
+		return fmt.Errorf("hidden world requires at least four hypotheses")
 	}
-	if len(world.EvidenceGraph) == 0 {
-		return fmt.Errorf("hidden world evidence graph is required")
+	if len(world.EvidenceGraph) < 6 {
+		return fmt.Errorf("hidden world requires at least six evidence nodes")
 	}
-	if len(world.Observations) == 0 {
+	if len(world.Observations) < 1 {
 		return fmt.Errorf("hidden world observations are required")
 	}
+	if len(world.MisconceptionRules) < 1 {
+		return fmt.Errorf("hidden world misconception rules are required")
+	}
+
+	hypothesisIDs := make(map[string]struct{}, len(world.Hypotheses))
+	for _, hypothesis := range world.Hypotheses {
+		id := strings.TrimSpace(hypothesis.HypothesisID)
+		if id == "" || strings.TrimSpace(hypothesis.Label) == "" {
+			return fmt.Errorf("hidden world hypothesis identity is required")
+		}
+		if _, exists := hypothesisIDs[id]; exists {
+			return fmt.Errorf("hidden world hypothesis id is duplicated: %s", id)
+		}
+		hypothesisIDs[id] = struct{}{}
+	}
+	if _, ok := hypothesisIDs["H_OTHER"]; !ok {
+		return fmt.Errorf("hidden world hypotheses must include H_OTHER")
+	}
+	accepted := make(map[string]struct{}, len(world.RootCause.AcceptedHypotheses))
+	for _, id := range world.RootCause.AcceptedHypotheses {
+		id = strings.TrimSpace(id)
+		if id == "H_OTHER" {
+			return fmt.Errorf("H_OTHER cannot be an accepted hypothesis")
+		}
+		if _, ok := hypothesisIDs[id]; !ok {
+			return fmt.Errorf("accepted hypothesis does not exist: %s", id)
+		}
+		if _, exists := accepted[id]; exists {
+			return fmt.Errorf("accepted hypothesis is duplicated: %s", id)
+		}
+		accepted[id] = struct{}{}
+	}
+
+	evidenceIDs := make(map[string]struct{}, len(world.EvidenceGraph))
+	prerequisiteGraph := make(map[string][]string, len(world.EvidenceGraph))
+	for _, node := range world.EvidenceGraph {
+		id := strings.TrimSpace(node.EvidenceID)
+		if id == "" || strings.TrimSpace(node.Content) == "" || len(node.ObtainedBy) == 0 {
+			return fmt.Errorf("hidden world evidence node is incomplete")
+		}
+		if _, exists := evidenceIDs[id]; exists {
+			return fmt.Errorf("hidden world evidence id is duplicated: %s", id)
+		}
+		evidenceIDs[id] = struct{}{}
+		prerequisiteGraph[id] = append([]string{}, node.Prerequisites...)
+	}
+	for id, prerequisites := range prerequisiteGraph {
+		for _, prerequisite := range prerequisites {
+			if _, ok := evidenceIDs[prerequisite]; !ok {
+				return fmt.Errorf("evidence prerequisite does not exist: %s -> %s", id, prerequisite)
+			}
+			if prerequisite == id {
+				return fmt.Errorf("evidence cannot depend on itself: %s", id)
+			}
+		}
+	}
+	if hiddenWorldGraphHasCycle(prerequisiteGraph) {
+		return fmt.Errorf("hidden world evidence prerequisites contain a cycle")
+	}
+
+	observationIDs := make(map[string]struct{}, len(world.Observations))
+	producedBy := make(map[string]string, len(world.EvidenceGraph))
+	negativeCount := 0
+	ruledOut := make(map[string]struct{})
+	for _, observation := range world.Observations {
+		action := strings.TrimSpace(observation.Action)
+		if action == "" || strings.TrimSpace(observation.Result) == "" {
+			return fmt.Errorf("hidden world observation is incomplete")
+		}
+		if _, exists := observationIDs[action]; exists {
+			return fmt.Errorf("observation action is duplicated: %s", action)
+		}
+		observationIDs[action] = struct{}{}
+		if observation.IsNegative {
+			negativeCount++
+		}
+		for _, evidenceID := range observation.YieldsEvidence {
+			if _, ok := evidenceIDs[evidenceID]; !ok {
+				return fmt.Errorf("observation yields unknown evidence: %s", evidenceID)
+			}
+			if previous, exists := producedBy[evidenceID]; exists {
+				return fmt.Errorf("evidence is produced by multiple observations: %s and %s", previous, action)
+			}
+			producedBy[evidenceID] = action
+		}
+		for _, hypothesisID := range observation.RulesOut {
+			if _, ok := hypothesisIDs[hypothesisID]; !ok {
+				return fmt.Errorf("observation rules out unknown hypothesis: %s", hypothesisID)
+			}
+			ruledOut[hypothesisID] = struct{}{}
+		}
+	}
+	if negativeCount == 0 {
+		return fmt.Errorf("hidden world requires at least one negative observation")
+	}
+
+	for index, evidenceSet := range world.RootCause.SufficientEvidenceSets {
+		if len(evidenceSet) == 0 {
+			return fmt.Errorf("sufficient evidence path %d is empty", index)
+		}
+		for _, evidenceID := range evidenceSet {
+			if _, ok := evidenceIDs[evidenceID]; !ok {
+				return fmt.Errorf("sufficient evidence path references unknown evidence: %s", evidenceID)
+			}
+		}
+	}
+	for _, rule := range world.MisconceptionRules {
+		if strings.TrimSpace(rule.MisconceptionID) == "" || strings.TrimSpace(rule.WhyWrong) == "" {
+			return fmt.Errorf("hidden world misconception rule is incomplete")
+		}
+		for _, hypothesisID := range rule.PatternHypotheses {
+			if _, ok := hypothesisIDs[hypothesisID]; !ok {
+				return fmt.Errorf("misconception rule references unknown hypothesis: %s", hypothesisID)
+			}
+		}
+	}
+
+	reachable := make(map[string]struct{}, len(evidenceIDs))
+	for {
+		grew := false
+		for evidenceID, action := range producedBy {
+			_ = action
+			if _, already := reachable[evidenceID]; already {
+				continue
+			}
+			ready := true
+			for _, prerequisite := range prerequisiteGraph[evidenceID] {
+				if _, obtained := reachable[prerequisite]; !obtained {
+					ready = false
+					break
+				}
+			}
+			if ready {
+				reachable[evidenceID] = struct{}{}
+				grew = true
+			}
+		}
+		if !grew {
+			break
+		}
+	}
+	if len(reachable) != len(evidenceIDs) {
+		return fmt.Errorf("hidden world evidence graph contains unreachable evidence")
+	}
+	completablePath := false
+	for _, evidenceSet := range world.RootCause.SufficientEvidenceSets {
+		pathReady := true
+		for _, evidenceID := range evidenceSet {
+			if _, ok := reachable[evidenceID]; !ok {
+				pathReady = false
+				break
+			}
+		}
+		if pathReady {
+			completablePath = true
+			break
+		}
+	}
+	if !completablePath {
+		return fmt.Errorf("hidden world has no reachable sufficient evidence path")
+	}
+	for hypothesisID := range hypothesisIDs {
+		if hypothesisID == "H_OTHER" {
+			continue
+		}
+		if _, isAccepted := accepted[hypothesisID]; isAccepted {
+			continue
+		}
+		if _, isRuledOut := ruledOut[hypothesisID]; !isRuledOut {
+			return fmt.Errorf("distractor hypothesis has no ruling-out observation: %s", hypothesisID)
+		}
+	}
 	return nil
+}
+
+func hiddenWorldGraphHasCycle(graph map[string][]string) bool {
+	const (
+		white = 0
+		gray  = 1
+		black = 2
+	)
+	colors := make(map[string]int, len(graph))
+	var visit func(string) bool
+	visit = func(node string) bool {
+		switch colors[node] {
+		case gray:
+			return true
+		case black:
+			return false
+		}
+		colors[node] = gray
+		for _, prerequisite := range graph[node] {
+			if visit(prerequisite) {
+				return true
+			}
+		}
+		colors[node] = black
+		return false
+	}
+	for node := range graph {
+		if visit(node) {
+			return true
+		}
+	}
+	return false
 }
 
 func ValidateInterviewFeedback(feedback InterviewFeedback, needFollowUp, needReport bool) error {

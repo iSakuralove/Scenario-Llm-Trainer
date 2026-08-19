@@ -146,35 +146,15 @@ func (MockProvider) GenerateScenario(_ context.Context, req ScenarioGenerationRe
 
 	variant := mockScenarioVariants[mockVariantIndex(req)]
 	title := fmt.Sprintf("%s 方向 %s：%s", req.Domain, req.Difficulty, variant.Title)
-	if strings.TrimSpace(req.Constraints.Title) != "" {
-		title = strings.TrimSpace(req.Constraints.Title)
+	if strings.TrimSpace(req.Constraints.TitleHint) != "" {
+		title = strings.TrimSpace(req.Constraints.TitleHint)
 	}
 	description := variant.Description
-	if strings.TrimSpace(req.Constraints.Description) != "" {
-		description = strings.TrimSpace(req.Constraints.Description)
+	if strings.TrimSpace(req.Constraints.DescriptionHint) != "" {
+		description = strings.TrimSpace(req.Constraints.DescriptionHint)
 	}
 	if len(req.Constraints.TopicScope) > 0 {
 		description = fmt.Sprintf("%s 聚焦：%s", description, strings.Join(req.Constraints.TopicScope, " / "))
-	}
-	rootCause := variant.RootCause
-	if strings.TrimSpace(req.Constraints.RootCauseHint) != "" {
-		rootCause = strings.TrimSpace(req.Constraints.RootCauseHint) + "（AI补全）"
-	}
-	evidence := append([]string{}, variant.Evidence...)
-	if len(req.Constraints.EvidenceHints) > 0 {
-		evidence = append(append([]string{}, req.Constraints.EvidenceHints...), evidence...)
-	}
-	surfaceClues := append([]domain.Clue{}, variant.SurfaceClues...)
-	for index := len(req.Constraints.ClueHints) - 1; index >= 0; index-- {
-		hint := strings.TrimSpace(req.Constraints.ClueHints[index])
-		if hint == "" {
-			continue
-		}
-		surfaceClues = append([]domain.Clue{{
-			ClueID:          fmt.Sprintf("hint-%d", index+1),
-			TriggerKeywords: []string{hint},
-			Content:         hint,
-		}}, surfaceClues...)
 	}
 
 	question := domain.ScenarioQuestion{
@@ -191,25 +171,107 @@ func (MockProvider) GenerateScenario(_ context.Context, req ScenarioGenerationRe
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 		Content: domain.ScenarioContent{
-			RootCause:               rootCause,
-			RootCauseKeywords:       variant.Keywords,
-			KeyEvidence:             evidence,
-			StandardProcedure:       variant.Procedure,
-			ArchitectureDiagram:     variant.Diagram,
-			ArchitectureDiagramSpec: &variant.DiagramSpec,
-			ReferenceLinks:          variant.References,
-			RevealStrategy: domain.RevealStrategy{
-				SurfaceClues: surfaceClues,
-				DeepClues:    variant.DeepClues,
-				Distractors:  variant.Distractors,
-			},
+			ModelVersion:   domain.HiddenWorldContractVersion,
+			PublicScenario: mockPublicScenario(title, description, variant),
+			HiddenWorld:    mockHiddenWorld(variant, req),
 		},
 	}
 	question = PrepareScenarioQuestion(question)
-	if err := ValidateDomainJSONSchema(SchemaScenarioQuestion, question); err != nil {
+	if err := ValidateDomainJSONSchema(SchemaHiddenWorldQuestion, question); err != nil {
 		return domain.ScenarioQuestion{}, err
 	}
 	return question, ValidateScenarioQuestion(question)
+}
+
+func mockPublicScenario(title, description string, variant mockScenarioVariant) *domain.PublicScenario {
+	return &domain.PublicScenario{
+		Title:       title,
+		Description: description,
+		Environment: "模拟排障环境：应用服务、数据存储与外部依赖组成一条可观测链路。",
+		InitialSymptoms: []string{
+			"核心请求耗时在一次变更后明显上升，但请求仍能完成。",
+			"同一时间窗口内只有部分业务路径受到影响。",
+			fmt.Sprintf("题面背景：%s", variant.Description),
+		},
+		// 生成模型不得手写架构图；服务端后续可按公开信息生成安全投影。
+		ArchitectureDiagram: "",
+	}
+}
+
+func mockHiddenWorld(variant mockScenarioVariant, req ScenarioGenerationRequest) *domain.HiddenWorld {
+	primaryLabel := "主要故障方向"
+	if len(req.Constraints.HypothesisHints) > 0 && strings.TrimSpace(req.Constraints.HypothesisHints[0]) != "" {
+		primaryLabel = strings.TrimSpace(req.Constraints.HypothesisHints[0])
+	}
+	primaryEvidence := mockVariantEvidence(variant.Evidence, 0, "主要现象证据")
+	confirmEvidence := mockVariantEvidence(variant.Evidence, 1, "关键确认结果")
+	releaseEvidence := "同一时间窗口存在相关变更记录。"
+	if len(req.Constraints.EvidencePathHints) > 0 {
+		releaseEvidence += " 路径方向：" + strings.Join(req.Constraints.EvidencePathHints, "、")
+	}
+	diffEvidence := mockVariantEvidence(variant.Evidence, 2, "变更前后差异")
+	observationSuffix := ""
+	if len(req.Constraints.ObservationHints) > 0 {
+		observationSuffix = " 补充观察方向：" + strings.Join(req.Constraints.ObservationHints, "、")
+	}
+	requiredActions := append([]string{}, variant.Procedure...)
+	if len(req.Constraints.SolutionHints) > 0 {
+		requiredActions = append(requiredActions, req.Constraints.SolutionHints...)
+	}
+	misconceptionWhyWrong := "相关指标与现象不一致，继续沿该方向扩容或重试不能解释主症状。"
+	if len(variant.Distractors) > 0 && strings.TrimSpace(variant.Distractors[0].Content) != "" {
+		misconceptionWhyWrong = variant.Distractors[0].Content
+	}
+	if len(req.Constraints.MisconceptionHints) > 0 {
+		misconceptionWhyWrong += " 常见误解方向：" + strings.Join(req.Constraints.MisconceptionHints, "、")
+	}
+
+	return &domain.HiddenWorld{
+		RootCause: domain.RootCause{
+			ID:                     "RC_MOCK_PRIMARY",
+			Category:               "behavior",
+			Component:              "核心业务链路",
+			Description:            variant.RootCause,
+			SufficientEvidenceSets: [][]string{{"E_PRIMARY", "E_CONFIRM"}, {"E_RELEASE", "E_DIFF"}},
+			AcceptedHypotheses:     []string{"H_PRIMARY"},
+			SolutionRequirements:   requiredActions,
+		},
+		Hypotheses: []domain.Hypothesis{
+			{HypothesisID: "H_PRIMARY", Label: primaryLabel},
+			{HypothesisID: "H_RESOURCE", Label: "资源压力"},
+			{HypothesisID: "H_DEPENDENCY", Label: "网络或依赖抖动"},
+			{HypothesisID: "H_OTHER", Label: "其他"},
+		},
+		EvidenceGraph: []domain.EvidenceNode{
+			{EvidenceID: "E_PRIMARY", Content: primaryEvidence, Category: "logs", Prerequisites: []string{}, ObtainedBy: []string{"inspect:logs.primary"}},
+			{EvidenceID: "E_CONFIRM", Content: confirmEvidence, Category: "data", Prerequisites: []string{"E_PRIMARY"}, ObtainedBy: []string{"inspect:data.confirm"}},
+			{EvidenceID: "E_RELEASE", Content: releaseEvidence, Category: "change", Prerequisites: []string{}, ObtainedBy: []string{"inspect:change.release"}},
+			{EvidenceID: "E_DIFF", Content: diffEvidence, Category: "change", Prerequisites: []string{"E_RELEASE"}, ObtainedBy: []string{"inspect:change.diff"}},
+			{EvidenceID: "E_RESOURCE", Content: "资源指标处于正常范围，没有明显排队或饱和。", Category: "resource", Prerequisites: []string{}, ObtainedBy: []string{"inspect:resource.metrics"}},
+			{EvidenceID: "E_NETWORK", Content: "服务间延迟稳定，依赖调用没有异常波动。", Category: "dependency", Prerequisites: []string{}, ObtainedBy: []string{"inspect:dependency.network"}},
+		},
+		Observations: []domain.Observation{
+			{Action: "inspect:logs.primary", Result: "查看主请求日志后，可以看到异常集中在同一类业务调用。" + observationSuffix, YieldsEvidence: []string{"E_PRIMARY"}, RulesOut: []string{}, UnmetPrerequisiteResult: ""},
+			{Action: "inspect:data.confirm", Result: "对主请求做进一步确认，结果显示执行路径存在明显退化。", YieldsEvidence: []string{"E_CONFIRM"}, RulesOut: []string{}, UnmetPrerequisiteResult: "还没有主请求证据，先说明要确认哪一类调用。"},
+			{Action: "inspect:change.release", Result: "发布记录显示异常窗口附近存在相关变更。", YieldsEvidence: []string{"E_RELEASE"}, RulesOut: []string{}, UnmetPrerequisiteResult: "需要先指定要核对的发布窗口。"},
+			{Action: "inspect:change.diff", Result: "对比变更前后的配置或结构，发现关键差异。", YieldsEvidence: []string{"E_DIFF"}, RulesOut: []string{}, UnmetPrerequisiteResult: "还没有可对比的变更记录。"},
+			{Action: "inspect:resource.metrics", Result: "资源指标正常，暂时没有资源饱和证据。", IsNegative: true, YieldsEvidence: []string{"E_RESOURCE"}, RulesOut: []string{"H_RESOURCE"}, UnmetPrerequisiteResult: ""},
+			{Action: "inspect:dependency.network", Result: "依赖链路延迟稳定，没有观察到网络抖动。", IsNegative: true, YieldsEvidence: []string{"E_NETWORK"}, RulesOut: []string{"H_DEPENDENCY"}, UnmetPrerequisiteResult: ""},
+		},
+		SolutionRubric: domain.SolutionRubric{
+			RequiredActions:   requiredActions,
+			VerificationSteps: []string{"复查关键指标是否回到稳定区间", "确认同类请求不再重复出现异常"},
+			RollbackNotes:     []string{"变更前先保留可回滚版本，并在低峰期验证。"},
+		},
+		MisconceptionRules: []domain.MisconceptionRule{{MisconceptionID: "M_BLAME_RESOURCE", PatternHypotheses: []string{"H_RESOURCE"}, WhyWrong: misconceptionWhyWrong}},
+	}
+}
+
+func mockVariantEvidence(values []string, index int, fallback string) string {
+	if index >= 0 && index < len(values) && strings.TrimSpace(values[index]) != "" {
+		return strings.TrimSpace(values[index])
+	}
+	return fallback
 }
 
 func mockVariantIndex(req ScenarioGenerationRequest) int {
