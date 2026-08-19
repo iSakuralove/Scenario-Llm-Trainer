@@ -39,7 +39,7 @@ class Guard:
         constraints: TeachingConstraints,
         context: GuardContext,
     ) -> MentorAction:
-        if any(_contains_entity(action.reply, entity) for entity in context.forbidden_entities):
+        if any(contains_forbidden_entity(action.reply, entity) for entity in context.forbidden_entities):
             raise GuardViolation("entity_leak", "回复包含尚未公开的信息，请只依据已公开观察重写。")
         confirmation_forbidden = any(
             item == "confirm_hypothesis" for item in constraints.must_not
@@ -88,7 +88,7 @@ def extract_forbidden_entities(
             entity
             for entity in entities
             if _entity_key(entity) not in public_entities
-            and not _contains_entity(public_text, entity)
+            and not contains_forbidden_entity(public_text, entity)
         ]
     )
 
@@ -128,7 +128,9 @@ def _unique_non_empty(values: list[str]) -> list[str]:
     return result
 
 
-def _contains_entity(text: str, entity: str) -> bool:
+def contains_forbidden_entity(text: str, entity: str) -> bool:
+    """按生产 Guard 的中文词典、英文词边界和数字边界检查实体。"""
+
     normalized_entity = _entity_key(entity)
     if not normalized_entity:
         return False

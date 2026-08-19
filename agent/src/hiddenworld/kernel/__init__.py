@@ -4,7 +4,7 @@ from .antiguess import AntiGuess, AntiGuessDecision
 from .cluegate import ClueGate
 from .comparator import AnswerComparator
 from .evidence import EvidenceEngine
-from .guard import Guard, GuardViolation, extract_forbidden_entities
+from .guard import Guard, GuardViolation, contains_forbidden_entity, extract_forbidden_entities
 from .policy import TeachingPolicy
 from .verifier import RootCauseVerifier
 from .world import HiddenWorldEngine
@@ -17,6 +17,7 @@ __all__ = [
     "EvidenceEngine",
     "Guard",
     "GuardViolation",
+    "contains_forbidden_entity",
     "extract_forbidden_entities",
     "HiddenWorldEngine",
     "RootCauseVerifier",
