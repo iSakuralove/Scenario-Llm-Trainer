@@ -16,8 +16,13 @@ from hiddenworld.evals import (
     ADAPTIVE_TRAJECTORIES,
     ALL_TRAJECTORIES,
     FIXED_TRAJECTORIES,
+    BehaviorMetrics,
     GoldenCase,
+    MatrixReport,
+    TrajectoryReport,
     apply_proposals_for_eval,
+    build_interpreter_dataset,
+    compare_provider_matrices,
     load_golden_cases,
     run_interpreter_goldens,
     run_trajectory,
@@ -49,7 +54,7 @@ def test_stage_five_matrix_covers_required_fixed_and_adaptive_tracks() -> None:
 
 def test_interpreter_seed_goldens_are_jsonl_and_unique() -> None:
     cases = load_golden_cases()
-    assert len(cases) >= 12
+    assert 50 <= len(cases) <= 120
     assert len({case.case_id for case in cases}) == len(cases)
     assert all(case.input.strip() for case in cases)
 
@@ -132,6 +137,36 @@ async def test_interpreter_golden_runner_enforces_per_case_deadline() -> None:
     assert report.error_code == "provider_timeout"
 
 
+@pytest.mark.asyncio
+async def test_pydantic_evals_dataset_executes_hiddenworld_golden_evaluator() -> None:
+    from hiddenworld.contracts import TurnAnalysis
+
+    case = GoldenCase(
+        case_id="dataset-cpu",
+        input="检查 CPU",
+        expected_actions=("inspect:metrics.cpu",),
+    )
+    dataset = build_interpreter_dataset([case])
+
+    async def task(_case: GoldenCase) -> TurnAnalysis:
+        return TurnAnalysis(
+            actions=["inspect:metrics.cpu"],
+            hypothesis_id="H_CPU_BOUND",
+            hypothesis_raw="CPU 打满",
+            made_claim=False,
+            contains_answer_attempt=False,
+            answer_attempt_text="",
+            established_facts=[],
+            is_stuck=False,
+            is_noise=False,
+            student_affect="engaged",
+            confidence=0.95,
+        )
+
+    report = await dataset.evaluate(task, progress=False, max_concurrency=1)
+    assert len(report.cases) == 1
+
+
 def test_trajectory_answer_tool_expectations_are_per_turn() -> None:
     case = next(item for item in ADAPTIVE_TRAJECTORIES if item.case_id == "experienced-wrong")
     assert [case.expects_answer_tool(index) for index in range(1, 4)] == [True, True, False]
@@ -182,3 +217,99 @@ async def test_eval_runner_supports_multi_turn_without_exposing_hidden_world() -
     )
     assert report.turns == 3
     assert report.passed
+    assert report.behavior.sentence_repetition_rate == 1.0
+    assert report.behavior.question_type_entropy == 0.0
+    assert report.behavior.max_stalled_turns == 2
+    assert report.behavior.leak_rate == 0.0
+
+
+def test_provider_comparison_accepts_equivalent_behavior_without_ranking() -> None:
+    case = ADAPTIVE_TRAJECTORIES[0]
+    left = TrajectoryReport(
+        provider="deepseek",
+        question_id="hw-db-index-001",
+        case_id=case.case_id,
+        kind=case.kind,
+        turns=3,
+        behavior=BehaviorMetrics(
+            sentence_repetition_rate=0.2,
+            question_type_entropy=1.0,
+            max_stalled_turns=2,
+            action_count=1,
+            evidence_count=1,
+            ruled_out_count=0,
+            compare_answer_calls=0,
+        ),
+    )
+    right = TrajectoryReport(
+        provider="glm",
+        question_id="hw-db-index-001",
+        case_id=case.case_id,
+        kind=case.kind,
+        turns=3,
+        behavior=BehaviorMetrics(
+            sentence_repetition_rate=0.4,
+            question_type_entropy=1.5,
+            max_stalled_turns=1,
+            action_count=1,
+            evidence_count=1,
+            ruled_out_count=0,
+            compare_answer_calls=0,
+        ),
+    )
+
+    report = compare_provider_matrices(
+        MatrixReport("deepseek", [left]),
+        MatrixReport("glm", [right]),
+        question_ids=("hw-db-index-001",),
+        trajectories=(case,),
+    )
+
+    assert report.status == "passed"
+    public = report.public_dict()
+    assert public["hard_consistency"] is True
+    assert public["behavior_equivalence"] is True
+    assert public["providers"] == ["deepseek", "glm"]
+    assert "duration_ms" not in public["trajectories"][0]["deltas"]
+
+
+def test_provider_comparison_marks_missing_and_behavior_differences() -> None:
+    case = ADAPTIVE_TRAJECTORIES[0]
+    left = TrajectoryReport(
+        provider="deepseek",
+        question_id="hw-db-index-001",
+        case_id=case.case_id,
+        kind=case.kind,
+        turns=3,
+        behavior=BehaviorMetrics(action_count=2, completion_observed=True),
+    )
+    right = TrajectoryReport(
+        provider="glm",
+        question_id="hw-db-index-001",
+        case_id=case.case_id,
+        kind=case.kind,
+        turns=3,
+        behavior=BehaviorMetrics(action_count=1, completion_observed=False),
+    )
+
+    failed = compare_provider_matrices(
+        MatrixReport("deepseek", [left]),
+        MatrixReport("glm", [right]),
+        question_ids=("hw-db-index-001",),
+        trajectories=(case,),
+    )
+    assert failed.status == "failed"
+    assert set(failed.comparisons[0].codes) >= {
+        "behavior:action_count",
+        "behavior:completion_observed",
+    }
+
+    incomplete = compare_provider_matrices(
+        MatrixReport("deepseek", [left]),
+        None,
+        question_ids=("hw-db-index-001",),
+        trajectories=(case,),
+    )
+    assert incomplete.status == "insufficient_data"
+    assert incomplete.unavailable_providers == ["glm"]
+    assert incomplete.missing == ["hw-db-index-001/novice:glm"]

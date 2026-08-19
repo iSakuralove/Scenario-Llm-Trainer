@@ -9,6 +9,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pydantic_evals import Case, Dataset
+from pydantic_evals.evaluators import Evaluator, EvaluatorContext
+
 from hiddenworld.agents.interpreter import create_interpreter_agent
 from hiddenworld.bank.loader import load_fixed_question
 from hiddenworld.contracts import InterpreterDeps, TurnAnalysis
@@ -53,6 +56,34 @@ class GoldenReport:
             "failures": [{"case_id": item.case_id, "codes": list(item.codes)} for item in self.failures],
             "error_code": self.error_code,
         }
+
+
+@dataclass
+class GoldenEvaluator(Evaluator):
+    """把 HiddenWorld 金标断言接入 Pydantic Evals。"""
+
+    def evaluate(self, ctx: EvaluatorContext[GoldenCase, TurnAnalysis, None]) -> dict[str, Any]:
+        if ctx.output is None:
+            return {"completed": False, "golden_match": False}
+        codes = _check_golden(ctx.inputs, ctx.output)
+        return {
+            "completed": True,
+            "golden_match": not codes,
+            "failure_count": len(codes),
+        }
+
+
+def build_interpreter_dataset(
+    cases: Sequence[GoldenCase] | None = None,
+) -> Dataset[GoldenCase, TurnAnalysis, None]:
+    """构造可交给 ``Dataset.evaluate`` 的单轮金标集。"""
+
+    selected = list(cases if cases is not None else load_golden_cases())
+    return Dataset(
+        name="hiddenworld_interpreter_goldens",
+        cases=[Case(name=case.case_id, inputs=case) for case in selected],
+        evaluators=[GoldenEvaluator()],
+    )
 
 
 def load_golden_cases(path: Path = DEFAULT_GOLDEN_PATH) -> list[GoldenCase]:

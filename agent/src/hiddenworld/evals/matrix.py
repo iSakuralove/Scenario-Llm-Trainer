@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from math import log2
 from time import perf_counter
 from typing import Any, Literal
 
@@ -142,6 +144,51 @@ class HardContractViolation:
     code: str
 
 
+@dataclass(frozen=True)
+class BehaviorMetrics:
+    sentence_repetition_rate: float = 0.0
+    question_type_entropy: float = 0.0
+    max_stalled_turns: int = 0
+    leak_rate: float = 0.0
+    action_count: int = 0
+    evidence_count: int = 0
+    ruled_out_count: int = 0
+    compare_answer_calls: int = 0
+    completion_observed: bool = False
+
+    def public_dict(self) -> dict[str, Any]:
+        return {
+            "sentence_repetition_rate": self.sentence_repetition_rate,
+            "question_type_entropy": self.question_type_entropy,
+            "max_stalled_turns": self.max_stalled_turns,
+            "leak_rate": self.leak_rate,
+            "action_count": self.action_count,
+            "evidence_count": self.evidence_count,
+            "ruled_out_count": self.ruled_out_count,
+            "compare_answer_calls": self.compare_answer_calls,
+            "completion_observed": self.completion_observed,
+        }
+
+
+@dataclass(frozen=True)
+class BehaviorEquivalenceThresholds:
+    """跨 provider 比较只接受对称阈值，避免把比较写成模型排名。"""
+
+    sentence_repetition_rate: float = 0.35
+    question_type_entropy: float = 1.0
+    max_stalled_turns: int = 1
+
+    def public_dict(self) -> dict[str, float | int]:
+        return {
+            "sentence_repetition_rate": self.sentence_repetition_rate,
+            "question_type_entropy": self.question_type_entropy,
+            "max_stalled_turns": self.max_stalled_turns,
+        }
+
+
+_DEFAULT_EQUIVALENCE_THRESHOLDS = BehaviorEquivalenceThresholds()
+
+
 @dataclass
 class TrajectoryReport:
     provider: str
@@ -152,6 +199,9 @@ class TrajectoryReport:
     duration_ms: int = 0
     violations: list[HardContractViolation] = field(default_factory=list)
     error_code: str = ""
+    behavior: BehaviorMetrics = field(default_factory=BehaviorMetrics)
+    _mentor_replies: list[str] = field(default_factory=list, repr=False)
+    _leak_count: int = field(default=0, repr=False)
 
     @property
     def passed(self) -> bool:
@@ -168,6 +218,7 @@ class TrajectoryReport:
             "passed": self.passed,
             "violations": [item.code for item in self.violations],
             "error_code": self.error_code,
+            "behavior": self.behavior.public_dict(),
         }
 
 
@@ -178,13 +229,145 @@ class MatrixReport:
 
     def public_dict(self) -> dict[str, Any]:
         passed = sum(item.passed for item in self.trajectories)
+        behavior = _aggregate_behavior(self.trajectories)
         return {
             "provider": self.provider,
             "total": len(self.trajectories),
             "passed": passed,
             "hard_pass_rate": (passed / len(self.trajectories)) if self.trajectories else 0.0,
+            "behavior": behavior.public_dict(),
             "trajectories": [item.public_dict() for item in self.trajectories],
         }
+
+
+@dataclass(frozen=True)
+class TrajectoryComparison:
+    question_id: str
+    case_id: str
+    kind: TrajectoryKind
+    hard_contract_passed: bool
+    behavior_equivalent: bool
+    codes: tuple[str, ...]
+    deltas: dict[str, float | int | bool]
+
+    def public_dict(self) -> dict[str, Any]:
+        return {
+            "question_id": self.question_id,
+            "case_id": self.case_id,
+            "kind": self.kind,
+            "hard_contract_passed": self.hard_contract_passed,
+            "behavior_equivalent": self.behavior_equivalent,
+            "codes": list(self.codes),
+            "deltas": self.deltas,
+        }
+
+
+@dataclass
+class ProviderComparisonReport:
+    providers: tuple[str, str]
+    expected: int
+    comparisons: list[TrajectoryComparison]
+    missing: list[str]
+    unavailable_providers: list[str]
+    thresholds: BehaviorEquivalenceThresholds
+
+    @property
+    def status(self) -> str:
+        if self.unavailable_providers or self.missing:
+            return "insufficient_data"
+        if all(
+            item.hard_contract_passed and item.behavior_equivalent
+            for item in self.comparisons
+        ):
+            return "passed"
+        return "failed"
+
+    def public_dict(self) -> dict[str, Any]:
+        hard_passed = sum(item.hard_contract_passed for item in self.comparisons)
+        equivalent = sum(item.behavior_equivalent for item in self.comparisons)
+        compared = len(self.comparisons)
+        return {
+            "providers": list(self.providers),
+            "status": self.status,
+            "expected": self.expected,
+            "compared": compared,
+            "hard_contract_passed": hard_passed,
+            "behavior_equivalent": equivalent,
+            "hard_consistency": (
+                self.status != "insufficient_data" and hard_passed == self.expected
+            ),
+            "behavior_equivalence": (
+                self.status != "insufficient_data" and equivalent == self.expected
+            ),
+            "equivalence_rate": (equivalent / compared) if compared else 0.0,
+            "missing": self.missing,
+            "unavailable_providers": self.unavailable_providers,
+            "thresholds": self.thresholds.public_dict(),
+            "trajectories": [item.public_dict() for item in self.comparisons],
+        }
+
+
+def compare_provider_matrices(
+    left: MatrixReport | None,
+    right: MatrixReport | None,
+    *,
+    providers: tuple[str, str] = ("deepseek", "glm"),
+    question_ids: Sequence[str] = FIXED_BANK_IDS,
+    trajectories: Sequence[TrajectoryCase] = ALL_TRAJECTORIES,
+    thresholds: BehaviorEquivalenceThresholds = _DEFAULT_EQUIVALENCE_THRESHOLDS,
+) -> ProviderComparisonReport:
+    """按相同题目和轨迹做对称比较，不输出模型正文或私有裁判结果。"""
+
+    resolved_providers = (
+        left.provider if left is not None else providers[0],
+        right.provider if right is not None else providers[1],
+    )
+    unavailable = [
+        provider
+        for provider, report in zip(resolved_providers, (left, right), strict=True)
+        if report is None
+    ]
+    expected_keys = [
+        (question_id, case.case_id, case.kind)
+        for question_id in question_ids
+        for case in trajectories
+    ]
+    left_by_key = _reports_by_key(left)
+    right_by_key = _reports_by_key(right)
+    comparisons: list[TrajectoryComparison] = []
+    missing: list[str] = []
+    for question_id, case_id, kind in expected_keys:
+        key = (question_id, case_id, kind)
+        left_report = left_by_key.get(key)
+        right_report = right_by_key.get(key)
+        if left_report is None or right_report is None:
+            missing_from = [
+                provider
+                for provider, report in zip(
+                    resolved_providers,
+                    (left_report, right_report),
+                    strict=True,
+                )
+                if report is None
+            ]
+            missing.append(f"{question_id}/{case_id}:{','.join(missing_from)}")
+            continue
+        comparisons.append(
+            _compare_trajectory_reports(
+                left_report,
+                right_report,
+                providers=resolved_providers,
+                thresholds=thresholds,
+            )
+        )
+    return ProviderComparisonReport(
+        providers=resolved_providers,
+        expected=len(expected_keys),
+        comparisons=comparisons,
+        missing=missing,
+        unavailable_providers=unavailable,
+        thresholds=thresholds,
+    )
 
 
 def check_result_hard_contract(
@@ -285,6 +468,7 @@ async def run_trajectory(
                     user_message=rendered_message,
                 )
             )
+            violation_start = len(report.violations)
             report.violations.extend(
                 check_result_hard_contract(
                     result,
@@ -293,7 +477,33 @@ async def run_trajectory(
                     requires_answer_tool=case.expects_answer_tool(turn_index),
                 )
             )
+            report._leak_count += sum(
+                item.code == "reply_entity_leak"
+                for item in report.violations[violation_start:]
+            )
             state = apply_proposals_for_eval(state, result.proposals)
+            report._mentor_replies.append(result.reply)
+            report.behavior = BehaviorMetrics(
+                max_stalled_turns=max(report.behavior.max_stalled_turns, state.stalled_turns),
+                action_count=report.behavior.action_count
+                + len([item for item in result.proposals if item.kind == "record_action"]),
+                evidence_count=report.behavior.evidence_count
+                + len([item for item in result.proposals if item.kind == "release_evidence"]),
+                ruled_out_count=report.behavior.ruled_out_count
+                + len([item for item in result.proposals if item.kind == "rule_out_hypothesis"]),
+                compare_answer_calls=report.behavior.compare_answer_calls
+                + len(
+                    [
+                        event
+                        for event in result.public_trace
+                        if event.kind == "tool_completed" and event.tool_name == "compare_answer"
+                    ]
+                ),
+                completion_observed=(
+                    report.behavior.completion_observed
+                    or result.internal_verification.completion_allowed
+                ),
+            )
             transcript.extend(
                 [
                     Turn(role="user", content=rendered_message, turn_number=turn_index),
@@ -305,6 +515,7 @@ async def run_trajectory(
         report.error_code = classify_provider_error(exc)
     report.duration_ms = _elapsed_ms(started)
     report.violations = _dedupe_violations(report.violations)
+    report.behavior = _finalize_behavior(report)
     return report
 
 
@@ -341,6 +552,180 @@ def _append_unique(items: list[str], value: str, *, max_items: int | None = None
         items.append(value)
     if max_items is not None and len(items) > max_items:
         del items[:-max_items]
+
+
+def _finalize_behavior(report: TrajectoryReport) -> BehaviorMetrics:
+    leak_count = report._leak_count
+    return BehaviorMetrics(
+        sentence_repetition_rate=_sentence_repetition_rate(report._mentor_replies),
+        question_type_entropy=_question_type_entropy(report._mentor_replies),
+        max_stalled_turns=report.behavior.max_stalled_turns,
+        leak_rate=(leak_count / report.turns) if report.turns else 0.0,
+        action_count=report.behavior.action_count,
+        evidence_count=report.behavior.evidence_count,
+        ruled_out_count=report.behavior.ruled_out_count,
+        compare_answer_calls=report.behavior.compare_answer_calls,
+        completion_observed=report.behavior.completion_observed,
+    )
+
+
+def _aggregate_behavior(reports: Sequence[TrajectoryReport]) -> BehaviorMetrics:
+    if not reports:
+        return BehaviorMetrics()
+    total_turns = sum(item.turns for item in reports)
+    return BehaviorMetrics(
+        sentence_repetition_rate=sum(
+            item.behavior.sentence_repetition_rate for item in reports
+        )
+        / len(reports),
+        question_type_entropy=sum(item.behavior.question_type_entropy for item in reports)
+        / len(reports),
+        max_stalled_turns=max(item.behavior.max_stalled_turns for item in reports),
+        leak_rate=(
+            sum(item.behavior.leak_rate * item.turns for item in reports) / total_turns
+            if total_turns
+            else 0.0
+        ),
+        action_count=sum(item.behavior.action_count for item in reports),
+        evidence_count=sum(item.behavior.evidence_count for item in reports),
+        ruled_out_count=sum(item.behavior.ruled_out_count for item in reports),
+        compare_answer_calls=sum(item.behavior.compare_answer_calls for item in reports),
+        completion_observed=any(item.behavior.completion_observed for item in reports),
+    )
+
+
+def _reports_by_key(
+    report: MatrixReport | None,
+) -> dict[tuple[str, str, TrajectoryKind], TrajectoryReport]:
+    if report is None:
+        return {}
+    return {
+        (item.question_id, item.case_id, item.kind): item
+        for item in report.trajectories
+    }
+
+
+def _compare_trajectory_reports(
+    left: TrajectoryReport,
+    right: TrajectoryReport,
+    *,
+    providers: tuple[str, str],
+    thresholds: BehaviorEquivalenceThresholds,
+) -> TrajectoryComparison:
+    codes: list[str] = []
+    for provider, report in zip(providers, (left, right), strict=True):
+        if report.error_code:
+            codes.append(f"provider_error:{provider}:{report.error_code}")
+        for violation in report.violations:
+            codes.append(f"hard_contract:{provider}:{violation.code}")
+        if report.turns == 0 and not report.error_code:
+            codes.append(f"hard_contract:{provider}:no_completed_turn")
+
+    deltas: dict[str, float | int | bool] = {
+        "turns": abs(left.turns - right.turns),
+        "sentence_repetition_rate": abs(
+            left.behavior.sentence_repetition_rate
+            - right.behavior.sentence_repetition_rate
+        ),
+        "question_type_entropy": abs(
+            left.behavior.question_type_entropy - right.behavior.question_type_entropy
+        ),
+        "max_stalled_turns": abs(
+            left.behavior.max_stalled_turns - right.behavior.max_stalled_turns
+        ),
+        "action_count": abs(left.behavior.action_count - right.behavior.action_count),
+        "evidence_count": abs(
+            left.behavior.evidence_count - right.behavior.evidence_count
+        ),
+        "ruled_out_count": abs(
+            left.behavior.ruled_out_count - right.behavior.ruled_out_count
+        ),
+        "compare_answer_calls": abs(
+            left.behavior.compare_answer_calls - right.behavior.compare_answer_calls
+        ),
+        "completion_match": (
+            left.behavior.completion_observed == right.behavior.completion_observed
+        ),
+        "left_leak_rate": left.behavior.leak_rate,
+        "right_leak_rate": right.behavior.leak_rate,
+    }
+    behavior_codes: list[str] = []
+    if deltas["turns"] != 0:
+        behavior_codes.append("turn_count")
+    for field_name in (
+        "action_count",
+        "evidence_count",
+        "ruled_out_count",
+        "compare_answer_calls",
+    ):
+        if deltas[field_name] != 0:
+            behavior_codes.append(field_name)
+    if not deltas["completion_match"]:
+        behavior_codes.append("completion_observed")
+    if deltas["max_stalled_turns"] > thresholds.max_stalled_turns:
+        behavior_codes.append("max_stalled_turns")
+    if (
+        deltas["sentence_repetition_rate"]
+        > thresholds.sentence_repetition_rate
+    ):
+        behavior_codes.append("sentence_repetition_rate")
+    if deltas["question_type_entropy"] > thresholds.question_type_entropy:
+        behavior_codes.append("question_type_entropy")
+    if left.behavior.leak_rate > 0 or right.behavior.leak_rate > 0:
+        behavior_codes.append("leak_rate")
+    codes.extend(f"behavior:{code}" for code in behavior_codes)
+    return TrajectoryComparison(
+        question_id=left.question_id,
+        case_id=left.case_id,
+        kind=left.kind,
+        hard_contract_passed=left.passed and right.passed,
+        behavior_equivalent=not behavior_codes,
+        codes=tuple(codes),
+        deltas=deltas,
+    )
+
+
+def _sentence_repetition_rate(replies: Sequence[str]) -> float:
+    openings = [reply.strip().splitlines()[0] for reply in replies if reply.strip()]
+    if len(openings) < 2:
+        return 0.0
+    similarities: list[float] = []
+    for previous, current in zip(openings, openings[1:], strict=False):
+        left = _character_ngrams(previous)
+        right = _character_ngrams(current)
+        union = left.union(right)
+        similarities.append((len(left.intersection(right)) / len(union)) if union else 0.0)
+    return sum(similarities) / len(similarities)
+
+
+def _character_ngrams(text: str, size: int = 3) -> set[str]:
+    normalized = re.sub(r"\s+", "", text.casefold())
+    if len(normalized) <= size:
+        return {normalized} if normalized else set()
+    return {normalized[index : index + size] for index in range(len(normalized) - size + 1)}
+
+
+def _question_type_entropy(replies: Sequence[str]) -> float:
+    types = [_question_type(reply) for reply in replies if reply.strip()]
+    if not types:
+        return 0.0
+    counts = {item: types.count(item) for item in set(types)}
+    total = len(types)
+    return -sum((count / total) * log2(count / total) for count in counts.values())
+
+
+def _question_type(reply: str) -> str:
+    normalized = reply.strip()
+    if not any(marker in normalized for marker in ("?", "？")):
+        return "statement"
+    for name, markers in (
+        ("evidence", ("依据", "证据", "观察")),
+        ("action", ("检查", "验证", "下一步", "先")),
+        ("explain", ("为什么", "如何", "怎么")),
+    ):
+        if any(marker in normalized for marker in markers):
+            return name
+    return "question"
 
 
 def _render_message(template: str, question: FixedQuestion) -> str:

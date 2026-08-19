@@ -10,3 +10,43 @@
 {"case_id":"golden-010-noise","input":"哈哈哈哈哈哈。","is_noise":true,"contains_answer_attempt":false}
 {"case_id":"golden-011-ddl","input":"继续看发布脚本有没有漏掉索引。","expected_actions":["inspect:change.ddl_diff"]}
 {"case_id":"golden-012-contradiction","input":"我确定是 CPU 打满，但 CPU 正常也能证明是它。","contains_answer_attempt":true}
+{"case_id":"golden-013-slow-query-average","input":"慢查询平均耗时很高，先把慢查询日志拿出来。","expected_actions":["inspect:logs.slow_query"]}
+{"case_id":"golden-014-slow-query-list","input":"请查最慢的列表查询。","expected_actions":["inspect:logs.slow_query"]}
+{"case_id":"golden-015-slow-query-p99","input":"接口 P99 上升，先确认具体慢 SQL。","expected_actions":["inspect:logs.slow_query"]}
+{"case_id":"golden-016-slow-query-time","input":"先看下午开始变慢的查询记录。","expected_actions":["inspect:logs.slow_query"]}
+{"case_id":"golden-017-slow-query-filter","input":"把 user_id 条件对应的慢查询找出来。","expected_actions":["inspect:logs.slow_query"]}
+{"case_id":"golden-018-explain-plan","input":"检查执行计划。","expected_actions":["inspect:data.explain"]}
+{"case_id":"golden-019-explain-index","input":"看看这条 SQL 有没有走索引。","expected_actions":["inspect:data.explain"]}
+{"case_id":"golden-020-explain-all","input":"确认 EXPLAIN 的 type 是否是 ALL。","expected_actions":["inspect:data.explain"]}
+{"case_id":"golden-021-explain-rows","input":"从执行计划判断扫描行数。","expected_actions":["inspect:data.explain"]}
+{"case_id":"golden-022-explain-key","input":"看一下 key 为不为空。","expected_actions":["inspect:data.explain"]}
+{"case_id":"golden-023-rows-examined","input":"直接查 rows examined。","expected_actions":["inspect:data.rows_examined"]}
+{"case_id":"golden-024-rows-count","input":"确认到底扫描了多少行。","expected_actions":["inspect:data.rows_examined"]}
+{"case_id":"golden-025-rows-fullscan","input":"我想核对全表扫描的行数。","expected_actions":["inspect:data.rows_examined"]}
+{"case_id":"golden-026-rows-volume","input":"检查查询扫描量是否异常。","expected_actions":["inspect:data.rows_examined"]}
+{"case_id":"golden-027-release-time","input":"核对上午发布的时间。","expected_actions":["inspect:change.release_log"]}
+{"case_id":"golden-028-release-history","input":"查看发布记录。","expected_actions":["inspect:change.release_log"]}
+{"case_id":"golden-029-release-correlation","input":"变慢是否紧跟一次发布？查发布日志。","expected_actions":["inspect:change.release_log"]}
+{"case_id":"golden-030-release-window","input":"对比两点前后的变更。","expected_actions":["inspect:change.release_log"]}
+{"case_id":"golden-031-ddl-script","input":"检查建表脚本。","expected_actions":["inspect:change.ddl_diff"]}
+{"case_id":"golden-032-ddl-index","input":"对比发布前后的索引定义。","expected_actions":["inspect:change.ddl_diff"]}
+{"case_id":"golden-033-ddl-rebuild","input":"看重建表时有没有遗漏索引。","expected_actions":["inspect:change.ddl_diff"]}
+{"case_id":"golden-034-ddl-diff","input":"继续检查 DDL diff。","expected_actions":["inspect:change.ddl_diff"]}
+{"case_id":"golden-035-cpu-usage","input":"看数据库 CPU 使用率。","expected_actions":["inspect:metrics.cpu"]}
+{"case_id":"golden-036-cpu-normal","input":"先确认 CPU 是否真的打满。","expected_actions":["inspect:metrics.cpu"]}
+{"case_id":"golden-037-cpu-resource","input":"排除数据库资源耗尽。","expected_actions":["inspect:metrics.cpu"]}
+{"case_id":"golden-038-cpu-metric","input":"查 CPU 和内存指标。","expected_actions":["inspect:metrics.cpu"]}
+{"case_id":"golden-039-pool-active","input":"查看连接池活跃连接数。","expected_actions":["inspect:resource.connection_pool"]}
+{"case_id":"golden-040-pool-wait","input":"连接池有没有等待队列？","expected_actions":["inspect:resource.connection_pool"]}
+{"case_id":"golden-041-pool-capacity","input":"核对连接池容量和占用。","expected_actions":["inspect:resource.connection_pool"]}
+{"case_id":"golden-042-pool-exclude","input":"先排除连接池打满。","expected_actions":["inspect:resource.connection_pool"]}
+{"case_id":"golden-043-cache-hit","input":"查看 Redis 命中率。","expected_actions":["inspect:metrics.cache"]}
+{"case_id":"golden-044-cache-normal","input":"确认缓存是否和昨天一样。","expected_actions":["inspect:metrics.cache"]}
+{"case_id":"golden-045-cache-miss","input":"检查缓存有没有突然失效。","expected_actions":["inspect:metrics.cache"]}
+{"case_id":"golden-046-cache-exclude","input":"先从缓存方向排除。","expected_actions":["inspect:metrics.cache"]}
+{"case_id":"golden-047-stuck-short","input":"我卡住了。","is_stuck":true,"is_noise":false,"contains_answer_attempt":false}
+{"case_id":"golden-048-stuck-help","input":"不知道该检查什么。","is_stuck":true,"is_noise":false,"contains_answer_attempt":false}
+{"case_id":"golden-049-stuck-next","input":"能给我一个起点吗？","is_stuck":true,"contains_answer_attempt":false}
+{"case_id":"golden-050-noise-emoji","input":"啊啊啊啊。","is_noise":true,"contains_answer_attempt":false}
+{"case_id":"golden-051-noise-blank","input":"随便说点什么吧。","is_noise":true,"contains_answer_attempt":false}
+{"case_id":"golden-052-claim-uncertain","input":"我猜可能是索引问题，但还没有证据。","hypothesis_id":"H_INDEX","contains_answer_attempt":true}

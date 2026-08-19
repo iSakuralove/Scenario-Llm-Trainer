@@ -14,6 +14,8 @@ from hiddenworld.evals.matrix import (
     ADAPTIVE_TRAJECTORIES,
     ALL_TRAJECTORIES,
     FIXED_TRAJECTORIES,
+    MatrixReport,
+    compare_provider_matrices,
     run_matrix,
 )
 
@@ -36,6 +38,7 @@ async def _run(args: argparse.Namespace) -> None:
         "all": ALL_TRAJECTORIES,
     }[args.tracks]
     output: dict[str, object] = {"suite": args.suite, "providers": {}}
+    matrix_reports: dict[str, MatrixReport] = {}
     for provider in providers:
         try:
             model = build_deepseek_model() if provider == "deepseek" else build_glm_model()
@@ -53,10 +56,16 @@ async def _run(args: argparse.Namespace) -> None:
         if args.suite in ("matrix", "all") and not (
             golden_report is not None and golden_report.error_code
         ):
-            provider_output["matrix"] = (
-                await run_matrix(provider, model, trajectories=tracks)
-            ).public_dict()
+            matrix_report = await run_matrix(provider, model, trajectories=tracks)
+            matrix_reports[provider] = matrix_report
+            provider_output["matrix"] = matrix_report.public_dict()
         output["providers"][provider] = provider_output
+    if args.provider == "all" and args.suite in ("matrix", "all"):
+        output["comparison"] = compare_provider_matrices(
+            matrix_reports.get("deepseek"),
+            matrix_reports.get("glm"),
+            trajectories=tracks,
+        ).public_dict()
     print(json.dumps(output, ensure_ascii=False, indent=2))
 
 
