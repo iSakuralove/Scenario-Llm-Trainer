@@ -32,6 +32,17 @@ class TurnAnalysis(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # 声明顺序即生成顺序：模型按 schema 顺序吐 JSON，而 StreamingFieldExtractor
+    # 是顺序扫描的。这个字段放末尾等于不流式——学生要等整个 analysis 生成完
+    # 才看到第一个字。它必须是第一个。
+    public_summary: str = Field(
+        description=(
+            "用第二人称向学生复述你从这条消息里读到了什么，一到两句自然中文。\n"
+            "只能使用学生自己的措辞和公开题面里已有的信息；不得引入学生没有提到的"
+            "组件、数值、日志字段，也不得给出任何结论或下一步建议。\n"
+            "这是学生唯一会看到的解析过程，先写它再做后面的判断。"
+        ),
+    )
     actions: list[str] = Field(
         description='学生本轮想做的观察动作，如 ["inspect:metrics.cpu"]。没有就给空数组。',
     )

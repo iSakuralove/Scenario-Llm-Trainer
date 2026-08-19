@@ -202,6 +202,16 @@
   margin-left: -58px;
 }
 
+/* 本轮理解摘要。流式期间持续可见，不塞进折叠区——它是学生判断
+   "Agent 到底听懂没有" 的唯一依据，收起来就等于没有。 */
+.reasoningLine {
+  min-width: 0;
+  color: rgba(220, 228, 238, 0.62);
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
 .streamingText {
   white-space: pre-wrap;
 }

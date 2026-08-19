@@ -10,6 +10,7 @@ from hiddenworld.contracts import AnswerAttempt, TurnAnalysis
 
 def answer_analysis() -> TurnAnalysis:
     return TurnAnalysis(
+        public_summary="你说你完全不知道从哪下手，希望先拿到一点方向。",
         actions=[],
         hypothesis_id="H_INDEX",
         hypothesis_raw="",

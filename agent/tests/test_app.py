@@ -17,6 +17,7 @@ async def test_turn_endpoint_returns_typed_result(hidden_world, learner_state, p
         TestModel(
             custom_output_text=json.dumps(
                 {
+                    "public_summary": "你说你完全不知道从哪下手，希望先拿到一点方向。",
                     "actions": [],
                     "hypothesis_id": "",
                     "hypothesis_raw": "",
@@ -79,6 +80,7 @@ async def test_turn_stream_endpoint_emits_internal_analysis_public_trace_and_fin
         TestModel(
             custom_output_text=json.dumps(
                 {
+                    "public_summary": "你说你完全不知道从哪下手，希望先拿到一点方向。",
                     "actions": [],
                     "hypothesis_id": "",
                     "hypothesis_raw": "",
@@ -127,9 +129,11 @@ async def test_turn_stream_endpoint_emits_internal_analysis_public_trace_and_fin
     assert response.headers["content-type"].startswith("text/event-stream")
     blocks = [item for item in response.text.split("\n\n") if item.strip()]
     names = [block.splitlines()[0].removeprefix("event: ") for block in blocks]
-    assert names[0] == "turn_analysis"
+    # 推理增量在 interpreter 生成 public_summary 期间就外发，排在 turn_analysis 之前。
+    assert names[0] == "public_trace"
+    assert "turn_analysis" in names
+    assert names.index("turn_analysis") < len(names) - 1
     assert names[-1] == "result"
-    assert "public_trace" in names[1:-1]
     result_block = blocks[-1]
     result_line = next(line for line in result_block.splitlines() if line.startswith("data: "))
     result_payload = json.loads(result_line[6:])

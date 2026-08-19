@@ -111,9 +111,30 @@ def _sensitive_tokens(text: str) -> list[str]:
             character.isdigit() for character in token
         ):
             tokens.append(token)
-    tokens.extend(match.group(1) for match in _NUMBER.finditer(text))
+    tokens.extend(
+        match.group(1) for match in _NUMBER.finditer(text) if _is_distinctive_number(match.group(1))
+    )
     tokens.extend(match.group(0) for match in _CHINESE_COMPONENT.finditer(text))
     return tokens
+
+
+def _is_distinctive_number(token: str) -> bool:
+    """裸的一两位整数不作为禁词。
+
+    实测固定题库 4 道题里有 3 道把 ``8`` / ``10`` / ``12`` / ``35`` / ``45`` / ``90``
+    这类数字列进了禁词表（见 tools/audit_forbidden_entities.py）。它们几乎不携带
+    识别信息，却会让 Mentor 连"10 分钟""看这 3 个方向"都写不出来——Guard 判 entity_leak
+    触发重试，回复只会越改越空泛。
+
+    带小数点或千分位的数字（``3.8`` / ``2,400,000`` / 版本号 ``3.4``）以及三位以上的
+    整数仍然是禁词：那些才是真正指向隐藏内容的具体取值。
+
+    注意：Go 侧 scenarioIsDistinctiveNumber 必须与此保持一致。Go 更严会导致
+    Python Guard 放行、Go validateScenarioReply 拒绝，整轮以 reply_guard_rejected 失败。
+    """
+    if "." in token or "," in token:
+        return True
+    return len(token) >= 3
 
 
 def _unique_non_empty(values: list[str]) -> list[str]:

@@ -19,6 +19,12 @@ import (
 
 const interpreterLowConfidenceThreshold = 0.45
 
+// scenarioStallUnlockThreshold 是卡住兜底释放的连续无进展轮次阈值。
+// 必须与 agent/src/hiddenworld/runtime.py 的 STALL_UNLOCK_THRESHOLD 一致：
+// Python 提前判断只是为了不发出注定被拒的提议，权威复核在这里——因为
+// StalledTurns 由 Go 持有，而 is_stuck 是模型自报的，不能用来放行状态变更。
+const scenarioStallUnlockThreshold = 2
+
 var (
 	scenarioIdentifierPattern       = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_.:/-]{2,}`)
 	scenarioNumberPattern           = regexp.MustCompile(`\d+(?:[.,]\d+)*`)
@@ -215,6 +221,7 @@ func approveScenarioProposals(
 	ruledOut := stringSet(result.InternalVerification.RuledOutThisTurn)
 	lowConfidence := result.TurnAnalysis.Confidence < interpreterLowConfidenceThreshold
 	progress := false
+	stallReleases := 0
 	approvals := make([]scenarioProposalApproval, 0, len(result.Proposals))
 
 	for _, proposal := range result.Proposals {
@@ -241,6 +248,28 @@ func approveScenarioProposals(
 			}
 			state.CollectedEvidence = append(state.CollectedEvidence, proposal.EvidenceID)
 			progress = true
+		case "release_evidence_on_stall":
+			// 卡住兜底释放。刻意不复用 release_evidence 的 lowConfidence 与
+			// evidence_not_requested 闸门——卡住的学生必然同时踩中这两条，
+			// 那正是他越求助拿到的越少的原因。但也不能因此放松：这里不看
+			// 模型自报的 is_stuck，只认 Go 自己持有的 StalledTurns。
+			if stallReleases >= 1 {
+				return reject("stall_release_limit_exceeded")
+			}
+			if session.LearnerState.StalledTurns < scenarioStallUnlockThreshold {
+				return reject("stall_threshold_not_met")
+			}
+			node, ok := evidence[proposal.EvidenceID]
+			if !ok || scenarioContainsString(state.CollectedEvidence, proposal.EvidenceID) {
+				return reject("invalid_evidence")
+			}
+			if len(node.Prerequisites) > 0 {
+				return reject("stall_release_requires_no_prerequisite")
+			}
+			state.CollectedEvidence = append(state.CollectedEvidence, proposal.EvidenceID)
+			stallReleases++
+			// 不置 progress：兜底释放是系统给的，不是学生挣来的。
+			// 因此 stalled_turns 继续累加，effective_turns 不推进。
 		case "record_action":
 			if lowConfidence || proposal.Action == "" || !actions[proposal.Action] {
 				return reject("action_not_in_turn_analysis")
@@ -685,9 +714,28 @@ func extractScenarioSensitiveTokens(text string) []string {
 			tokens = append(tokens, token)
 		}
 	}
-	tokens = append(tokens, scenarioNumberPattern.FindAllString(text, -1)...)
+	for _, token := range scenarioNumberPattern.FindAllString(text, -1) {
+		if scenarioIsDistinctiveNumber(token) {
+			tokens = append(tokens, token)
+		}
+	}
 	tokens = append(tokens, scenarioChineseComponentPattern.FindAllString(text, -1)...)
 	return tokens
+}
+
+// scenarioIsDistinctiveNumber 过滤掉裸的一两位整数。
+//
+// 实测固定题库 4 道题里有 3 道把 8 / 10 / 12 / 35 / 45 / 90 这类数字列进了禁词表，
+// 它们几乎不携带识别信息，却会让导师连「10 分钟」都写不出来。带小数点或千分位的
+// 数字以及三位以上整数仍然是禁词——那些才是真正指向隐藏内容的具体取值。
+//
+// 必须与 agent/src/hiddenworld/kernel/guard.py 的 _is_distinctive_number 保持一致：
+// 这里更严会导致 Python Guard 放行的回复在 validateScenarioReply 被拒，整轮失败。
+func scenarioIsDistinctiveNumber(token string) bool {
+	if strings.ContainsAny(token, ".,") {
+		return true
+	}
+	return len([]rune(token)) >= 3
 }
 
 func scenarioReplyContainsEntity(text, entity string) bool {

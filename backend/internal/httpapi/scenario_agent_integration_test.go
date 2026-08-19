@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -97,6 +98,33 @@ func TestScenarioMessageCommitsApprovedAgentTurnAndKeepsPrivateAuditPrivate(t *t
 	record, ok := dataStore.GetScenarioAgentTurn(sessionID, "request-approved")
 	if !ok || !strings.Contains(string(record.InternalAudit), "PRIVATE_MENTOR_RATIONALE") {
 		t.Fatalf("private audit was not persisted independently: %+v", record)
+	}
+}
+
+func TestScenarioMessageUsesConfiguredAgentDeadlineAndTimeout(t *testing.T) {
+	t.Setenv("AGENT_TURN_DEADLINE_MS", "45000")
+	t.Setenv("AGENT_TIMEOUT_SECONDS", "50")
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	client := scenarioAgentClientFunc(func(_ context.Context, request agentclient.TurnRequest) (agentclient.TurnResult, error) {
+		if request.Budget.DeadlineMS != 45000 {
+			t.Fatalf("unexpected configured turn deadline: %+v", request.Budget)
+		}
+		return noProgressTurnResult(request, "配置化超时测试回复。"), nil
+	})
+	server := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour), client)
+	if server.scenarioAgentTimeout != 50*time.Second || server.scenarioTurnDeadlineMS != 45000 {
+		t.Fatalf("unexpected agent timing settings: timeout=%s deadline_ms=%d", server.scenarioAgentTimeout, server.scenarioTurnDeadlineMS)
+	}
+	handler := server.Handler()
+	token, sessionID := createScenarioSessionForAgentTest(t, handler, dataStore)
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/scenarios/sessions/"+sessionID+"/messages", token, map[string]any{
+		"content":        "验证配置化单轮预算",
+		"request_id":     "request-configured-deadline",
+		"state_revision": 0,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("message status=%d message=%s", status, env.Message)
 	}
 }
 
@@ -335,6 +363,131 @@ func TestScenarioMessageDoesNotFallbackWhenPythonAgentIsUnavailable(t *testing.T
 	}
 	if len(dataStore.ListScenarioMessages(sessionID)) != 0 {
 		t.Fatal("unavailable Python Agent must not fall back to old Go reply")
+	}
+}
+
+// stallProposalClient 前两轮无进展把 StalledTurns 顶到 2，第三轮提交一条卡住兜底释放。
+func stallProposalClient(evidenceID func(domain.HiddenWorld) string) scenarioAgentClientFunc {
+	var calls atomic.Int32
+	return scenarioAgentClientFunc(func(_ context.Context, request agentclient.TurnRequest) (agentclient.TurnResult, error) {
+		turn := calls.Add(1)
+		result := noProgressTurnResult(request, "我们先一起找一个能看的地方。")
+		if turn < 3 {
+			return result, nil
+		}
+		result.TurnAnalysis.IsStuck = true
+		result.Proposals = append(
+			[]agentclient.Proposal{{Kind: "release_evidence_on_stall", EvidenceID: evidenceID(request.HiddenWorld)}},
+			result.Proposals...,
+		)
+		return result, nil
+	})
+}
+
+func entryLevelEvidenceID(world domain.HiddenWorld) string {
+	for _, node := range world.EvidenceGraph {
+		if len(node.Prerequisites) == 0 {
+			return node.EvidenceID
+		}
+	}
+	return ""
+}
+
+func prerequisiteGatedEvidenceID(world domain.HiddenWorld) string {
+	for _, node := range world.EvidenceGraph {
+		if len(node.Prerequisites) > 0 {
+			return node.EvidenceID
+		}
+	}
+	return ""
+}
+
+func driveScenarioTurns(t *testing.T, handler http.Handler, token, sessionID string, contents []string) (int, testEnvelope) {
+	t.Helper()
+	var status int
+	var env testEnvelope
+	for index, content := range contents {
+		status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/scenarios/sessions/"+sessionID+"/messages", token, map[string]any{
+			"content":        content,
+			"request_id":     "request-stall-" + strconv.Itoa(index),
+			"state_revision": index,
+		})
+		if index < len(contents)-1 && status != http.StatusOK {
+			t.Fatalf("turn %d failed: %d %s", index, status, env.Message)
+		}
+	}
+	return status, env
+}
+
+func TestScenarioStallReleaseUnlocksEntryEvidenceForAStuckStudent(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	client := stallProposalClient(entryLevelEvidenceID)
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour), client).Handler()
+	token, sessionID := createScenarioSessionForAgentTest(t, handler, dataStore)
+
+	status, env := driveScenarioTurns(t, handler, token, sessionID, []string{
+		"我不知道从哪看起", "还是没有头绪", "能不能给我点信息，我什么都不知道啊，我是菜鸟",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("stall release turn rejected: %d %s data=%s", status, env.Message, env.Data)
+	}
+
+	session, ok := dataStore.GetScenarioSession(sessionID)
+	if !ok {
+		t.Fatal("session missing")
+	}
+	if len(session.LearnerState.CollectedEvidence) != 1 {
+		t.Fatalf("stuck student got no evidence: %+v", session.LearnerState.CollectedEvidence)
+	}
+	// 兜底释放是系统给的，不是学生挣来的：stalled_turns 继续累加，effective_turns 不动。
+	if session.LearnerState.StalledTurns != 3 {
+		t.Fatalf("stall release must not reset stalled turns, got %d", session.LearnerState.StalledTurns)
+	}
+	if session.LearnerState.EffectiveTurns != 0 {
+		t.Fatalf("stall release must not advance effective turns, got %d", session.LearnerState.EffectiveTurns)
+	}
+}
+
+func TestScenarioStallReleaseRejectedBeforeThresholdAndForGatedEvidence(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		turns    []string
+		evidence func(domain.HiddenWorld) string
+	}{
+		// StalledTurns 只有 1，达不到阈值。Go 只认自己持有的计数，不认模型自报的 is_stuck。
+		{name: "below threshold", turns: []string{"我不知道", "还是不知道"}, evidence: entryLevelEvidenceID},
+		// 达到阈值但请求了有前置的节点：兜底只放入口级证据，不能跳过推理链。
+		{name: "prerequisite gated", turns: []string{"我不知道", "还是不知道", "真的不会"}, evidence: prerequisiteGatedEvidenceID},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			dataStore := store.NewMemoryStore(auth.HashPassword)
+			var calls atomic.Int32
+			target := len(testCase.turns)
+			client := scenarioAgentClientFunc(func(_ context.Context, request agentclient.TurnRequest) (agentclient.TurnResult, error) {
+				turn := int(calls.Add(1))
+				result := noProgressTurnResult(request, "我们先一起找一个能看的地方。")
+				if turn < target {
+					return result, nil
+				}
+				result.TurnAnalysis.IsStuck = true
+				result.Proposals = append(
+					[]agentclient.Proposal{{Kind: "release_evidence_on_stall", EvidenceID: testCase.evidence(request.HiddenWorld)}},
+					result.Proposals...,
+				)
+				return result, nil
+			})
+			handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour), client).Handler()
+			token, sessionID := createScenarioSessionForAgentTest(t, handler, dataStore)
+
+			status, env := driveScenarioTurns(t, handler, token, sessionID, testCase.turns)
+			if status == http.StatusOK || !strings.Contains(string(env.Data), "proposal_rejected") {
+				t.Fatalf("expected proposal_rejected, status=%d data=%s", status, env.Data)
+			}
+			session, _ := dataStore.GetScenarioSession(sessionID)
+			if len(session.LearnerState.CollectedEvidence) != 0 {
+				t.Fatalf("rejected stall release must not write evidence: %+v", session.LearnerState.CollectedEvidence)
+			}
+		})
 	}
 }
 

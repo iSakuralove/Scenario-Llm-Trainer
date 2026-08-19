@@ -20,6 +20,7 @@ async def test_runtime_turn_returns_typed_proposals_without_mutating_input_state
         TestModel(
             custom_output_text=json.dumps(
                 {
+                    "public_summary": "你说你完全不知道从哪下手，希望先拿到一点方向。",
                     "actions": ["inspect:metrics.cpu"],
                     "hypothesis_id": "H_CPU_BOUND",
                     "hypothesis_raw": "",
@@ -90,6 +91,7 @@ async def test_runtime_executes_compare_answer_only_for_answer_attempt(
         TestModel(
             custom_output_text=json.dumps(
                 {
+                    "public_summary": "你说你完全不知道从哪下手，希望先拿到一点方向。",
                     "actions": [],
                     "hypothesis_id": "H_INDEX",
                     "hypothesis_raw": "",
@@ -160,6 +162,7 @@ async def test_runtime_streams_analysis_and_public_trace_before_returning_result
         TestModel(
             custom_output_text=json.dumps(
                 {
+                    "public_summary": "你说你完全不知道从哪下手，希望先拿到一点方向。",
                     "actions": [],
                     "hypothesis_id": "H_INDEX",
                     "hypothesis_raw": "",
@@ -213,10 +216,18 @@ async def test_runtime_streams_analysis_and_public_trace_before_returning_result
         on_public_trace=on_trace,
     )
 
-    assert observed[0] == ("analysis", "True")
-    assert [value for kind, value in observed if kind == "trace"] == [
-        item.kind for item in result.public_trace
-    ]
+    streamed = [value for kind, value in observed if kind == "trace"]
+    # 推理增量在 interpreter 流式生成 public_summary 期间就外发，因此合法地
+    # 早于 turn_analysis 到达——学生看到的第一个字来自本轮真实解析，不是固定动画。
+    assert streamed[0] == "reasoning_summary_delta"
+    assert observed.index(("analysis", "True")) < observed.index(
+        ("trace", "reasoning_summary_completed")
+    )
+    # 增量只走实时通道，不落库：一条摘要能拆出几十个增量，落库会撞穿 Go 侧
+    # 64 条 public trace 上限。落库的是同一段文本的 completed 事件。
+    persisted = [item.kind for item in result.public_trace]
+    assert "reasoning_summary_delta" not in persisted
+    assert [kind for kind in streamed if kind != "reasoning_summary_delta"] == persisted
     assert observed.index(("trace", "tool_started")) < observed.index(("trace", "mentor_buffered"))
     assert observed[-1] == ("trace", "guard_passed")
 
@@ -253,6 +264,7 @@ async def test_low_confidence_answer_signal_does_not_call_tool_or_write_hypothes
         TestModel(
             custom_output_text=json.dumps(
                 {
+                    "public_summary": "你说你完全不知道从哪下手，希望先拿到一点方向。",
                     "actions": ["inspect:data.explain"],
                     "hypothesis_id": "H_INDEX",
                     "hypothesis_raw": "",
@@ -299,3 +311,135 @@ async def test_low_confidence_answer_signal_does_not_call_tool_or_write_hypothes
     assert all(item.tool_name != "compare_answer" for item in result.public_trace)
     assert all(item.kind != "set_current_hypothesis" for item in result.proposals)
     assert all(item.kind != "record_action" for item in result.proposals)
+
+
+def _stuck_interpreter(*, is_stuck: bool = True, summary: str | None = None):
+    return create_interpreter_agent(
+        TestModel(
+            custom_output_text=json.dumps(
+                {
+                    "public_summary": summary or "你说你完全不知道从哪下手，想先要一点方向。",
+                    "actions": [],
+                    "hypothesis_id": "",
+                    "hypothesis_raw": "",
+                    "made_claim": False,
+                    "contains_answer_attempt": False,
+                    "answer_attempt_text": "",
+                    "established_facts": [],
+                    "is_stuck": is_stuck,
+                    "is_noise": False,
+                    "student_affect": "frustrated",
+                    "confidence": 0.3,
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+
+
+def _plain_mentor():
+    return create_mentor_agent(
+        TestModel(
+            custom_output_text=json.dumps(
+                {
+                    "reply": "我们先找一个能看的地方，从这里开始。",
+                    "rationale": "他连续几轮没有方向，先把起点定下来。",
+                    "requested_releases": [],
+                    "confirms_hypothesis": False,
+                    "expected_effort": "quick",
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_stuck_student_gets_a_stall_release_after_the_threshold(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    """卡住的学生说不出动作，常规 ClueGate 永远给不了他任何东西。"""
+    learner_state.stalled_turns = 2
+    request = AgentTurnRequest(
+        request_id="request-stalled",
+        session_id="session-1",
+        state_revision=3,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="能不能给我点信息，我什么都不知道啊，我是菜鸟",
+    )
+
+    result = await HiddenWorldRuntime(
+        interpreter=_stuck_interpreter(), mentor=_plain_mentor()
+    ).run_turn(request)
+
+    stall = [item for item in result.proposals if item.kind == "release_evidence_on_stall"]
+    assert len(stall) == 1
+    assert stall[0].evidence_id == "E_SLOW_SQL"
+    # 兜底释放不能伪装成常规释放，否则 Go 会用 evidence_not_requested 打回整轮。
+    assert all(item.kind != "release_evidence" for item in result.proposals)
+    # 也不能算作学生挣来的进展：stalled_turns 继续累加，effective_turns 不动。
+    assert all(item.kind != "advance_effective_turn" for item in result.proposals)
+    stalled = next(item for item in result.proposals if item.kind == "set_stalled_turns")
+    assert stalled.value == 3
+
+
+@pytest.mark.asyncio
+async def test_stall_release_is_withheld_below_the_threshold(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    learner_state.stalled_turns = 1
+    request = AgentTurnRequest(
+        request_id="request-not-yet-stalled",
+        session_id="session-1",
+        state_revision=3,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="我不太确定要看什么",
+    )
+
+    result = await HiddenWorldRuntime(
+        interpreter=_stuck_interpreter(), mentor=_plain_mentor()
+    ).run_turn(request)
+
+    assert all(item.kind != "release_evidence_on_stall" for item in result.proposals)
+
+
+@pytest.mark.asyncio
+async def test_public_reasoning_summary_comes_from_the_model_not_a_constant(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    """两轮不同输入必须产生不同的推理摘要。
+
+    回归的是"每轮重复走固定步骤"那个观感问题：以前这两条 trace 是字面常量，
+    不读 analysis，学生连发十条不同的话看到的过程一字不差。
+    """
+    summaries = []
+    for index, text in enumerate(["先看日志", "改看发布记录"]):
+        request = AgentTurnRequest(
+            request_id=f"request-summary-{index}",
+            session_id="session-1",
+            state_revision=3,
+            public_scenario=public_scenario,
+            hidden_world=hidden_world,
+            learner_state=learner_state,
+            user_message=text,
+        )
+        result = await HiddenWorldRuntime(
+            interpreter=_stuck_interpreter(summary=f"你想{text}。"),
+            mentor=_plain_mentor(),
+        ).run_turn(request)
+        reasoning = [item.reasoning.text for item in result.public_trace if item.reasoning]
+        summaries.append(reasoning)
+
+    assert summaries[0] == ["你想先看日志。"]
+    assert summaries[1] == ["你想改看发布记录。"]
+

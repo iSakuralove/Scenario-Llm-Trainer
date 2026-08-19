@@ -5,6 +5,7 @@ from hiddenworld.kernel.world import HiddenWorldEngine
 
 def analysis_for(*, actions: list[str], **overrides) -> TurnAnalysis:
     values = {
+        "public_summary": "你说你完全不知道从哪下手，希望先拿到一点方向。",
         "actions": actions,
         "hypothesis_id": "",
         "hypothesis_raw": "",

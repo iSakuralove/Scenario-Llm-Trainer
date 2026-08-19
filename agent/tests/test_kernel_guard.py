@@ -69,6 +69,49 @@ def test_guard_rejects_release_outside_approved_subset(teaching_constraints) -> 
     assert "E_DDL_DIFF" not in str(caught.value)
 
 
+def test_forbidden_entities_skip_bare_small_integers(hidden_world, public_scenario) -> None:
+    """裸的一两位整数不进禁词表。
+
+    实测固定题库 4 道题里有 3 道把 8 / 10 / 12 / 35 / 45 / 90 列成了禁词，
+    结果 Mentor 连「10 分钟」都写不出来，只会被 Guard 打回后越改越空泛。
+    """
+    entities = extract_forbidden_entities(
+        hidden_world,
+        released_evidence_ids=[],
+        public_scenario=public_scenario,
+    )
+
+    assert [item for item in entities if item.isdigit() and len(item) <= 2] == []
+    # 真正指向隐藏内容的具体取值仍然守住：三位以上整数和带小数点的数字。
+    assert "idx_user_created" in entities
+    assert "240" in entities
+    assert "3.8" in entities
+
+
+def test_guard_allows_ordinary_small_numbers_but_still_blocks_precise_values(
+    teaching_constraints,
+    hidden_world,
+    public_scenario,
+) -> None:
+    entities = extract_forbidden_entities(
+        hidden_world,
+        released_evidence_ids=[],
+        public_scenario=public_scenario,
+    )
+    context = GuardContext(forbidden_entities=entities)
+
+    ordinary = mentor_action("我们先看 3 个方向，每个大概花 10 分钟。")
+    assert Guard().validate(ordinary, constraints=teaching_constraints, context=context) == ordinary
+
+    with pytest.raises(GuardViolation) as caught:
+        Guard().validate(
+            mentor_action("慢查询平均耗时是 3.8 秒。"),
+            constraints=teaching_constraints,
+            context=context,
+        )
+    assert caught.value.code == "entity_leak"
+
+
 def test_forbidden_entity_extraction_catches_partial_identifiers_and_numbers(
     hidden_world, public_scenario
 ) -> None:

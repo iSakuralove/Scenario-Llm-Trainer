@@ -71,8 +71,9 @@ test('student sees safe Codex-style run events during scenario troubleshooting',
 
   await expect(page.getByTestId('scenario-agent-run')).toContainText('异常开始时间与一次配置发布高度重合')
   await expect(page.getByText('回复已通过安全校验')).toBeVisible()
-  await page.getByRole('button', { name: /查看处理摘要/ }).click()
-  await expect(page.getByText('已识别你希望核对日志与发布时间。')).toBeVisible()
+  // 本轮理解摘要不再折叠：它是学生判断"Agent 到底听懂没有"的唯一依据，
+  // 而且现在来自模型真实产出的 public_summary，不是每轮一样的固定文案。
+  await expect(page.getByTestId('agent-run-understanding')).toContainText('已识别你希望核对日志与发布时间。')
   await expect(page.getByRole('button', { name: /调用工具/ })).toHaveCount(0)
   await expect(page.locator('.message-thread')).not.toContainText('root_cause')
   await expect(page.locator('.message-thread')).not.toContainText('standard_procedure')
@@ -224,7 +225,7 @@ test('stream reconnect reuses request_id and resumes after the latest sequence w
   expect(requests[0].request_id).toBe(requests[1].request_id)
   expect(requests[1].after_sequence).toBe(3)
   const run = page.getByTestId('scenario-agent-run')
-  await run.getByRole('button', { name: /查看处理摘要/ }).click()
+  // 重连去重：同一条摘要不能因为重放而渲染两次。
   await expect(run.getByText('已识别本轮公开排查方向。')).toHaveCount(1)
   await expect(run.getByText('正在整理公开观察')).toHaveCount(1)
 })

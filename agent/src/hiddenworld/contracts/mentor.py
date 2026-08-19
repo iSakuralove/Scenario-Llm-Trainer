@@ -26,14 +26,22 @@ class MentorAction(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    reply: str = Field(description="给学生看的正文。这是全系统唯一会被学生读到的自然语言。")
+    # rationale 必须排在 reply 前面。模型按 schema 顺序生成 JSON——放在 reply
+    # 后面时它就成了事后追认：正文已经说完了，这里写什么都不影响输出，模型自然
+    # 敷衍成「用户需要信息」这类空话。排在前面才是真正的先想后说。
+    #
+    # 代价是正文开始流出的时间变晚，这段空白由 TurnAnalysis.public_summary 的
+    # 流式推理摘要填补。
     rationale: str = Field(
         description=(
-            "你这一轮为什么这么做。用自然语言写，想到什么写什么。\n"
+            "先写这里再写 reply。你这一轮为什么这么做：学生现在卡在哪、"
+            "你打算用什么方式接住他、你考虑过但否决了哪些做法、否决的理由是什么。\n"
+            "写完整的话，不要写标签或短语。这段不会给学生看，写给你自己想清楚用。\n"
             "刻意不设成枚举：一旦这里是 teaching_state 之类的固定选项，"
             "你就会开始「为了填对枚举而思考」，分类查表会从后门溜回来。"
         ),
     )
+    reply: str = Field(description="给学生看的正文。这是全系统唯一会被学生读到的自然语言。")
     requested_releases: list[str] = Field(
         description="你希望本轮释放的 evidence id。必须是 may_release 的子集，越权会被拒绝并要求重写。",
     )

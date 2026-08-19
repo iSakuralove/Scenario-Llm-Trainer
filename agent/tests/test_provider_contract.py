@@ -35,6 +35,7 @@ models.ALLOW_MODEL_REQUESTS = False
 
 def _analysis_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
+        "public_summary": "你说你完全不知道从哪下手，希望先拿到一点方向。",
         "actions": [],
         "hypothesis_id": "H_OTHER",
         "hypothesis_raw": "",

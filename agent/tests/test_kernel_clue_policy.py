@@ -18,11 +18,41 @@ def test_clue_gate_releases_multiple_explicitly_requested_evidence_in_one_turn(h
     assert releases == ["E_SLOW_SQL", "E_EXPLAIN_FULLSCAN", "E_RELEASE_LOG"]
 
 
+def test_clue_gate_gives_nothing_when_the_student_names_no_action(hidden_world) -> None:
+    """常规通路的死角：说不出动作的学生一条都拿不到。"""
+    assert ClueGate().approve(
+        hidden_world,
+        actions=[],
+        collected_evidence=[],
+        max_releases=3,
+    ) == []
+
+
+def test_stall_unlock_releases_one_entry_level_evidence(hidden_world) -> None:
+    release = ClueGate().approve_on_stall(hidden_world, collected_evidence=[])
+
+    assert release == "E_SLOW_SQL"
+    node = hidden_world.evidence_by_id(release)
+    assert node is not None
+    # 兜底释放只放入口级证据：有前置的节点会跳过整段推理链。
+    assert node.prerequisites == []
+
+
+def test_stall_unlock_skips_already_collected_and_prerequisite_gated_evidence(hidden_world) -> None:
+    collected = [
+        node.evidence_id for node in hidden_world.evidence_graph if not node.prerequisites
+    ]
+
+    # 所有无前置证据都拿过之后不再兜底，绝不退而释放有前置的节点。
+    assert ClueGate().approve_on_stall(hidden_world, collected_evidence=collected) == ""
+
+
 def test_policy_compiles_boundaries_without_choosing_a_mentor_action(learner_state) -> None:
     learner_state.current_hypothesis = "H_INDEX"
     learner_state.established_facts = ["订单查询正在扫全表"]
     learner_state.stalled_turns = 2
     analysis = TurnAnalysis(
+        public_summary="你说你完全不知道从哪下手，希望先拿到一点方向。",
         actions=["inspect:change.release_log"],
         hypothesis_id="H_INDEX",
         hypothesis_raw="",

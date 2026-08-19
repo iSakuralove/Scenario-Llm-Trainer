@@ -23,6 +23,10 @@ from .world import HiddenWorld, PublicScenario
 
 ProposalKind = Literal[
     "release_evidence",
+    # 卡住兜底释放。与 release_evidence 分开是因为审批条件完全不同：
+    # 常规释放要求学生点名动作，而卡住的学生恰恰是说不出动作的人。
+    # Go 侧对这条走独立分支，用自己持有的 stalled_turns 复核，不信任 is_stuck。
+    "release_evidence_on_stall",
     "record_action",
     "record_established_fact",
     "set_current_hypothesis",

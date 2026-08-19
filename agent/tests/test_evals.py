@@ -85,6 +85,7 @@ async def test_interpreter_golden_runner_returns_public_summary() -> None:
     model = TestModel(
         custom_output_text=json.dumps(
             {
+                "public_summary": "你说你完全不知道从哪下手，希望先拿到一点方向。",
                 "actions": ["inspect:metrics.cpu"],
                 "hypothesis_id": "H_CPU_BOUND",
                 "hypothesis_raw": "CPU 打满",
@@ -151,6 +152,7 @@ async def test_pydantic_evals_dataset_executes_hiddenworld_golden_evaluator() ->
 
     async def task(_case: GoldenCase) -> TurnAnalysis:
         return TurnAnalysis(
+            public_summary="你说你完全不知道从哪下手，希望先拿到一点方向。",
             actions=["inspect:metrics.cpu"],
             hypothesis_id="H_CPU_BOUND",
             hypothesis_raw="CPU 打满",
@@ -180,6 +182,7 @@ async def test_eval_runner_supports_multi_turn_without_exposing_hidden_world() -
         TestModel(
             custom_output_text=json.dumps(
                 {
+                    "public_summary": "你说你完全不知道从哪下手，希望先拿到一点方向。",
                     "actions": [],
                     "hypothesis_id": "H_OTHER",
                     "hypothesis_raw": "",

@@ -24,6 +24,7 @@ export function AgentRun({ events, fallbackUser = '', fallbackReply = '', active
   const ordered = useMemo(() => dedupeEvents(events), [events])
   const userText = ordered.find((event) => event.kind === 'user_message')?.text || fallbackUser
   const replyChunks = ordered.filter((event) => event.kind === 'reply_delta' && event.text).map((event) => event.text ?? '')
+  const understanding = understandingSummary(ordered)
   const reasoning = uniqueReasoning(ordered)
   const tools = aggregateTools(ordered)
   const statusEvents = ordered.filter((event) => ['response_summary', 'mentor_buffered', 'guard_passed', 'proposal_approved'].includes(event.kind))
@@ -40,7 +41,14 @@ export function AgentRun({ events, fallbackUser = '', fallbackReply = '', active
       </div>
 
       <div className={styles.agentFlow}>
-        {isProcessing && <ThinkingState label={thinkingLabel(ordered)} />}
+        {isProcessing && !understanding && <ThinkingState label={thinkingLabel(ordered)} />}
+
+        {understanding && (
+          <div className={styles.reasoningLine} aria-live="polite" data-testid="agent-run-understanding">
+            <StreamingText chunks={understanding.chunks} active={isProcessing && !understanding.settled} />
+          </div>
+        )}
+
         <ThinkingReasoning items={reasoning} />
 
         {tools.map((tool, index) => (
@@ -142,9 +150,28 @@ function dedupeEvents(events: ScenarioRunEvent[]) {
   return [...byKey.values()].sort((left, right) => left.sequence - right.sequence)
 }
 
+// understanding_message 阶段单独抽出来渲染成一条持续可见的行。
+// 后端现在会把 public_summary 拆成 reasoning_summary_delta 流式下发，
+// 如果继续丢给 ThinkingReasoning，每个碎片都会变成折叠列表里的一行。
+// completed 事件到达后用它的完整文本覆盖累积文本，避免收尾时文字跳动。
+function understandingSummary(events: ScenarioRunEvent[]) {
+  const settledText = events.find(
+    (event) => event.kind === 'reasoning_summary_completed' && event.reasoning?.stage === 'understanding_message',
+  )?.reasoning?.text
+  if (settledText) return { chunks: [settledText], settled: true }
+
+  const chunks = events
+    .filter((event) => event.kind === 'reasoning_summary_delta' && event.reasoning?.stage === 'understanding_message')
+    .map((event) => event.reasoning?.text ?? '')
+    .filter(Boolean)
+  return chunks.length > 0 ? { chunks, settled: false } : null
+}
+
 function uniqueReasoning(events: ScenarioRunEvent[]) {
   const seen = new Set<string>()
   return events.flatMap((event) => {
+    if (event.kind === 'reasoning_summary_delta') return []
+    if (event.reasoning?.stage === 'understanding_message') return []
     if (!event.reasoning?.text || seen.has(event.reasoning.text)) return []
     seen.add(event.reasoning.text)
     return [event.reasoning]

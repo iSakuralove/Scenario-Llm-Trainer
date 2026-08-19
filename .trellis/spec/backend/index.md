@@ -4,6 +4,7 @@
 
 ## Pre-Development Checklist
 
+- 修改 `agent/src/hiddenworld/**`、`backend/internal/httpapi/scenario_agent.go`、`backend/internal/agentclient/**` 或排查工坊公开事件类型时，读取 [scenario-agent-contracts.md](./scenario-agent-contracts.md)。
 - 读取 [store-schema-contracts.md](./store-schema-contracts.md) 中与 Store/schema/migration 相关的契约。
 - 修改用户侧 API 聚合契约时，读取 [interview-launchpad-contracts.md](./interview-launchpad-contracts.md)。
 - 修改独立 Mentor 页面或 `GET /users/me/mentor` 时，读取 [mentor-contracts.md](./mentor-contracts.md)。

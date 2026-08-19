@@ -87,3 +87,35 @@ func TestScenarioReplyGuardAllowsRootComponentWhenPubliclyNamed(t *testing.T) {
 		t.Fatalf("publicly named root component should be allowed: %v", err)
 	}
 }
+
+func TestScenarioReplyGuardIgnoresBareSmallIntegersButKeepsPreciseValues(t *testing.T) {
+	// 固定题库实测：4 道题里有 3 道把 8 / 10 / 12 / 35 / 45 / 90 列成了禁词，
+	// 导师连「10 分钟」都写不出来。裸的一两位整数不携带识别信息，
+	// 但三位以上整数和带小数点/千分位的取值仍然指向隐藏内容。
+	world := &domain.HiddenWorld{
+		RootCause: domain.RootCause{ID: "RC_PRIVATE", Component: "orders", Description: "重建耗时 45 秒"},
+		EvidenceGraph: []domain.EvidenceNode{
+			{EvidenceID: "E_PRIVATE", Content: "扫描行数 2,400,000，命中率 92%，平均 3.8s"},
+		},
+	}
+	publicScenario := &domain.PublicScenario{Title: "订单列表变慢", Description: "响应变慢。"}
+	state := domain.ScenarioLearnerState{}.Normalized()
+
+	for _, reply := range []string{
+		"我们先看 3 个方向，每个大概花 10 分钟。",
+		"这一步大概需要 45 秒左右，先别急。",
+	} {
+		if err := validateScenarioReply(reply, world, publicScenario, state); err != nil {
+			t.Fatalf("ordinary small number was rejected (%q): %v", reply, err)
+		}
+	}
+
+	for _, reply := range []string{
+		"扫描行数大概是 2,400,000 行。",
+		"慢查询平均耗时 3.8 秒。",
+	} {
+		if err := validateScenarioReply(reply, world, publicScenario, state); err == nil {
+			t.Fatalf("precise hidden value leaked through the guard: %q", reply)
+		}
+	}
+}

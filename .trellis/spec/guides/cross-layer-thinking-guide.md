@@ -153,6 +153,29 @@ When a CLI auto-detects a mode by probing a remote resource (e.g., checking if `
 
 ---
 
+## Dual-Sided Validation Consistency
+
+When one side produces a decision and another side **independently re-derives it**
+(the "don't trust the upstream" pattern), the two implementations become a contract
+that no type system enforces.
+
+### Checklist: After changing any rule that exists on both sides
+
+- [ ] Find the counterpart implementation before editing — search by behavior, not by name
+- [ ] Ask which direction of drift is fatal: usually the **stricter** side rejects what
+      the looser side already approved, failing the whole operation
+- [ ] Add a cross-reference comment in both files naming the other one
+- [ ] Add a regression test on **each** side, not just the one you edited
+- [ ] Prefer a shared fixture/corpus so both tests assert against the same data
+
+**Real-world example**: 排查工坊的禁词提取在 Python (`kernel/guard.py`) 和
+Go (`scenario_agent.go`) 各实现一份。给数字加长度门槛时只改一边，会让 Python Guard
+放行的导师回复在 Go 的 `validateScenarioReply` 被拒，整轮以 `reply_guard_rejected`
+失败——而两侧单测各自都是绿的。详见
+[backend/scenario-agent-contracts.md](../backend/scenario-agent-contracts.md)。
+
+---
+
 ## When to Create Flow Documentation
 
 Create detailed flow docs when:

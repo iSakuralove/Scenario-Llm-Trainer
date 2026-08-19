@@ -49,6 +49,7 @@ async def test_interpreter_agent_returns_typed_turn_analysis(hidden_world, publi
     model = TestModel(
         custom_output_text=json.dumps(
             {
+                "public_summary": "你说你完全不知道从哪下手，希望先拿到一点方向。",
                 "actions": ["inspect:metrics.cpu"],
                 "hypothesis_id": "H_CPU_BOUND",
                 "hypothesis_raw": "",
