@@ -32,7 +32,12 @@ type fixedHiddenWorldQuestion struct {
 }
 
 func seedDiagnosticScenarios(now time.Time) []domain.ScenarioQuestion {
-	assets := []string{"fixed_hiddenworld/hw-db-index-001.json"}
+	assets := []string{
+		"fixed_hiddenworld/hw-db-index-001.json",
+		"fixed_hiddenworld/hw-network-vip-001.json",
+		"fixed_hiddenworld/hw-k8s-io-001.json",
+		"fixed_hiddenworld/hw-cache-key-001.json",
+	}
 	items := make([]domain.ScenarioQuestion, 0, len(assets))
 	for _, asset := range assets {
 		items = append(items, loadFixedHiddenWorldSeed(asset, now))

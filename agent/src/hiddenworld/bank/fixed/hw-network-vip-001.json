@@ -1,0 +1,76 @@
+{
+  "question_id": "hw-network-vip-001",
+  "domain": "network",
+  "difficulty": "L3",
+  "scenario_type": "availability",
+  "tags": ["网络", "VIP", "发布变更", "超时"],
+  "source": "fixed_hiddenworld",
+  "version": 1,
+  "status": "active",
+  "model_version": "hiddenworld.v1",
+  "public_scenario": {
+    "title": "支付回调在网关切换后间歇性超时",
+    "description": "支付回调接口从上午一次网关变更后开始出现间歇性超时。少量请求会重试成功，业务订单没有全部失败，但告警持续升高，值班同学需要定位是哪一段链路发生了变化。",
+    "environment": "公网请求经 Nginx 入口、云负载均衡 VIP、支付回调服务和支付平台连接；服务运行在 6 个 Pod，配置由发布流水线统一下发。",
+    "initial_symptoms": [
+      "支付回调 P99 从 180ms 升到 3.2s",
+      "错误率小幅升高但重试后多数成功",
+      "问题从网关配置发布后开始",
+      "订单写库和内部接口没有明显变慢"
+    ],
+    "architecture_diagram": "graph LR\n  P[支付平台] --> V[云 VIP]\n  V --> N[Nginx]\n  N --> S[回调服务 x6]\n  S --> DB[(订单库)]"
+  },
+  "hidden_world": {
+    "root_cause": {
+      "id": "RC_NETWORK_VIP_ROUTE",
+      "category": "dependency",
+      "component": "云负载均衡 VIP",
+      "description": "网关发布时 VIP 后端路由列表遗漏了一个回调服务可用区，部分请求被转发到不存在的后端，触发连接超时和重试。",
+      "sufficient_evidence_sets": [
+        ["E_CALLBACK_TIMEOUT", "E_VIP_ROUTE"],
+        ["E_GATEWAY_CHANGE", "E_ROUTE_DIFF"]
+      ],
+      "accepted_hypotheses": ["H_VIP_ROUTE"],
+      "solution_requirements": [
+        "修正 VIP 后端路由并恢复缺失的可用区后端",
+        "把路由目标数量和可用区覆盖加入发布前检查"
+      ]
+    },
+    "hypotheses": [
+      { "hypothesis_id": "H_VIP_ROUTE", "label": "VIP 后端路由错误" },
+      { "hypothesis_id": "H_DNS", "label": "DNS 解析异常" },
+      { "hypothesis_id": "H_CPU", "label": "回调服务资源打满" },
+      { "hypothesis_id": "H_FIREWALL", "label": "防火墙或安全组变更" },
+      { "hypothesis_id": "H_PAYMENT_PROVIDER", "label": "支付平台自身抖动" },
+      { "hypothesis_id": "H_OTHER", "label": "其他" }
+    ],
+    "evidence_graph": [
+      { "evidence_id": "E_CALLBACK_TIMEOUT", "content": "回调服务访问 VIP 时有 8% 请求连接建立超过 2 秒，失败请求集中在同一批重试流量。", "category": "logs", "prerequisites": [], "obtained_by": ["inspect:logs.callback_timeout"] },
+      { "evidence_id": "E_VIP_ROUTE", "content": "VIP 监控显示部分请求被转发到一个没有健康实例的后端目标，正常目标没有同样的超时。", "category": "dependency", "prerequisites": [], "obtained_by": ["inspect:dependency.vip_route"] },
+      { "evidence_id": "E_GATEWAY_CHANGE", "content": "上午 10:05 的网关发布修改了 VIP 后端池配置，时间与超时开始时间一致。", "category": "change", "prerequisites": [], "obtained_by": ["inspect:change.gateway_release"] },
+      { "evidence_id": "E_ROUTE_DIFF", "content": "变更前后的路由清单对比发现，zone-b 的回调服务目标不在变更后的 VIP 后端列表中。", "category": "config", "prerequisites": ["E_GATEWAY_CHANGE"], "obtained_by": ["inspect:config.route_diff"] },
+      { "evidence_id": "E_DNS_NORMAL", "content": "支付平台和内部探针解析 VIP 的结果一致，DNS TTL 和解析延迟均正常。", "category": "dependency", "prerequisites": [], "obtained_by": ["inspect:dependency.dns"] },
+      { "evidence_id": "E_CPU_NORMAL", "content": "6 个回调服务 Pod CPU 和内存均低于 45%，没有排队和重启峰值。", "category": "metrics", "prerequisites": [], "obtained_by": ["inspect:metrics.service"] }
+    ],
+    "observations": [
+      { "action": "inspect:logs.callback_timeout", "result": "最近一小时有一批请求连接 VIP 超过 2 秒后超时，重试请求大多成功。", "is_negative": false, "yields_evidence": ["E_CALLBACK_TIMEOUT"], "rules_out": [], "unmet_prerequisite_result": "先指定要看的回调接口或时间范围。" },
+      { "action": "inspect:dependency.vip_route", "result": "VIP 后端池里有一个目标没有健康实例，超时请求都落到了这个目标。", "is_negative": false, "yields_evidence": ["E_VIP_ROUTE"], "rules_out": [], "unmet_prerequisite_result": "你要检查哪个入口的后端池？" },
+      { "action": "inspect:change.gateway_release", "result": "10:05 的网关发布修改了 VIP 后端池，发布时间早于第一批超时。", "is_negative": false, "yields_evidence": ["E_GATEWAY_CHANGE"], "rules_out": [], "unmet_prerequisite_result": "请先给出要核对的发布时间或网关对象。" },
+      { "action": "inspect:config.route_diff", "result": "路由差异显示 zone-b 回调服务目标被遗漏。", "is_negative": false, "yields_evidence": ["E_ROUTE_DIFF"], "rules_out": [], "unmet_prerequisite_result": "要比对哪一次网关变更前后的路由清单？" },
+      { "action": "inspect:dependency.dns", "result": "多地探针解析 VIP 一致，解析延迟正常。", "is_negative": true, "yields_evidence": ["E_DNS_NORMAL"], "rules_out": ["H_DNS"], "unmet_prerequisite_result": "" },
+      { "action": "inspect:metrics.service", "result": "服务 Pod 资源平稳，没有 CPU、内存或重启异常。", "is_negative": true, "yields_evidence": ["E_CPU_NORMAL"], "rules_out": ["H_CPU"], "unmet_prerequisite_result": "" },
+      { "action": "inspect:dependency.firewall", "result": "安全组规则没有在该时间窗口发生变更，其他接口链路也未出现连接拒绝。", "is_negative": true, "yields_evidence": [], "rules_out": ["H_FIREWALL"], "unmet_prerequisite_result": "" },
+      { "action": "inspect:dependency.payment_provider", "result": "支付平台成功率和其他商户接口均正常，异常只出现在本方 VIP 入口。", "is_negative": true, "yields_evidence": [], "rules_out": ["H_PAYMENT_PROVIDER"], "unmet_prerequisite_result": "" }
+    ],
+    "solution_rubric": {
+      "required_actions": ["修正 VIP 后端路由并恢复 zone-b 目标"],
+      "verification_steps": ["确认所有可用区后端均健康", "观察回调超时率和重试率回落", "检查发布前路由覆盖校验"],
+      "rollback_notes": ["先回滚网关路由配置，再在低峰期补发修正版本", "保留变更前后路由清单用于审计"]
+    },
+    "misconception_rules": [
+      { "misconception_id": "M_BLAME_DNS", "pattern_hypotheses": ["H_DNS"], "why_wrong": "多地解析一致且延迟正常，异常只发生在 VIP 后端转发。" },
+      { "misconception_id": "M_BLAME_CPU", "pattern_hypotheses": ["H_CPU"], "why_wrong": "服务资源平稳，超时集中在无健康实例的路由目标。" },
+      { "misconception_id": "M_BLAME_PROVIDER", "pattern_hypotheses": ["H_PAYMENT_PROVIDER"], "why_wrong": "支付平台其他接口正常，问题从本方网关发布后开始。" }
+    ]
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "question_id": "hw-cache-key-001",
+  "domain": "backend",
+  "difficulty": "L3",
+  "scenario_type": "correctness",
+  "tags": ["Redis", "缓存键", "多租户", "数据串读"],
+  "source": "fixed_hiddenworld",
+  "version": 1,
+  "status": "active",
+  "model_version": "hiddenworld.v1",
+  "public_scenario": {
+    "title": "多租户商品列表在缓存改造后偶发串数据",
+    "description": "商品列表完成缓存改造后，少数租户偶尔看到另一租户的商品。刷新后结果可能恢复，数据库中的原始数据没有被修改，需要定位缓存键、失效策略和序列化链路。",
+    "environment": "多租户商品服务使用 Redis Cluster 缓存列表结果，应用通过 tenant_id 和筛选条件查询 MySQL；缓存由一个共享的 CacheClient 统一封装。",
+    "initial_symptoms": [
+      "少数租户看到不属于自己的商品",
+      "刷新或等待一段时间后现象消失",
+      "数据库直接查询结果正常",
+      "问题从缓存版本发布后出现"
+    ],
+    "architecture_diagram": "graph LR\n  U[租户用户] --> S[商品服务]\n  S --> R[(Redis Cluster)]\n  S --> D[(MySQL)]"
+  },
+  "hidden_world": {
+    "root_cause": {
+      "id": "RC_CACHE_KEY_TENANT",
+      "category": "config",
+      "component": "商品列表 Redis 缓存键",
+      "description": "缓存键拼接时遗漏 tenant_id，不同租户共享同一个商品列表缓存项，导致缓存命中后返回了其他租户的结果。",
+      "sufficient_evidence_sets": [
+        ["E_CACHE_MISMATCH", "E_KEY_MISSING_TENANT"],
+        ["E_CACHE_RELEASE", "E_KEY_DIFF"]
+      ],
+      "accepted_hypotheses": ["H_CACHE_KEY"],
+      "solution_requirements": [
+        "把 tenant_id 纳入缓存键并清理旧键",
+        "为多租户缓存增加键隔离测试"
+      ]
+    },
+    "hypotheses": [
+      { "hypothesis_id": "H_CACHE_KEY", "label": "缓存键缺少租户维度" },
+      { "hypothesis_id": "H_DB_DATA", "label": "数据库数据被写错" },
+      { "hypothesis_id": "H_TTL", "label": "缓存过期时间过长" },
+      { "hypothesis_id": "H_SERIALIZE", "label": "序列化字段错位" },
+      { "hypothesis_id": "H_NETWORK", "label": "Redis 网络读写异常" },
+      { "hypothesis_id": "H_OTHER", "label": "其他" }
+    ],
+    "evidence_graph": [
+      { "evidence_id": "E_CACHE_MISMATCH", "content": "同一时间不同租户请求命中了相同的 Redis key，但返回的商品租户字段不同。", "category": "data", "prerequisites": [], "obtained_by": ["inspect:data.cache_sample"] },
+      { "evidence_id": "E_KEY_MISSING_TENANT", "content": "实际缓存键只有 product:list:{filter_hash}，没有包含 tenant_id。", "category": "config", "prerequisites": [], "obtained_by": ["inspect:config.cache_key"] },
+      { "evidence_id": "E_CACHE_RELEASE", "content": "缓存版本发布发生在串数据首次告警之前，发布内容包含 CacheClient 重构。", "category": "change", "prerequisites": [], "obtained_by": ["inspect:change.cache_release"] },
+      { "evidence_id": "E_KEY_DIFF", "content": "新旧版本键模板对比显示，新版本删除了 tenant_id 片段。", "category": "change", "prerequisites": ["E_CACHE_RELEASE"], "obtained_by": ["inspect:change.key_diff"] },
+      { "evidence_id": "E_DB_NORMAL", "content": "绕过缓存直接查询 MySQL，租户过滤条件正确，数据库返回结果没有串租户。", "category": "data", "prerequisites": [], "obtained_by": ["inspect:data.database_direct"] },
+      { "evidence_id": "E_REDIS_NORMAL", "content": "Redis 连接成功率、延迟和集群健康度正常，没有读写错误峰值。", "category": "metrics", "prerequisites": [], "obtained_by": ["inspect:metrics.redis"] }
+    ],
+    "observations": [
+      { "action": "inspect:data.cache_sample", "result": "两个租户的请求命中了同一个 key，缓存内容的 tenant_id 与其中一个请求不一致。", "is_negative": false, "yields_evidence": ["E_CACHE_MISMATCH"], "rules_out": [], "unmet_prerequisite_result": "先选择一个具体租户和商品筛选条件。" },
+      { "action": "inspect:config.cache_key", "result": "当前商品列表 key 只有筛选条件哈希，没有 tenant_id。", "is_negative": false, "yields_evidence": ["E_KEY_MISSING_TENANT"], "rules_out": [], "unmet_prerequisite_result": "请先指定商品列表对应的 CacheClient 方法。" },
+      { "action": "inspect:change.cache_release", "result": "CacheClient 重构版本在首次告警前发布。", "is_negative": false, "yields_evidence": ["E_CACHE_RELEASE"], "rules_out": [], "unmet_prerequisite_result": "你要核对哪一次缓存组件发布？" },
+      { "action": "inspect:change.key_diff", "result": "新版本缓存键模板删除了 tenant_id 片段。", "is_negative": false, "yields_evidence": ["E_KEY_DIFF"], "rules_out": [], "unmet_prerequisite_result": "要比较哪两个版本的键模板？" },
+      { "action": "inspect:data.database_direct", "result": "直查数据库时租户过滤正确，结果没有串租户。", "is_negative": true, "yields_evidence": ["E_DB_NORMAL"], "rules_out": ["H_DB_DATA"], "unmet_prerequisite_result": "" },
+      { "action": "inspect:metrics.redis", "result": "Redis 健康、延迟和错误率正常。", "is_negative": true, "yields_evidence": ["E_REDIS_NORMAL"], "rules_out": ["H_NETWORK"], "unmet_prerequisite_result": "" },
+      { "action": "inspect:config.ttl", "result": "TTL 较长会延长错误结果的存活时间，但不能解释不同租户命中同一个 key。", "is_negative": true, "yields_evidence": [], "rules_out": ["H_TTL"], "unmet_prerequisite_result": "" },
+      { "action": "inspect:config.serialization", "result": "序列化字段顺序和租户字段解析正常，问题出现在缓存命中前的键隔离。", "is_negative": true, "yields_evidence": [], "rules_out": ["H_SERIALIZE"], "unmet_prerequisite_result": "" }
+    ],
+    "solution_rubric": {
+      "required_actions": ["把 tenant_id 纳入缓存键并清理旧键"],
+      "verification_steps": ["用两个租户相同筛选条件验证 key 不同", "确认缓存命中结果租户一致", "观察串数据告警归零"],
+      "rollback_notes": ["发布键模板修复前先禁用商品列表缓存", "旧键需要按版本前缀批量清理"]
+    },
+    "misconception_rules": [
+      { "misconception_id": "M_BLAME_DATABASE", "pattern_hypotheses": ["H_DB_DATA"], "why_wrong": "直查数据库时租户过滤正确，串数据发生在缓存命中之后。" },
+      { "misconception_id": "M_BLAME_TTL", "pattern_hypotheses": ["H_TTL"], "why_wrong": "TTL 只能决定错误缓存保留多久，不能造成不同租户共用 key。" },
+      { "misconception_id": "M_BLAME_SERIALIZE", "pattern_hypotheses": ["H_SERIALIZE"], "why_wrong": "序列化字段解析正常，实际证据指向键模板缺少 tenant_id。" }
+    ]
+  }
+}
