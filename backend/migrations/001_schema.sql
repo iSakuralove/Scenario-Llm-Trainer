@@ -318,6 +318,8 @@ CREATE TABLE IF NOT EXISTS ai_jobs (
     progress INT DEFAULT 0,
     error_message TEXT,
     provider VARCHAR(50),
+    model VARCHAR(100),
+    validation_errors JSONB DEFAULT '[]',
     validated BOOLEAN DEFAULT FALSE,
     fallback_used BOOLEAN DEFAULT FALSE,
     result_question_id TEXT,

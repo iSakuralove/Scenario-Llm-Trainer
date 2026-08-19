@@ -287,6 +287,7 @@ CREATE TABLE IF NOT EXISTS ai_jobs (
     error_message TEXT,
     provider VARCHAR(50),
     model VARCHAR(100),
+    validation_errors JSONB DEFAULT '[]',
     validated BOOLEAN DEFAULT FALSE,
     fallback_used BOOLEAN DEFAULT FALSE,
     result_question_id TEXT,
@@ -411,6 +412,7 @@ ALTER TABLE IF EXISTS ai_config ADD COLUMN IF NOT EXISTS top_p DOUBLE PRECISION 
 ALTER TABLE IF EXISTS ai_config ADD COLUMN IF NOT EXISTS top_k INT DEFAULT 0;
 ALTER TABLE IF EXISTS ai_config ADD COLUMN IF NOT EXISTS max_tokens INT DEFAULT 0;
 ALTER TABLE IF EXISTS ai_jobs ADD COLUMN IF NOT EXISTS model VARCHAR(100);
+ALTER TABLE IF EXISTS ai_jobs ADD COLUMN IF NOT EXISTS validation_errors JSONB DEFAULT '[]';
 
 DO $$
 BEGIN
@@ -431,6 +433,7 @@ CREATE TABLE IF NOT EXISTS ai_jobs (
     error_message TEXT,
     provider VARCHAR(50),
     model VARCHAR(100),
+    validation_errors JSONB DEFAULT '[]',
     validated BOOLEAN DEFAULT FALSE,
     fallback_used BOOLEAN DEFAULT FALSE,
     result_question_id TEXT,

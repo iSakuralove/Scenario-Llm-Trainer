@@ -98,6 +98,15 @@ func TestAIJobsSchemaIncludesModelColumn(t *testing.T) {
 	}
 }
 
+func TestAIJobsSchemaIncludesValidationErrorsColumn(t *testing.T) {
+	if !strings.Contains(SchemaSQL, "validation_errors JSONB DEFAULT '[]'") {
+		t.Fatal("ai_jobs schema must include validation_errors JSONB column")
+	}
+	if !strings.Contains(LegacyCompatibilitySQL, "ALTER TABLE IF EXISTS ai_jobs ADD COLUMN IF NOT EXISTS validation_errors JSONB DEFAULT '[]';") {
+		t.Fatal("legacy migration must backfill ai_jobs validation_errors column")
+	}
+}
+
 func TestDockerInitSchemaIncludesVectorDocuments(t *testing.T) {
 	root := filepath.Join("..", "..", "migrations", "001_schema.sql")
 	content, err := os.ReadFile(root)

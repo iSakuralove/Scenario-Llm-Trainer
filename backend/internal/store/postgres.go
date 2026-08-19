@@ -1459,7 +1459,7 @@ func (s *PostgresStore) CreateAIJob(job domain.AIJob) (domain.AIJob, error) {
 
 func (s *PostgresStore) GetAIJob(id string) (*domain.AIJob, bool) {
 	row := s.pool.QueryRow(context.Background(), `
-		SELECT id, user_id, kind, status, stage, progress, error_message, provider, model,
+		SELECT id, user_id, kind, status, stage, progress, error_message, provider, model, validation_errors,
 		       validated, fallback_used, result_question_id, created_at, started_at,
 		       completed_at, updated_at
 		FROM ai_jobs
@@ -1490,7 +1490,7 @@ func (s *PostgresStore) ListAIJobs(limit int) []domain.AIJob {
 		limit = 500
 	}
 	rows, err := s.pool.Query(context.Background(), `
-		SELECT id, user_id, kind, status, stage, progress, error_message, provider, model,
+		SELECT id, user_id, kind, status, stage, progress, error_message, provider, model, validation_errors,
 		       validated, fallback_used, result_question_id, created_at, started_at,
 		       completed_at, updated_at
 		FROM ai_jobs
@@ -1876,12 +1876,16 @@ func insertInterviewKnowledgeAtomVersion(ctx context.Context, exec sqlExecutor, 
 }
 
 func (s *PostgresStore) upsertAIJob(ctx context.Context, job *domain.AIJob) error {
-	_, err := s.pool.Exec(ctx, `
+	validationErrors, err := marshal(job.ValidationErrors)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `
 		INSERT INTO ai_jobs
-		    (id, user_id, kind, status, stage, progress, error_message, provider, model,
+		    (id, user_id, kind, status, stage, progress, error_message, provider, model, validation_errors,
 		     validated, fallback_used, result_question_id, created_at, started_at,
 		     completed_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
 		ON CONFLICT (id) DO UPDATE SET
 		    status = EXCLUDED.status,
 		    stage = EXCLUDED.stage,
@@ -1889,6 +1893,7 @@ func (s *PostgresStore) upsertAIJob(ctx context.Context, job *domain.AIJob) erro
 		    error_message = EXCLUDED.error_message,
 		    provider = EXCLUDED.provider,
 		    model = EXCLUDED.model,
+		    validation_errors = EXCLUDED.validation_errors,
 		    validated = EXCLUDED.validated,
 		    fallback_used = EXCLUDED.fallback_used,
 		    result_question_id = EXCLUDED.result_question_id,
@@ -1896,7 +1901,7 @@ func (s *PostgresStore) upsertAIJob(ctx context.Context, job *domain.AIJob) erro
 		    completed_at = EXCLUDED.completed_at,
 		    updated_at = EXCLUDED.updated_at
 	`, job.ID, job.UserID, job.Kind, job.Status, job.Stage, job.Progress,
-		emptyToNil(job.ErrorMessage), emptyToNil(job.Provider), emptyToNil(job.Model),
+		emptyToNil(job.ErrorMessage), emptyToNil(job.Provider), emptyToNil(job.Model), validationErrors,
 		job.Validated, job.FallbackUsed, emptyToNil(job.ResultQuestionID), job.CreatedAt,
 		job.StartedAt, job.CompletedAt, job.UpdatedAt)
 	return err
@@ -1906,7 +1911,7 @@ func (s *PostgresStore) seedAdminConfig(ctx context.Context) error {
 	now := time.Now()
 	scenarioGeneratePrompt := ai.DefaultPromptContent("scenario_generate")
 	templates := []domain.PromptTemplate{
-		{Name: "scenario_generate", Task: "情景题生成", Default: scenarioGeneratePrompt, Content: scenarioGeneratePrompt, Validator: "scenario_question", RenderEngine: "go_template", UpdatedAt: now},
+		{Name: "scenario_generate", Task: "情景题生成", Default: scenarioGeneratePrompt, Content: scenarioGeneratePrompt, Validator: "hiddenworld_question", RenderEngine: "go_template", UpdatedAt: now},
 		{Name: "community_structure", Task: "UGC 结构化", Default: "从真实故障案例中提取现象、根因、证据和排查步骤。", Content: "从真实故障案例中提取现象、根因、证据和排查步骤。", Validator: "scenario_content_preview", RenderEngine: "go_template", UpdatedAt: now},
 		{Name: "interview_feedback", Task: "面试评估", Default: "按五个维度生成面试反馈、追问和最终报告。", Content: "按五个维度生成面试反馈、追问和最终报告。", Validator: "interview_feedback", RenderEngine: "go_template", UpdatedAt: now},
 		{Name: "scenario_reply", Task: "排查回复改写", Default: "在不泄露答案的前提下改写渐进式排查回复。", Content: "在不泄露答案的前提下改写渐进式排查回复。", Validator: "scenario_reply", RenderEngine: "go_template", UpdatedAt: now},
@@ -2514,8 +2519,9 @@ func scanAuditEventRows(rows pgx.Rows) (domain.AuditEvent, error) {
 func scanAIJob(row scanner) (*domain.AIJob, bool) {
 	var item domain.AIJob
 	var stage, errorMessage, provider, model, resultQuestionID *string
+	var validationErrors []byte
 	err := row.Scan(&item.ID, &item.UserID, &item.Kind, &item.Status, &stage,
-		&item.Progress, &errorMessage, &provider, &model, &item.Validated, &item.FallbackUsed,
+		&item.Progress, &errorMessage, &provider, &model, &validationErrors, &item.Validated, &item.FallbackUsed,
 		&resultQuestionID, &item.CreatedAt, &item.StartedAt, &item.CompletedAt,
 		&item.UpdatedAt)
 	if err != nil {
@@ -2535,6 +2541,10 @@ func scanAIJob(row scanner) (*domain.AIJob, bool) {
 	}
 	if resultQuestionID != nil {
 		item.ResultQuestionID = *resultQuestionID
+	}
+	_ = unmarshal(validationErrors, &item.ValidationErrors)
+	if item.ValidationErrors == nil {
+		item.ValidationErrors = []string{}
 	}
 	return &item, true
 }

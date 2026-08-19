@@ -1282,7 +1282,7 @@ func (s *MemoryStore) seedAdminConfig() {
 	}
 	scenarioGeneratePrompt := ai.DefaultPromptContent("scenario_generate")
 	defaults := []domain.PromptTemplate{
-		{Name: "scenario_generate", Task: "情景题生成", Default: scenarioGeneratePrompt, Content: scenarioGeneratePrompt, Validator: "scenario_question"},
+		{Name: "scenario_generate", Task: "情景题生成", Default: scenarioGeneratePrompt, Content: scenarioGeneratePrompt, Validator: "hiddenworld_question"},
 		{Name: "community_structure", Task: "UGC 结构化", Default: "从真实故障案例中提取现象、根因、证据和排查步骤。", Content: "从真实故障案例中提取现象、根因、证据和排查步骤。", Validator: "scenario_content_preview"},
 		{Name: "interview_feedback", Task: "面试评估", Default: "按五个维度生成面试反馈、追问和最终报告。", Content: "按五个维度生成面试反馈、追问和最终报告。", Validator: "interview_feedback"},
 		{Name: "scenario_reply", Task: "排查回复改写", Default: "在不泄露答案的前提下改写渐进式排查回复。", Content: "在不泄露答案的前提下改写渐进式排查回复。", Validator: "scenario_reply"},
@@ -1673,6 +1673,7 @@ func cloneAIJob(job *domain.AIJob) *domain.AIJob {
 		return nil
 	}
 	copy := *job
+	copy.ValidationErrors = append([]string{}, job.ValidationErrors...)
 	return &copy
 }
 
@@ -1720,13 +1721,39 @@ func cloneScenarioLearnerState(state domain.ScenarioLearnerState) domain.Scenari
 }
 
 func cloneScenarioAgentTurnRecord(record domain.ScenarioAgentTurnRecord) domain.ScenarioAgentTurnRecord {
-	record.Message.ResponseMeta.PublicTrace = append([]byte(nil), record.Message.ResponseMeta.PublicTrace...)
+	record.Message.ResponseMeta.RunEvents = cloneScenarioRunEvents(record.Message.ResponseMeta.RunEvents)
 	record.SessionSnapshot = *cloneScenarioSession(&record.SessionSnapshot)
 	record.PublicTrace = append([]byte(nil), record.PublicTrace...)
 	record.InternalVerification = append([]byte(nil), record.InternalVerification...)
 	record.InternalAudit = append([]byte(nil), record.InternalAudit...)
 	record.ApprovalAudit = append([]byte(nil), record.ApprovalAudit...)
 	return record
+}
+
+func cloneScenarioRunEvents(events []domain.ScenarioRunEvent) []domain.ScenarioRunEvent {
+	cloned := make([]domain.ScenarioRunEvent, 0, len(events))
+	for _, event := range events {
+		copy := event
+		if event.Reasoning != nil {
+			reasoning := *event.Reasoning
+			copy.Reasoning = &reasoning
+		}
+		if event.Tool != nil {
+			tool := *event.Tool
+			tool.RedactedArguments = map[string]string{}
+			for key, value := range event.Tool.RedactedArguments {
+				tool.RedactedArguments[key] = value
+			}
+			if event.Tool.Result != nil {
+				result := *event.Tool.Result
+				result.UserPoints = append([]string{}, event.Tool.Result.UserPoints...)
+				tool.Result = &result
+			}
+			copy.Tool = &tool
+		}
+		cloned = append(cloned, copy)
+	}
+	return cloned
 }
 
 func cloneInterviewSession(session *domain.InterviewSession) *domain.InterviewSession {
