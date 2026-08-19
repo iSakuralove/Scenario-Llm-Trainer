@@ -504,7 +504,7 @@ func TestValidateScenarioPublicTraceAcceptsBoundCompareAnswerLifecycle(t *testin
 			{Sequence: 4, Kind: "guard_passed", Status: "completed", Summary: "回复已通过安全校验。"},
 		},
 	}
-	if err := validateScenarioPublicTrace(requestID, userContent, result, question.Content.HiddenWorld, domain.ScenarioLearnerState{}); err != nil {
+	if err := validateScenarioPublicTrace(requestID, userContent, result, question.Content.HiddenWorld, question.Content.PublicScenario, domain.ScenarioLearnerState{}); err != nil {
 		t.Fatalf("valid compare_answer lifecycle was rejected: %v", err)
 	}
 }

@@ -426,6 +426,7 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 			input.RequestID,
 			input.Content,
 			question.Content.HiddenWorld,
+			question.Content.PublicScenario,
 			session.LearnerState.Normalized(),
 		)
 		result, err = streamingClient.TurnStream(agentContext, agentRequest, agentclient.StreamCallbacks{
@@ -460,14 +461,14 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 			Message: "排查导师返回了未通过业务校验的状态提议",
 		}
 	}
-	if err := validateScenarioReply(result.Reply, question.Content.HiddenWorld, nextState); err != nil {
+	if err := validateScenarioReply(result.Reply, question.Content.HiddenWorld, question.Content.PublicScenario, nextState); err != nil {
 		return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
 			Status:  http.StatusBadGateway,
 			Code:    "reply_guard_rejected",
 			Message: "排查导师回复未通过安全校验",
 		}
 	}
-	if err := validateScenarioPublicTrace(input.RequestID, input.Content, result, question.Content.HiddenWorld, nextState); err != nil {
+	if err := validateScenarioPublicTrace(input.RequestID, input.Content, result, question.Content.HiddenWorld, question.Content.PublicScenario, nextState); err != nil {
 		return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
 			Status:  http.StatusBadGateway,
 			Code:    "public_trace_rejected",

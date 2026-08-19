@@ -22,6 +22,7 @@ const interpreterLowConfidenceThreshold = 0.45
 var (
 	scenarioIdentifierPattern       = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_.:/-]{2,}`)
 	scenarioNumberPattern           = regexp.MustCompile(`\d+(?:[.,]\d+)*`)
+	scenarioNumberEntityPattern     = regexp.MustCompile(`^\d+(?:[.,]\d+)*$`)
 	scenarioChineseComponentPattern = regexp.MustCompile(`(?:[A-Za-z_][A-Za-z0-9_]{1,15}|[\p{Han}]{1,8})(?:表|服务|接口|主库|从库|索引|字段)`)
 	scenarioHanPattern              = regexp.MustCompile(`\p{Han}`)
 	scenarioWhitespacePattern       = regexp.MustCompile(`\s+`)
@@ -306,7 +307,12 @@ func approveScenarioProposals(
 	return state.Normalized(), approvals, nil
 }
 
-func validateScenarioReply(reply string, world *domain.HiddenWorld, state domain.ScenarioLearnerState) error {
+func validateScenarioReply(
+	reply string,
+	world *domain.HiddenWorld,
+	publicScenario *domain.PublicScenario,
+	state domain.ScenarioLearnerState,
+) error {
 	if world == nil {
 		return errors.New("hidden world is unavailable")
 	}
@@ -321,7 +327,16 @@ func validateScenarioReply(reply string, world *domain.HiddenWorld, state domain
 	for _, source := range sources {
 		entities = append(entities, extractScenarioSensitiveTokens(source)...)
 	}
+	publicEntities := map[string]bool{}
+	for _, source := range scenarioPublicScenarioSources(publicScenario) {
+		for _, entity := range extractScenarioSensitiveTokens(source) {
+			publicEntities[scenarioEntityKey(entity)] = true
+		}
+	}
 	for entity := range stringSet(entities) {
+		if publicEntities[scenarioEntityKey(entity)] {
+			continue
+		}
 		if scenarioReplyContainsEntity(reply, entity) {
 			return errors.New("reply contains unreleased entity")
 		}
@@ -334,6 +349,7 @@ func validateScenarioPublicTrace(
 	userContent string,
 	result agentclient.TurnResult,
 	world *domain.HiddenWorld,
+	publicScenario *domain.PublicScenario,
 	state domain.ScenarioLearnerState,
 ) error {
 	if len(result.PublicTrace) > 64 {
@@ -392,7 +408,7 @@ func validateScenarioPublicTrace(
 			return errors.New("Python public trace cannot publish reply text")
 		}
 		if trace.Summary != "" {
-			if err := validateScenarioReply(trace.Summary, world, state); err != nil {
+			if err := validateScenarioReply(trace.Summary, world, publicScenario, state); err != nil {
 				return fmt.Errorf("public trace summary rejected: %w", err)
 			}
 		}
@@ -400,7 +416,7 @@ func validateScenarioPublicTrace(
 			if !allowedReasoningStages[trace.Reasoning.Stage] || strings.TrimSpace(trace.Reasoning.Text) == "" {
 				return errors.New("public reasoning summary is invalid")
 			}
-			if err := validateScenarioReply(trace.Reasoning.Text, world, state); err != nil {
+			if err := validateScenarioReply(trace.Reasoning.Text, world, publicScenario, state); err != nil {
 				return fmt.Errorf("public reasoning summary rejected: %w", err)
 			}
 		}
@@ -445,7 +461,7 @@ func validateScenarioPublicTrace(
 				if tool.Result.Tool != "compare_answer" || tool.Result.Status != "completed" || !allowedSupportStatuses[tool.Result.SupportStatus] {
 					return errors.New("public compare_answer result is invalid")
 				}
-				if err := validateScenarioReply(tool.Result.NextAction, world, state); err != nil {
+				if err := validateScenarioReply(tool.Result.NextAction, world, publicScenario, state); err != nil {
 					return fmt.Errorf("public compare_answer next action rejected: %w", err)
 				}
 				for _, point := range tool.Result.UserPoints {
@@ -480,6 +496,7 @@ type scenarioPublicTraceStream struct {
 	requestID       string
 	userContent     string
 	world           *domain.HiddenWorld
+	publicScenario  *domain.PublicScenario
 	state           domain.ScenarioLearnerState
 	analysis        *agentclient.TurnAnalysis
 	lastSequence    int
@@ -494,13 +511,15 @@ func newScenarioPublicTraceStream(
 	requestID string,
 	userContent string,
 	world *domain.HiddenWorld,
+	publicScenario *domain.PublicScenario,
 	state domain.ScenarioLearnerState,
 ) *scenarioPublicTraceStream {
 	return &scenarioPublicTraceStream{
-		requestID:   requestID,
-		userContent: userContent,
-		world:       world,
-		state:       state,
+		requestID:      requestID,
+		userContent:    userContent,
+		world:          world,
+		publicScenario: publicScenario,
+		state:          state,
 	}
 }
 
@@ -551,7 +570,7 @@ func (stream *scenarioPublicTraceStream) validate(trace agentclient.PublicTraceE
 		return errors.New("Python public trace cannot publish reply text")
 	}
 	if trace.Summary != "" {
-		if err := validateScenarioReply(trace.Summary, stream.world, stream.state); err != nil {
+		if err := validateScenarioReply(trace.Summary, stream.world, stream.publicScenario, stream.state); err != nil {
 			return fmt.Errorf("public trace summary rejected: %w", err)
 		}
 	}
@@ -559,7 +578,7 @@ func (stream *scenarioPublicTraceStream) validate(trace agentclient.PublicTraceE
 		if !scenarioReasoningStageAllowed(trace.Reasoning.Stage) || strings.TrimSpace(trace.Reasoning.Text) == "" {
 			return errors.New("public reasoning summary is invalid")
 		}
-		if err := validateScenarioReply(trace.Reasoning.Text, stream.world, stream.state); err != nil {
+		if err := validateScenarioReply(trace.Reasoning.Text, stream.world, stream.publicScenario, stream.state); err != nil {
 			return fmt.Errorf("public reasoning summary rejected: %w", err)
 		}
 	}
@@ -613,7 +632,7 @@ func (stream *scenarioPublicTraceStream) validateTool(trace agentclient.PublicTr
 		stream.toolStage = 3
 	}
 	if tool.Result != nil {
-		if err := validateScenarioPublicComparison(tool.Result, stream.userContent, stream.world, stream.state); err != nil {
+		if err := validateScenarioPublicComparison(tool.Result, stream.userContent, stream.world, stream.publicScenario, stream.state); err != nil {
 			return err
 		}
 	}
@@ -624,6 +643,7 @@ func validateScenarioPublicComparison(
 	comparison *agentclient.PublicAnswerComparison,
 	userContent string,
 	world *domain.HiddenWorld,
+	publicScenario *domain.PublicScenario,
 	state domain.ScenarioLearnerState,
 ) error {
 	allowed := map[string]bool{
@@ -635,7 +655,7 @@ func validateScenarioPublicComparison(
 	if comparison.Tool != "compare_answer" || comparison.Status != "completed" || !allowed[comparison.SupportStatus] {
 		return errors.New("public compare_answer result is invalid")
 	}
-	if err := validateScenarioReply(comparison.NextAction, world, state); err != nil {
+	if err := validateScenarioReply(comparison.NextAction, world, publicScenario, state); err != nil {
 		return fmt.Errorf("public compare_answer next action rejected: %w", err)
 	}
 	normalizedUserContent := strings.ToLower(norm.NFKC.String(userContent))
@@ -669,18 +689,42 @@ func extractScenarioSensitiveTokens(text string) []string {
 }
 
 func scenarioReplyContainsEntity(text, entity string) bool {
-	entity = strings.ToLower(strings.TrimSpace(norm.NFKC.String(entity)))
+	entity = scenarioEntityKey(entity)
 	if entity == "" {
 		return false
 	}
 	text = strings.ToLower(norm.NFKC.String(text))
+	if scenarioNumberEntityPattern.MatchString(entity) {
+		pattern := regexp.MustCompile(`(?i)(^|[^0-9])` + regexp.QuoteMeta(entity) + `([^0-9]|$)`)
+		return pattern.MatchString(text)
+	}
 	if scenarioHanPattern.MatchString(entity) {
-		entity = scenarioWhitespacePattern.ReplaceAllString(entity, "")
 		text = scenarioWhitespacePattern.ReplaceAllString(text, "")
 		return strings.Contains(text, entity)
 	}
 	pattern := regexp.MustCompile(`(?i)(^|[^A-Za-z0-9_])` + regexp.QuoteMeta(entity) + `([^A-Za-z0-9_]|$)`)
 	return pattern.MatchString(text)
+}
+
+func scenarioEntityKey(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(norm.NFKC.String(value)))
+	if scenarioHanPattern.MatchString(normalized) {
+		return scenarioWhitespacePattern.ReplaceAllString(normalized, "")
+	}
+	return normalized
+}
+
+func scenarioPublicScenarioSources(publicScenario *domain.PublicScenario) []string {
+	if publicScenario == nil {
+		return nil
+	}
+	sources := []string{
+		publicScenario.Title,
+		publicScenario.Description,
+		publicScenario.Environment,
+		publicScenario.ArchitectureDiagram,
+	}
+	return append(sources, publicScenario.InitialSymptoms...)
 }
 
 func learnerStateForAgent(state domain.ScenarioLearnerState) agentclient.LearnerState {
