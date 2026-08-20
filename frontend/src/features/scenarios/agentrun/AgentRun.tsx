@@ -1,6 +1,5 @@
-import { Check, ChevronDown, CircleDashed, Wrench, XCircle } from 'lucide-react'
+import { Bot, ChevronDown, UserRound, Wrench, XCircle } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import type { CSSProperties } from 'react'
 import type { ScenarioRunEvent, ScenarioToolEventPayload } from '../../../types/agentRun'
 import { StreamingText } from './StreamingText'
 import { ThinkingReasoning } from './ThinkingReasoning'
@@ -27,62 +26,61 @@ export function AgentRun({ events, fallbackUser = '', fallbackReply = '', active
   const understanding = understandingSummary(ordered)
   const reasoning = uniqueReasoning(ordered)
   const tools = aggregateTools(ordered)
-  const statusEvents = ordered.filter((event) => ['response_summary', 'mentor_buffered', 'guard_passed', 'proposal_approved'].includes(event.kind))
   const failure = ordered.find((event) => event.kind === 'turn_failed')
   const complete = ordered.some((event) => event.kind === 'turn_completed')
   const isProcessing = active && !complete && !failure
-  const visibleReply = replyChunks.length > 0 ? replyChunks : (fallbackReply ? [fallbackReply] : [])
+  // 本轮失败时不渲染任何正文。turn_failed 意味着回复没通过安全校验或状态审批，
+  // 此前流出的分片属于未获批内容，必须从屏幕上撤回而不是留在失败提示上方。
+  const visibleReply = failure
+    ? []
+    : (replyChunks.length > 0 ? replyChunks : (fallbackReply ? [fallbackReply] : []))
 
   return (
-    <article className={styles.run} data-testid="scenario-agent-run">
-      <div className={styles.userLine}>
-        <span className={styles.lineLabel}>你</span>
-        <p>{userText}</p>
-      </div>
+    <div className={styles.run} data-testid="scenario-agent-run">
+      <article className={`${styles.message} ${styles.userMessage}`}>
+        <span className={styles.avatar} role="img" aria-label="你">
+          <UserRound size={17} aria-hidden="true" />
+        </span>
+        <div className={styles.userBubble}>
+          <p>{userText}</p>
+        </div>
+      </article>
 
-      <div className={styles.agentFlow}>
-        {isProcessing && !understanding && <ThinkingState label={thinkingLabel(ordered)} />}
+      <article className={`${styles.message} ${styles.agentMessage}`}>
+        <span className={styles.avatar} role="img" aria-label="排查导师">
+          <Bot size={17} aria-hidden="true" />
+        </span>
 
-        {understanding && (
-          <div className={styles.reasoningLine} aria-live="polite" data-testid="agent-run-understanding">
-            <StreamingText chunks={understanding.chunks} active={isProcessing && !understanding.settled} />
-          </div>
-        )}
+        <div className={styles.agentFlow}>
+          {isProcessing && !understanding && <ThinkingState label={thinkingLabel(ordered)} />}
 
-        <ThinkingReasoning items={reasoning} />
+          {understanding && (
+            <div className={styles.reasoningLine} aria-live="polite" data-testid="agent-run-understanding">
+              <StreamingText chunks={understanding.chunks} active={isProcessing && !understanding.settled} />
+            </div>
+          )}
 
-        {tools.map((tool, index) => (
-          <ToolDisclosure key={`${tool.name}-${index}`} tool={tool} />
-        ))}
+          <ThinkingReasoning items={reasoning} />
 
-        {statusEvents.map((event, index) => (
-          <div
-            className={styles.statusLine}
-            key={`${event.sequence}-${event.kind}`}
-            style={{ '--event-order': Math.min(index, 8) } as CSSProperties}
-          >
-            {event.kind === 'proposal_approved' || event.kind === 'guard_passed'
-              ? <Check size={14} aria-hidden="true" />
-              : <CircleDashed size={14} aria-hidden="true" />}
-            <span>{publicStatusLabel(event)}</span>
-          </div>
-        ))}
+          {tools.map((tool, index) => (
+            <ToolDisclosure key={`${tool.name}-${index}`} tool={tool} />
+          ))}
 
-        {visibleReply.length > 0 && (
-          <div className={styles.replyLine} aria-live="polite" data-testid="agent-run-reply">
-            <span className={styles.lineLabel}>导师</span>
-            <p><StreamingText chunks={visibleReply} active={isProcessing && replyChunks.length > 0} /></p>
-          </div>
-        )}
+          {visibleReply.length > 0 && (
+            <div className={styles.replyLine} aria-live="polite" data-testid="agent-run-reply">
+              <p><StreamingText chunks={visibleReply} active={isProcessing && replyChunks.length > 0} /></p>
+            </div>
+          )}
 
-        {failure && (
-          <div className={styles.failureLine} role="alert">
-            <XCircle size={15} aria-hidden="true" />
-            <span>{failure.summary || '本轮处理失败，请重试。'}</span>
-          </div>
-        )}
-      </div>
-    </article>
+          {failure && (
+            <div className={styles.failureLine} role="alert">
+              <XCircle size={15} aria-hidden="true" />
+              <span>{failure.summary || '本轮处理失败，请重试。'}</span>
+            </div>
+          )}
+        </div>
+      </article>
+    </div>
   )
 }
 
@@ -223,20 +221,12 @@ function thinkingLabel(events: ScenarioRunEvent[]) {
   return '正在理解本轮排查意图'
 }
 
-function publicStatusLabel(event: ScenarioRunEvent) {
-  switch (event.kind) {
-    case 'response_summary':
-      return '正在整理公开观察'
-    case 'mentor_buffered':
-      return '导师回复已整理'
-    case 'guard_passed':
-      return '回复已通过安全校验'
-    case 'proposal_approved':
-      return '本轮状态已确认'
-    default:
-      return event.summary || '正在处理'
-  }
-}
+// response_summary / mentor_buffered / guard_passed / proposal_approved 刻意不渲染：
+// 那是内部机器在向学生汇报自己的工作，零信息量，还暴露了安全机制的存在。
+//
+// 但这些事件**不能从协议里删**——scenario_agent.go 强制要求每轮恰好一条
+// guard_passed，Python 少发一条整轮会以 public_trace_rejected 失败。
+// 「不展示」和「不发送」是两件事。
 
 function supportStatusLabel(status: string) {
   switch (status) {

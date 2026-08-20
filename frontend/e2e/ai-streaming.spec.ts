@@ -70,7 +70,11 @@ test('student sees safe Codex-style run events during scenario troubleshooting',
   await page.getByRole('button', { name: '发送' }).click()
 
   await expect(page.getByTestId('scenario-agent-run')).toContainText('异常开始时间与一次配置发布高度重合')
-  await expect(page.getByText('回复已通过安全校验')).toBeVisible()
+  // 内部机器汇报自己的工作对学生零信息量，还暴露了安全机制的存在——事件仍在
+  // SSE 中下发（后端强制每轮一条 guard_passed），但不渲染。
+  for (const machineChatter of ['回复已通过安全校验', '导师回复已整理', '本轮状态已确认', '正在整理公开观察']) {
+    await expect(page.locator('.message-thread')).not.toContainText(machineChatter)
+  }
   // 本轮理解摘要不再折叠：它是学生判断"Agent 到底听懂没有"的唯一依据，
   // 而且现在来自模型真实产出的 public_summary，不是每轮一样的固定文案。
   await expect(page.getByTestId('agent-run-understanding')).toContainText('已识别你希望核对日志与发布时间。')
@@ -227,7 +231,6 @@ test('stream reconnect reuses request_id and resumes after the latest sequence w
   const run = page.getByTestId('scenario-agent-run')
   // 重连去重：同一条摘要不能因为重放而渲染两次。
   await expect(run.getByText('已识别本轮公开排查方向。')).toHaveCount(1)
-  await expect(run.getByText('正在整理公开观察')).toHaveCount(1)
 })
 
 test('failed turn keeps the public error event and never renders a mentor reply', async ({ page }) => {
@@ -260,6 +263,39 @@ test('failed turn keeps the public error event and never renders a mentor reply'
   const run = page.getByTestId('scenario-agent-run')
   await expect(run.getByTestId('agent-run-reply')).toHaveCount(0)
   await expect(run).not.toContainText('UNSAFE_HALF_REPLY')
+})
+
+test('failed turn retracts reply text that already streamed to the screen', async ({ page }) => {
+  // 上一个用例的 mock 流里没有 reply_delta，盖不到"正文已经流出、随后整轮失败"
+  // 这个真实分支——那正是泄露发生的场景：分片已经上屏，收不回来。
+  const sessionId = 'e2e-failed-after-delta-session'
+  await setupScenarioEntry(page, sessionId)
+  await page.route(`**/api/v1/scenarios/sessions/${sessionId}/messages`, async (route) => {
+    await fulfillSSE(route, [
+      ['run_event', { request_id: 'run-late-fail', sequence: 1, kind: 'user_message', status: 'completed', text: '测试迟到失败' }],
+      ['run_event', {
+        request_id: 'run-late-fail', sequence: 2, kind: 'reasoning_summary_completed', status: 'completed',
+        reasoning: { stage: 'understanding_message', text: '已接收本轮公开输入。' },
+      }],
+      ['run_event', { request_id: 'run-late-fail', sequence: 10001, kind: 'reply_delta', status: 'running', text: '真正根因是 ' }],
+      ['run_event', { request_id: 'run-late-fail', sequence: 10002, kind: 'reply_delta', status: 'running', text: 'LEAKED_SECRET_VALUE' }],
+      ['run_event', {
+        request_id: 'run-late-fail', sequence: 10003, kind: 'turn_failed', status: 'failed',
+        summary: '安全校验未通过，本轮未发布导师正文。', error_code: 'reply_guard_rejected',
+      }],
+    ])
+  })
+
+  await loginAs(page, 'student')
+  await page.goto('/scenarios')
+  await page.getByRole('button', { name: '开始排查' }).click()
+  await page.getByPlaceholder('输入你的排查提问...').fill('测试迟到失败')
+  await page.getByRole('button', { name: '发送' }).click()
+
+  await expect(page.getByText('安全校验未通过，本轮未发布导师正文。').first()).toBeVisible()
+  const run = page.getByTestId('scenario-agent-run')
+  await expect(run.getByTestId('agent-run-reply')).toHaveCount(0)
+  await expect(page.locator('.message-thread')).not.toContainText('LEAKED_SECRET_VALUE')
 })
 
 test('student can review interview history questions and reports from launchpad', async ({ page }) => {

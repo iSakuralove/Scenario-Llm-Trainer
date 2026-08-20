@@ -64,6 +64,10 @@ Questions to answer:
 - 消息节点使用稳定 id：`round-{n}-question`、`round-{n}-answer`、`round-{n}-followup`，供右侧导航和 URL hash 复用。
 - 默认回答区保持轻量文本输入；Markdown、代码块和 Mermaid 工具栏应按需展开，避免首屏被编辑器占满。
 - AI 与用户消息同时使用头像、左右位置和文字标签区分，不能只依赖颜色。
+- 文字标签可以省略成头像上的 `aria-label`，但**不能连 `aria-label` 一起省**。排查工坊
+  (`features/scenarios/agentrun/AgentRun.tsx`) 删掉了可见的「你 / 导师」标签，代价是头像必须
+  带 `role="img"` + `aria-label`，图标本身 `aria-hidden`。约定的实质是"不只依赖颜色"，
+  头像形状 + 左右位置 + 无障碍标签三者共同满足；纯靠配色区分角色仍然不允许。
 - 390px 下锚点导航必须折叠，不得产生页面级横向滚动。
 
 ### Interview history actions

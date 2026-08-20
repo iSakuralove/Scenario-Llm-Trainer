@@ -195,6 +195,9 @@ class MentorAction(BaseModel):
 > **Warning**：`mentor_buffered` / `guard_passed` / `proposal_approved` 即使前端不再渲染，
 > 也**不能从协议中删除**——Go 强制要求每轮恰好一条 `guard_passed`。
 > 「不展示」和「不发送」是两件事。
+>
+> 前端已于任务 `08-20-scenario-chat-layout` 停止渲染这四类状态行
+> （`AgentRun.tsx` 不再有 `publicStatusLabel`），后端契约保持不变。
 
 ### 4. Tests Required
 - `agent/tests/test_runtime.py::test_runtime_streams_analysis_and_public_trace_before_returning_result`：
