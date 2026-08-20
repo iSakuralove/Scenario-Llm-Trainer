@@ -225,6 +225,31 @@ class MentorAction(BaseModel):
 
 ---
 
+## Common Mistake: 给 Python 契约加字段忘了同步 Go 结构体
+
+**Symptom**：推理摘要正常显示、导师正文正常流完，紧接着整轮报「排查导师返回了无效结果」。
+Python 容器日志显示 `POST /turn/stream 200 OK`——它成功了。
+
+**Cause**：`agentclient/client.go:287` 对最终 `result` 事件用 `DisallowUnknownFields()`。
+Python 侧给 `TurnAnalysis` / `AgentTurnResult` 任何一层加字段而 Go 结构体没声明，
+严格解码就报未知字段，`TurnStream` 返错，`classifyScenarioAgentError` 落到兜底分支
+`agent_invalid_response`。
+
+失败为什么发生在最后：流式事件（`turn_analysis` / `public_trace` / `reply_delta`）走的是
+宽松的 `json.Unmarshal`，只有终值走严格解码。所以过程全部正常，终点突然失败。
+
+**为什么单侧测试抓不到**：Go 测试自己构造 `TurnResult`，Python 测试不碰 Go。
+两边单测都是绿的。
+
+**Fix / Prevention**：
+- Python 契约增删字段时，同步 `backend/internal/agentclient/types.go`
+- 重新生成 `backend/internal/agentclient/testdata/turn_result_golden.json`
+  （由 agent 侧真实主链产出，不要手写）
+- `TestGoldenPythonPayloadSurvivesStrictDecode` 会拿真实 payload 过一遍严格解码
+- **不要**为了图省事去掉 `DisallowUnknownFields()`——那是"Go 不信任 Python"的一部分
+
+---
+
 ## Common Mistake: 以为改 Python 就够了
 
 **Symptom**：Python 侧测试全绿，实际请求整轮 `proposal_rejected` 或 `public_trace_rejected`。

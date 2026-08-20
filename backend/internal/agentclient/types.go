@@ -53,6 +53,12 @@ type TurnResult struct {
 }
 
 type TurnAnalysis struct {
+	// PublicSummary 是 Python 侧 TurnAnalysis 的第一个字段，驱动
+	// reasoning_summary_delta 流式推理摘要。Go 不消费它，但**必须声明**——
+	// client.go 对最终 result 事件用 DisallowUnknownFields()，漏一个字段
+	// 整轮会以 agent_invalid_response 失败，而且失败发生在正文流完之后，
+	// 表现为"明明响应成功却被判无效"。
+	PublicSummary         string   `json:"public_summary"`
 	Actions               []string `json:"actions"`
 	HypothesisID          string   `json:"hypothesis_id"`
 	HypothesisRaw         string   `json:"hypothesis_raw"`

@@ -1,0 +1,118 @@
+{
+  "contract_version": "hiddenworld.v1",
+  "request_id": "r1",
+  "expected_revision": 3,
+  "reply": "我们先找一个能看的地方。",
+  "turn_analysis": {
+    "public_summary": "你说你完全不知道从哪下手。",
+    "actions": [],
+    "hypothesis_id": "",
+    "hypothesis_raw": "",
+    "made_claim": false,
+    "contains_answer_attempt": false,
+    "answer_attempt_text": "",
+    "established_facts": [],
+    "is_stuck": true,
+    "is_noise": false,
+    "student_affect": "frustrated",
+    "confidence": 0.3
+  },
+  "proposals": [
+    {
+      "kind": "release_evidence_on_stall",
+      "evidence_id": "E_SLOW_SQL",
+      "hypothesis_id": "",
+      "fact": "",
+      "action": "",
+      "focus": "",
+      "value": 0,
+      "text": ""
+    },
+    {
+      "kind": "set_stalled_turns",
+      "evidence_id": "",
+      "hypothesis_id": "",
+      "fact": "",
+      "action": "",
+      "focus": "",
+      "value": 3,
+      "text": ""
+    },
+    {
+      "kind": "record_opening",
+      "evidence_id": "",
+      "hypothesis_id": "",
+      "fact": "",
+      "action": "",
+      "focus": "",
+      "value": 0,
+      "text": "我们先找一个能看的地方。"
+    }
+  ],
+  "public_trace": [
+    {
+      "sequence": 1,
+      "kind": "reasoning_summary_completed",
+      "status": "completed",
+      "summary": "",
+      "text": "",
+      "reasoning": {
+        "stage": "understanding_message",
+        "text": "你说你完全不知道从哪下手。"
+      },
+      "tool": null,
+      "tool_name": "",
+      "duration_ms": 0
+    },
+    {
+      "sequence": 2,
+      "kind": "response_summary",
+      "status": "running",
+      "summary": "",
+      "text": "",
+      "reasoning": null,
+      "tool": null,
+      "tool_name": "",
+      "duration_ms": 0
+    },
+    {
+      "sequence": 3,
+      "kind": "mentor_buffered",
+      "status": "completed",
+      "summary": "导师回复已完成私有缓冲。",
+      "text": "",
+      "reasoning": null,
+      "tool": null,
+      "tool_name": "",
+      "duration_ms": 0
+    },
+    {
+      "sequence": 4,
+      "kind": "guard_passed",
+      "status": "completed",
+      "summary": "回复已通过安全校验。",
+      "text": "",
+      "reasoning": null,
+      "tool": null,
+      "tool_name": "",
+      "duration_ms": 0
+    }
+  ],
+  "internal_verification": {
+    "relation": "unknown",
+    "coverage": 0.5,
+    "completion_allowed": false,
+    "ruled_out_this_turn": [],
+    "answer_comparison": null
+  },
+  "internal_audit": {
+    "reason_codes": [
+      "interpreter_low_confidence"
+    ],
+    "mentor_rationale": "他连续几轮没方向。",
+    "guard_retries": 0,
+    "interpreter_ms": 72,
+    "mentor_ms": 5,
+    "rules_version": "hiddenworld.v1"
+  }
+}
