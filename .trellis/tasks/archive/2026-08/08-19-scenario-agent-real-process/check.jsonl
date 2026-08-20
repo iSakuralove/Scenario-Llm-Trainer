@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Quality Check 要求运行 go test ./...；本任务改动 scenario_agent.go 提议审批逻辑，须确认 scenario_agent_guard_test.go 与 hiddenworld 相关测试全绿"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端最小改动后需通过 lint 与 tsc 构建，并核对受影响的 e2e 断言"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "验收需逐层核对 Python 契约、Go 校验、前端类型三侧是否一致，特别是 guard_passed 事件必须仍恰好一条"}

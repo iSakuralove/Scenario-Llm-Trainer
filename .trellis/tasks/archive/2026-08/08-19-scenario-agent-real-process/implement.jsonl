@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "本任务横跨 Python 契约 → Go 提议审批/公开事件校验 → 前端类型三层，任一层漏改都会导致整轮 proposal_rejected 或 public_trace_rejected"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "public_summary 流式提取必须复用现有 StreamingFieldExtractor 与 _run_mentor 的 .iter()+node.stream() 写法，不得另造一套"}
+{"file": ".trellis/spec/backend/index.md", "reason": "改动 Go 侧 approveScenarioProposals 新增 release_evidence_on_stall 分支与 agentclient 契约字段，需遵循后端契约规范与 Store 一致性要求"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "范围 E 需在 AgentRun.tsx 做最小防回归改动，累积 reasoning_summary_delta 而非逐碎片渲染"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "AgentRun.tsx 属于 features 内组件，改动需符合组件规范；不得在本任务顺带做布局改造"}
