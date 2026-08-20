@@ -1,9 +1,9 @@
-import { Suspense, lazy, useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { CheckCircle2, ChevronDown, ChevronUp, FileText, Send } from 'lucide-react'
 import { api } from '../../api/client'
-import type { ScenarioQuestion } from '../../types'
+import type { ScenarioMessage, ScenarioQuestion } from '../../types'
 import { EmptyState, Loading } from '../../components/common'
 import { MarkdownComposer } from '../../components/common/MarkdownComposer'
 import { MermaidLoading } from '../../components/common/MermaidLoading'
@@ -11,6 +11,7 @@ import { useToken } from '../../lib/auth'
 import { redactSensitiveText } from '../../lib/redaction'
 import { useScenarioSessionStore } from '../../stores/scenarioSessionStore'
 import { AgentRun } from './agentrun'
+import type { ScenarioRunEvent, ScenarioPublicObservation } from '../../types/agentRun'
 import './ScenarioSessionPage.css'
 
 const MermaidRenderer = lazy(() => import('../../components/common/MermaidRenderer').then((module) => ({ default: module.MermaidRenderer })))
@@ -47,6 +48,8 @@ export function ScenarioSessionPage() {
   const [contextWidth, setContextWidth] = useState(340)
   const [answerHeight, setAnswerHeight] = useState(300)
   const [isAnswerOpen, setAnswerOpen] = useState(false)
+  const clueKeysRef = useRef<string[] | null>(null)
+  const [animatedClueKeys, setAnimatedClueKeys] = useState<string[]>([])
 
   useEffect(() => {
     void hydrateSession(token, id, { question: state?.question ?? null }).catch(() => {})
@@ -54,6 +57,29 @@ export function ScenarioSessionPage() {
       clearScenarioSession()
     }
   }, [clearScenarioSession, hydrateSession, id, state?.question, token])
+
+  // 这些 Hooks 必须在加载态和已加载态都执行，避免 React 在恢复会话后改变
+  // Hooks 数量。线索数据本身不依赖 question，可以安全地在条件渲染前聚合。
+  const clueReleases = useMemo(
+    () => collectClueReleases(messages, completedRuns, activeRun?.events ?? []),
+    [activeRun?.events, completedRuns, messages],
+  )
+  const clueKeySignature = clueReleases.map((item) => item.key).join('|')
+
+  useEffect(() => {
+    if (isLoading) return
+    const keys = clueReleases.map((item) => item.key)
+    if (clueKeysRef.current === null) {
+      clueKeysRef.current = keys
+      setAnimatedClueKeys([])
+      return
+    }
+    const previous = new Set(clueKeysRef.current)
+    setAnimatedClueKeys(keys.filter((key) => !previous.has(key)))
+    clueKeysRef.current = keys
+    const timer = window.setTimeout(() => setAnimatedClueKeys([]), 520)
+    return () => window.clearTimeout(timer)
+  }, [clueKeySignature, isLoading, clueReleases])
 
   if (isLoading && !question) {
     return <Loading title="恢复排查会话" />
@@ -115,7 +141,6 @@ export function ScenarioSessionPage() {
     '--session-context-width': `${contextWidth}px`,
     '--scenario-answer-height': `${answerHeight}px`,
   } as CSSProperties
-
   function resizeContext(event: PointerEvent<HTMLButtonElement>) {
     const startX = event.clientX
     const startWidth = contextWidth
@@ -190,6 +215,7 @@ export function ScenarioSessionPage() {
             <span>状态版本 {activeSession.state_revision}</span>
             <span>已验证观察 {(activeSession.revealed_clue_ids ?? []).length}</span>
           </div>
+          <ClueReleaseTimeline clues={clueReleases} animatedKeys={animatedClueKeys} snapshotText={snapshotText} />
         </div>
       </aside>
       <button
@@ -314,6 +340,72 @@ export function ScenarioSessionPage() {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
+}
+
+type ClueRelease = ScenarioPublicObservation & { key: string }
+
+function collectClueReleases(
+  messages: ScenarioMessage[],
+  completedRuns: Record<string, ScenarioRunEvent[]>,
+  activeEvents: ScenarioRunEvent[],
+): ClueRelease[] {
+  const seen = new Set<string>()
+  const releases: ClueRelease[] = []
+  const runs = messages.flatMap((message) => completedRuns[message.id] ?? message.response_meta.run_events ?? [])
+  for (const event of [...runs, ...activeEvents]) {
+    const observation = event.kind === 'observation_result' ? event.observation : null
+    if (!observation?.action || !observation.result) continue
+    const key = `${observation.action}::${observation.result}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    releases.push({ ...observation, key })
+  }
+  return releases
+}
+
+function ClueReleaseTimeline({
+  clues,
+  animatedKeys,
+  snapshotText,
+}: {
+  clues: ClueRelease[]
+  animatedKeys: string[]
+  snapshotText: (value?: string) => string
+}) {
+  if (clues.length === 0) return null
+  const animated = new Set(animatedKeys)
+  return (
+    <section className="clue-release-panel" aria-label="线索释放">
+      <div className="clue-release-heading">
+        <strong>线索释放</strong>
+        <span>{clues.length} 条可回顾</span>
+      </div>
+      <div className="clue-release-list">
+        {clues.map((clue) => (
+          <article className={`clue-release-card ${animated.has(clue.key) ? 'is-new' : ''}`} key={clue.key}>
+            <div className="clue-release-card-header">
+              <strong>{clueLabel(clue.action)}</strong>
+              {clue.is_negative && <span>排除性观察</span>}
+            </div>
+            <p>{snapshotText(clue.result)}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function clueLabel(action: string) {
+  const labels: Record<string, string> = {
+    'inspect:logs.callback_timeout': '回调访问日志',
+    'inspect:config.route_diff': '网关路由配置',
+    'inspect:database.order_write': '订单库写入日志',
+    'inspect:dependency.vip_route': 'VIP 后端池',
+    'inspect:change.gateway_release': '网关发布记录',
+    'inspect:dependency.dns': 'DNS 解析',
+    'inspect:metrics.service': '回调服务指标',
+  }
+  return labels[action] ?? action.replace(/^inspect:/, '').replace(/[._-]+/g, ' ')
 }
 
 function getDiagramStatusMessage(status?: string) {

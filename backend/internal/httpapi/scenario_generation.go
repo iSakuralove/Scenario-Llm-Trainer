@@ -231,17 +231,20 @@ func (s *Server) generateScenarioWithRetries(ctx context.Context, userID string,
 	var question domain.ScenarioQuestion
 	var meta ai.CallMeta
 	var err error
-	validationErrors := []string{}
 	baseNonce := fmt.Sprintf("%d", time.Now().UnixNano())
+	// 累积全部校验错误回喂：模型逐轮修复时能看到完整约束清单，收敛更快。
+	var validationErrors []string
 	for attempt := 0; attempt < 3; attempt++ {
 		question, meta, err = s.llmRouter().GenerateScenario(ctx, ai.ScenarioGenerationRequest{
-			Domain:       req.Domain,
-			Difficulty:   req.Difficulty,
-			ScenarioType: req.ScenarioType,
-			Tags:         req.Tags,
-			Constraints:  req.toAIConstraints(),
-			UserID:       userID,
-			Nonce:        fmt.Sprintf("%s-%d", baseNonce, attempt),
+			Domain:                 req.Domain,
+			Difficulty:             req.Difficulty,
+			ScenarioType:           req.ScenarioType,
+			Tags:                   req.Tags,
+			Constraints:            req.toAIConstraints(),
+			UserID:                 userID,
+			Nonce:                  fmt.Sprintf("%s-%d", baseNonce, attempt),
+			// 校验失败后把具体错误回喂给模型定向修复，避免盲重试从零随机重猜全部结构约束。
+			PreviousValidationError: strings.Join(validationErrors, "\n"),
 		})
 		if err == nil {
 			return question, meta, validationErrors, nil
@@ -316,14 +319,22 @@ func (s *Server) runScenarioGenerationJob(jobID, userID string, req scenarioGene
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	// 外层预算需覆盖：单 provider 上限 150s（HiddenWorld 生题大 JSON）+ 回退切换到下一个 provider 的重试时间。
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	s.registerAIJobCancel(jobID, cancel)
 	defer s.unregisterAIJobCancel(jobID)
 	defer cancel()
 	if canceled := s.loadCancelableAIJob(jobID); canceled != nil && canceled.Status == domain.AIJobStatusCanceled {
 		return
 	}
-	question, llmMeta, validationErrors, err := s.generateScenarioWithRetries(ctx, userID, req)
+	// provider 回退观察者：DeepSeek 失败切换 GLM 等场景下，实时把当前 provider 写进 job，
+	// 前端轮询即可看到"主模型失败 → 已切换 X 重试"并重新计时。
+	scenarioCtx := ai.WithFallbackObserver(ctx, &scenarioFallbackObserver{server: s, jobID: jobID})
+	question, llmMeta, validationErrors, err := s.generateScenarioWithRetries(scenarioCtx, userID, req)
+	// 观察者在回退瞬间已把轨迹写进 store 里的 job；终态保存前合并回来，避免本地陈旧副本覆盖丢失。
+	if latest, ok := s.store.GetAIJob(jobID); ok && len(latest.FallbackEvents) > 0 {
+		job.FallbackEvents = latest.FallbackEvents
+	}
 	if err != nil {
 		if ctx.Err() == context.Canceled {
 			if canceled := s.loadCancelableAIJob(jobID); canceled != nil && canceled.Status == domain.AIJobStatusCanceled {
@@ -370,6 +381,28 @@ func (s *Server) runScenarioGenerationJob(jobID, userID string, req scenarioGene
 	_, _ = s.store.SaveAIJob(job)
 	s.auditScenarioGenerationCompleted(userID, jobID, created, llmMeta, req)
 }
+// scenarioFallbackObserver 在 provider 切换瞬间更新 AIJob：当前 provider/model、回退轨迹。
+// 回调发生在 Router 回退循环内，只做一次轻量存取，不做网络调用。
+type scenarioFallbackObserver struct {
+	server *Server
+	jobID  string
+}
+
+func (o *scenarioFallbackObserver) OnProviderFallback(event ai.FallbackEvent) {
+	job, ok := o.server.store.GetAIJob(o.jobID)
+	if !ok || job.Status != domain.AIJobStatusRunning {
+		return
+	}
+	job.Provider = event.ToProvider
+	if strings.TrimSpace(event.ToModel) != "" {
+		job.Model = event.ToModel
+	}
+	job.FallbackUsed = true
+	job.AppendFallbackEvent(fmt.Sprintf("%s:%s → %s", event.FromProvider, event.FromErrorType, event.ToProvider))
+	job.UpdatedAt = time.Now()
+	_, _ = o.server.store.SaveAIJob(job)
+}
+
 func (s *Server) cancelAIJob(job *domain.AIJob) (*domain.AIJob, error) {
 	if job == nil {
 		return nil, errors.New("ai job not found")

@@ -288,6 +288,7 @@ CREATE TABLE IF NOT EXISTS ai_jobs (
     provider VARCHAR(50),
     model VARCHAR(100),
     validation_errors JSONB DEFAULT '[]',
+    fallback_events JSONB DEFAULT '[]',
     validated BOOLEAN DEFAULT FALSE,
     fallback_used BOOLEAN DEFAULT FALSE,
     result_question_id TEXT,
@@ -413,6 +414,8 @@ ALTER TABLE IF EXISTS ai_config ADD COLUMN IF NOT EXISTS top_k INT DEFAULT 0;
 ALTER TABLE IF EXISTS ai_config ADD COLUMN IF NOT EXISTS max_tokens INT DEFAULT 0;
 ALTER TABLE IF EXISTS ai_jobs ADD COLUMN IF NOT EXISTS model VARCHAR(100);
 ALTER TABLE IF EXISTS ai_jobs ADD COLUMN IF NOT EXISTS validation_errors JSONB DEFAULT '[]';
+-- provider 回退轨迹（如 "deepseek:auth → glm"），供前端展示切换过程。
+ALTER TABLE IF EXISTS ai_jobs ADD COLUMN IF NOT EXISTS fallback_events JSONB DEFAULT '[]';
 
 DO $$
 BEGIN
@@ -434,6 +437,7 @@ CREATE TABLE IF NOT EXISTS ai_jobs (
     provider VARCHAR(50),
     model VARCHAR(100),
     validation_errors JSONB DEFAULT '[]',
+    fallback_events JSONB DEFAULT '[]',
     validated BOOLEAN DEFAULT FALSE,
     fallback_used BOOLEAN DEFAULT FALSE,
     result_question_id TEXT,

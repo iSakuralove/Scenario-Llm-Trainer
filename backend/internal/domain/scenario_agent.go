@@ -25,6 +25,12 @@ type ScenarioPublicReasoningSummary struct {
 	Text  string `json:"text"`
 }
 
+type ScenarioPublicObservation struct {
+	Action     string `json:"action"`
+	Result     string `json:"result"`
+	IsNegative bool   `json:"is_negative"`
+}
+
 type ScenarioPublicAnswerComparison struct {
 	Tool          string   `json:"tool"`
 	Status        string   `json:"status"`
@@ -41,15 +47,16 @@ type ScenarioToolEventPayload struct {
 }
 
 type ScenarioRunEvent struct {
-	RequestID string                          `json:"request_id"`
-	Sequence  int                             `json:"sequence"`
-	Kind      string                          `json:"kind"`
-	Status    string                          `json:"status"`
-	Text      string                          `json:"text,omitempty"`
-	Summary   string                          `json:"summary,omitempty"`
-	Reasoning *ScenarioPublicReasoningSummary `json:"reasoning,omitempty"`
-	Tool      *ScenarioToolEventPayload       `json:"tool,omitempty"`
-	ErrorCode string                          `json:"error_code,omitempty"`
+	RequestID   string                          `json:"request_id"`
+	Sequence    int                             `json:"sequence"`
+	Kind        string                          `json:"kind"`
+	Status      string                          `json:"status"`
+	Text        string                          `json:"text,omitempty"`
+	Summary     string                          `json:"summary,omitempty"`
+	Reasoning   *ScenarioPublicReasoningSummary `json:"reasoning,omitempty"`
+	Observation *ScenarioPublicObservation      `json:"observation,omitempty"`
+	Tool        *ScenarioToolEventPayload       `json:"tool,omitempty"`
+	ErrorCode   string                          `json:"error_code,omitempty"`
 }
 
 func (state ScenarioLearnerState) Normalized() ScenarioLearnerState {

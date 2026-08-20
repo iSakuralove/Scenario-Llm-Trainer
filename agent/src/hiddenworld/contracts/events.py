@@ -37,6 +37,7 @@ RunEventKind = Literal[
     "user_message",
     "reasoning_summary_delta",
     "reasoning_summary_completed",
+    "observation_result",
     "tool_started",
     "tool_result",
     "tool_completed",
@@ -87,6 +88,16 @@ class PublicReasoningSummary(BaseModel):
     text: str = Field(description="只引用用户原文、已公开事实和公开工具结果")
 
 
+class PublicObservation(BaseModel):
+    """已经通过世界查询并允许展示给学生的观察结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: str
+    result: str
+    is_negative: bool
+
+
 class RunEvent(BaseModel):
     """前端 RunEvent[] 的元素。按 sequence 追加，支持断线重连去重。"""
 
@@ -98,6 +109,7 @@ class RunEvent(BaseModel):
     status: RunEventStatus = "completed"
     text: str = Field(default="", description="user_message / reply_delta 的文本片段")
     reasoning: PublicReasoningSummary | None = None
+    observation: PublicObservation | None = None
     tool: ToolEventPayload | None = None
     error_code: str = Field(
         default="",
@@ -116,6 +128,7 @@ class PublicTraceEvent(BaseModel):
     summary: str = ""
     text: str = ""
     reasoning: PublicReasoningSummary | None = None
+    observation: PublicObservation | None = None
     tool: ToolEventPayload | None = None
     tool_name: str = ""
     duration_ms: int = 0

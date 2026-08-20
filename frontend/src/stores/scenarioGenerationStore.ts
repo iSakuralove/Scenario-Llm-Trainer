@@ -83,6 +83,8 @@ interface ScenarioGenerationState {
   generationStartedAt: number | null
   generationElapsed: number
   generationJob: AIJob | null
+  // provider 回退切换提示：任务运行中 provider 变化时记录（如 deepseek → glm），供页面展示切换过程。
+  lastProviderSwitch: { fromProvider: string; toProvider: string; at: number } | null
   lastGenerated: GenerationSummary | null
   lastGenerationFailure: GenerationFailureSummary | null
   lastGenerationCanceled: boolean
@@ -140,6 +142,7 @@ function emptyFeedbackState() {
     generationStartedAt: null as number | null,
     generationElapsed: 0,
     generationJob: null as AIJob | null,
+    lastProviderSwitch: null as ScenarioGenerationState['lastProviderSwitch'],
     lastGenerated: null as GenerationSummary | null,
     lastGenerationFailure: null as GenerationFailureSummary | null,
     lastGenerationCanceled: false,
@@ -292,6 +295,7 @@ export const useScenarioGenerationStore = create<ScenarioGenerationState>((set, 
       generationStartedAt: startedAt,
       generationElapsed: 0,
       generationJob: null,
+      lastProviderSwitch: null,
       lastGenerated: null,
       lastGenerationFailure: null,
       lastGenerationCanceled: false,
@@ -374,6 +378,7 @@ async function resumeScenarioGenerationJob(
     isGenerating: true,
     generationStartedAt: startedAt,
     generationElapsed: Math.max(1, Math.floor((Date.now() - startedAt) / 1000)),
+    lastProviderSwitch: null,
     lastGenerated: null,
     lastGenerationFailure: null,
     lastGenerationCanceled: false,
@@ -384,6 +389,7 @@ async function resumeScenarioGenerationJob(
   try {
     let jobResult = initialResult ?? await api.aiJob(token, jobId)
     set({ generationJob: jobResult.job })
+    let lastSeenProvider = jobResult.job.provider
 
     while (jobResult.job.status !== 'completed' && jobResult.job.status !== 'failed' && jobResult.job.status !== 'canceled') {
       await sleep(SCENARIO_GENERATION_POLL_MS)
@@ -392,7 +398,18 @@ async function resumeScenarioGenerationJob(
         return
       }
       jobResult = await api.aiJob(token, jobId)
-      set({ generationJob: jobResult.job })
+      const job = jobResult.job
+      // 运行中 provider 变化 = 后端发生了回退切换（如 deepseek 鉴权失败 → glm 接管）。
+      // 记录切换事件并把计时起点重置为切换时刻，向用户呈现"已切换 X 重试，重新计时"。
+      if (lastSeenProvider && job.provider && job.provider !== lastSeenProvider) {
+        set({
+          lastProviderSwitch: { fromProvider: lastSeenProvider, toProvider: job.provider, at: Date.now() },
+          generationStartedAt: Date.now(),
+          generationElapsed: 1,
+        })
+        lastSeenProvider = job.provider
+      }
+      set({ generationJob: job })
     }
 
     if (jobResult.job.status === 'canceled') {

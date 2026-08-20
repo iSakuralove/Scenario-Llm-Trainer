@@ -67,6 +67,7 @@ type Client struct {
 type StreamCallbacks struct {
 	OnTurnAnalysis func(TurnAnalysis) error
 	OnPublicTrace  func(PublicTraceEvent) error
+	OnReplyDelta   func(text string) error
 }
 
 func New(config Config) *Client {
@@ -270,6 +271,18 @@ func (c *Client) TurnStream(ctx context.Context, request TurnRequest, callbacks 
 					return fmt.Errorf("public_trace callback: %w", err)
 				}
 			}
+		case "reply_delta":
+			var payload struct {
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal([]byte(data), &payload); err != nil {
+				return fmt.Errorf("decode reply_delta: %w", err)
+			}
+			if callbacks.OnReplyDelta != nil {
+				if err := callbacks.OnReplyDelta(payload.Text); err != nil {
+					return fmt.Errorf("reply_delta callback: %w", err)
+				}
+			}
 		case "result":
 			decoder := json.NewDecoder(bytes.NewReader([]byte(data)))
 			decoder.DisallowUnknownFields()
@@ -292,7 +305,9 @@ func (c *Client) TurnStream(ctx context.Context, request TurnRequest, callbacks 
 		case "":
 			return nil
 		default:
-			return fmt.Errorf("unknown agent stream event %q", name)
+			// 未知事件类型：跳过而不是让整轮失败。agent 新增事件（如心跳）不应
+			// 导致 Go 客户端整轮报错；缺 result 依旧会被下方校验拦住。
+			return nil
 		}
 		return nil
 	}

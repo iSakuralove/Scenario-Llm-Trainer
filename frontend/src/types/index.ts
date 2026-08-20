@@ -115,6 +115,7 @@ export interface PublicScenario {
   environment?: string
   initial_symptoms: string[]
   architecture_diagram: string
+  architecture_diagram_spec?: ArchitectureDiagramSpec
 }
 
 export interface HiddenWorld {
@@ -122,8 +123,21 @@ export interface HiddenWorld {
   hypotheses: Array<Record<string, unknown>>
   evidence_graph: Array<Record<string, unknown>>
   observations: Array<Record<string, unknown>>
+  virtual_tools?: VirtualTool[]
   solution_rubric: Record<string, unknown>
   misconception_rules: Array<Record<string, unknown>>
+}
+
+export interface VirtualTool {
+  tool_id: string
+  kind: 'logs' | 'config' | 'metrics' | 'database' | 'dependency' | string
+  target: string
+  aliases: string[]
+  query_patterns: string[]
+  redacted_parameters: string[]
+  simulated_output: string
+  observation_action: string
+  evidence_ids: string[]
 }
 
 export interface ArchitectureDiagramSpec {
@@ -416,6 +430,7 @@ export interface AIJob {
   model?: string
   validated: boolean
   fallback_used: boolean
+  fallback_events?: string[]
   result_question_id?: string
   created_at: string
   started_at?: string

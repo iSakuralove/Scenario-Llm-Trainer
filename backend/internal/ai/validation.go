@@ -28,7 +28,13 @@ func ValidateScenarioQuestion(question domain.ScenarioQuestion) error {
 	if len(question.Tags) == 0 {
 		return fmt.Errorf("scenario tags are required")
 	}
-	return ValidateScenarioContent(question.Content, false)
+	if err := ValidateScenarioContent(question.Content, false); err != nil {
+		// 统一前缀让路由错误分类（classifyRouterError）把所有内容校验错误
+		// 识别为 validation 类：自修复重试可拿到具体错误定向修复，而不是
+		// 被当成 unknown 直接放弃。
+		return fmt.Errorf("scenario validation failed: %w", err)
+	}
+	return nil
 }
 
 func PrepareScenarioQuestion(question domain.ScenarioQuestion) domain.ScenarioQuestion {
@@ -133,7 +139,18 @@ func prepareHiddenWorldScenarioContent(content domain.ScenarioContent, question 
 	if content.PublicScenario != nil {
 		prepared := *content.PublicScenario
 		prepared.InitialSymptoms = append([]string{}, content.PublicScenario.InitialSymptoms...)
-		if strings.TrimSpace(prepared.ArchitectureDiagram) != "" {
+		// 结构化 spec 优先：后端确定性渲染 Mermaid，杜绝 LLM 手写图的语法/注入风险。
+		if prepared.ArchitectureDiagramSpec != nil {
+			spec := SanitizeScenarioDiagramSpec(prepared.ArchitectureDiagramSpec)
+			prepared.ArchitectureDiagramSpec = spec
+			if result := diagram.BuildMermaidFromSpec(*spec); result.Valid {
+				prepared.ArchitectureDiagram = result.Code
+			} else {
+				// spec 无效 → 兜底图（不含隐藏答案的通用四节点链）
+				prepared.ArchitectureDiagram = diagram.FallbackScenarioDiagram(question)
+				prepared.ArchitectureDiagramSpec = nil
+			}
+		} else if strings.TrimSpace(prepared.ArchitectureDiagram) != "" {
 			result := diagram.NormalizeMermaidDiagram(prepared.ArchitectureDiagram)
 			if result.Valid {
 				prepared.ArchitectureDiagram = result.Code
@@ -287,6 +304,19 @@ func validateHiddenWorldScenarioContent(content domain.ScenarioContent) error {
 	}
 	if negativeCount == 0 {
 		return fmt.Errorf("hidden world requires at least one negative observation")
+	}
+	for _, tool := range world.VirtualTools {
+		if strings.TrimSpace(tool.ToolID) == "" || strings.TrimSpace(tool.Kind) == "" || strings.TrimSpace(tool.Target) == "" || strings.TrimSpace(tool.SimulatedOutput) == "" || strings.TrimSpace(tool.ObservationAction) == "" {
+			return fmt.Errorf("virtual tool is incomplete")
+		}
+		if _, ok := observationIDs[tool.ObservationAction]; !ok {
+			return fmt.Errorf("virtual tool references unknown observation: %s", tool.ObservationAction)
+		}
+		for _, evidenceID := range tool.EvidenceIDs {
+			if _, ok := evidenceIDs[evidenceID]; !ok {
+				return fmt.Errorf("virtual tool references unknown evidence: %s", evidenceID)
+			}
+		}
 	}
 
 	for index, evidenceSet := range world.RootCause.SufficientEvidenceSets {

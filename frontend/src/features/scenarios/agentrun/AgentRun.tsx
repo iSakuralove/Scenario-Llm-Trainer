@@ -25,8 +25,8 @@ export function AgentRun({ events, fallbackUser = '', fallbackReply = '', active
   const replyChunks = ordered.filter((event) => event.kind === 'reply_delta' && event.text).map((event) => event.text ?? '')
   const understanding = understandingSummary(ordered)
   const reasoning = uniqueReasoning(ordered)
-  const tools = aggregateTools(ordered)
   const failure = ordered.find((event) => event.kind === 'turn_failed')
+  const tools = aggregateTools(ordered)
   const complete = ordered.some((event) => event.kind === 'turn_completed')
   const isProcessing = active && !complete && !failure
   // 本轮失败时不渲染任何正文。turn_failed 意味着回复没通过安全校验或状态审批，

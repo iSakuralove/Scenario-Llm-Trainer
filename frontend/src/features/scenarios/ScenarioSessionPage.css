@@ -93,6 +93,83 @@
   color: #8ef0db;
 }
 
+.scenario-session-page .clue-release-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.scenario-session-page .clue-release-heading,
+.scenario-session-page .clue-release-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.scenario-session-page .clue-release-heading strong {
+  color: #f6fafe;
+  font-size: 14px;
+}
+
+.scenario-session-page .clue-release-heading span {
+  color: rgba(220, 228, 238, 0.50);
+  font-size: 11px;
+}
+
+.scenario-session-page .clue-release-list {
+  display: grid;
+  gap: 9px;
+}
+
+.scenario-session-page .clue-release-card {
+  display: grid;
+  gap: 7px;
+  padding: 11px 12px;
+  border: 1px solid rgba(142, 240, 219, 0.18);
+  border-radius: 8px;
+  background: rgba(142, 240, 219, 0.055);
+}
+
+.scenario-session-page .clue-release-card.is-new {
+  animation: clueReleaseEnter 420ms ease both;
+}
+
+.scenario-session-page .clue-release-card-header strong {
+  min-width: 0;
+  color: #8ef0db;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.scenario-session-page .clue-release-card-header span {
+  flex: 0 0 auto;
+  color: #ffcc8a;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.scenario-session-page .clue-release-card p {
+  margin: 0;
+  color: rgba(230, 237, 245, 0.82);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+@keyframes clueReleaseEnter {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .scenario-session-page .mermaid-box {
   width: 100%;
   max-width: 100%;
@@ -180,9 +257,17 @@
 }
 
 .scenario-session-page .message-thread {
-  background:
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	padding: 8px 22px 20px;
+	background:
     linear-gradient(180deg, rgba(9, 12, 18, 0.30), rgba(9, 12, 18, 0.70)),
     #0a0e15;
+}
+
+.scenario-session-page .message-thread > [data-testid="scenario-agent-run"] {
+	margin-inline: auto;
 }
 
 .scenario-session-page .user-msg {

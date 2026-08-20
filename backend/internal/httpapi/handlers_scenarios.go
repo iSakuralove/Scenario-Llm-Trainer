@@ -227,41 +227,44 @@ func (s *Server) handleScenarioSession(w http.ResponseWriter, r *http.Request, u
 			StateRevision: req.StateRevision,
 			OnRunEvent:    onRunEvent,
 		})
-		if err != nil {
-			status, code, message := scenarioMessageError(err)
-			if writer != nil {
-				writer.runEvent(domain.ScenarioRunEvent{
-					RequestID: requestID,
-					Sequence:  sentThrough + 1,
-					Kind:      "turn_failed",
-					Status:    "failed",
-					Summary:   message,
-					ErrorCode: code,
-				})
-				return
-			}
-			writeErrorWithData(w, status, message, map[string]string{"error_code": code})
-			return
-		}
-		payload := map[string]interface{}{
-			"message":        message,
-			"response_meta":  message.ResponseMeta,
-			"run_events":     message.ResponseMeta.RunEvents,
-			"session_status": session.Status,
-			"session":        scenarioSessionView(session),
-		}
+	if err != nil {
+		status, code, message := scenarioMessageError(err)
 		if writer != nil {
-			for _, event := range message.ResponseMeta.RunEvents {
-				if event.Sequence <= sentThrough {
-					continue
-				}
-				writer.runEvent(event)
-				sentThrough = event.Sequence
-			}
-			writer.finish(payload)
+			writer.runEvent(domain.ScenarioRunEvent{
+				RequestID: requestID,
+				Sequence:  sentThrough + 1,
+				Kind:      "turn_failed",
+				Status:    "failed",
+				Summary:   message,
+				ErrorCode: code,
+			})
 			return
 		}
-		writeOK(w, payload)
+		writeErrorWithData(w, status, message, map[string]string{"error_code": code})
+		return
+	}
+	payload := map[string]interface{}{
+		"message":        message,
+		"response_meta":  message.ResponseMeta,
+		"run_events":     message.ResponseMeta.RunEvents,
+		"session_status": session.Status,
+		"session":        scenarioSessionView(session),
+	}
+	if writer != nil {
+		// 实时序号与落库序号共用同一空间：流式阶段已下发的事件（含
+		// reply_delta）满足 Sequence <= sentThrough 自动跳过，避免重复渲染；
+		// 断线重连（after_sequence）或幂等回放时补发客户端尚未确认的事件。
+		for _, event := range message.ResponseMeta.RunEvents {
+			if event.Sequence <= sentThrough {
+				continue
+			}
+			writer.runEvent(event)
+			sentThrough = event.Sequence
+		}
+		writer.finish(payload)
+		return
+	}
+	writeOK(w, payload)
 	case "answer":
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -405,7 +408,7 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 	// request_id 已登记为在途幂等轮次后，浏览器断线只应停止当前 HTTP 等待，
 	// 不能取消 Python 主链并让重连重复执行 compare_answer。保留请求值，
 	// 但用服务端总 deadline 约束这次业务执行。
-	agentContext, cancelAgent := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+	agentContext, cancelAgent := context.WithTimeout(context.WithoutCancel(ctx), s.scenarioAgentTimeout)
 	defer cancelAgent()
 	agentRequest := agentclient.TurnRequest{
 		ContractVersion: agentclient.ContractVersion,
@@ -417,10 +420,12 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 		LearnerState:    learnerStateForAgent(session.LearnerState),
 		Transcript:      scenarioTranscript(existingMessages),
 		UserMessage:     input.Content,
-		Budget:          agentclient.Budget{DeadlineMS: 15000, MaxReleases: 3},
+		Budget:          agentclient.Budget{DeadlineMS: s.scenarioTurnDeadlineMS, MaxReleases: 3},
 	}
 	var result agentclient.TurnResult
 	var streamValidator *scenarioPublicTraceStream
+	var streamedReplyChunks []string
+	tracesBeforeReply := -1
 	if streamingClient, ok := s.scenarioAgent.(scenarioAgentStreamingClient); ok && input.OnRunEvent != nil {
 		streamValidator = newScenarioPublicTraceStream(
 			input.RequestID,
@@ -428,15 +433,38 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 			question.Content.HiddenWorld,
 			question.Content.PublicScenario,
 			session.LearnerState.Normalized(),
+			s.scenarioValidationMode,
 		)
+		// 实时序号与落库序号共用同一空间：user_message 占 1，此后每个事件
+		// （公开过程事件或 reply_delta）按真实到达顺序递增。落库时按同样
+		// 顺序重建（rebuildScenarioRunEvents），断线重连回放才能与实时流对齐。
+		realtimeSeq := len(scenarioInitialRunEvents(input.RequestID, input.Content))
 		result, err = streamingClient.TurnStream(agentContext, agentRequest, agentclient.StreamCallbacks{
 			OnTurnAnalysis: streamValidator.onTurnAnalysis,
 			OnPublicTrace: func(trace agentclient.PublicTraceEvent) error {
 				if err := streamValidator.onPublicTrace(trace); err != nil {
 					return err
 				}
-				sequence := len(scenarioInitialRunEvents(input.RequestID, input.Content)) + streamValidator.emittedCount
-				input.OnRunEvent(mapScenarioPublicTraceEvent(input.RequestID, trace, sequence))
+				realtimeSeq++
+				input.OnRunEvent(mapScenarioPublicTraceEvent(input.RequestID, trace, realtimeSeq))
+				return nil
+			},
+			OnReplyDelta: func(text string) error {
+				if text == "" {
+					return nil
+				}
+				if tracesBeforeReply < 0 {
+					tracesBeforeReply = streamValidator.emittedCount
+				}
+				streamedReplyChunks = append(streamedReplyChunks, text)
+				realtimeSeq++
+				input.OnRunEvent(domain.ScenarioRunEvent{
+					RequestID: input.RequestID,
+					Sequence:  realtimeSeq,
+					Kind:      "reply_delta",
+					Status:    "running",
+					Text:      text,
+				})
 				return nil
 			},
 		})
@@ -453,7 +481,7 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 		}
 		return domain.ScenarioMessage{}, nil, classifyScenarioAgentError(err)
 	}
-	nextState, approvals, err := approveScenarioProposals(session, question.Content.HiddenWorld, result)
+	nextState, approvals, err := approveScenarioProposals(session, question.Content.HiddenWorld, result, s.scenarioValidationMode)
 	if err != nil {
 		return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
 			Status:  http.StatusBadGateway,
@@ -461,19 +489,41 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 			Message: "排查导师返回了未通过业务校验的状态提议",
 		}
 	}
-	if err := validateScenarioReply(result.Reply, question.Content.HiddenWorld, question.Content.PublicScenario, nextState); err != nil {
-		return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
-			Status:  http.StatusBadGateway,
-			Code:    "reply_guard_rejected",
-			Message: "排查导师回复未通过安全校验",
+	if s.scenarioValidationMode == scenarioValidationLog {
+		for _, approval := range approvals {
+			if !approval.Accepted {
+				s.recordScenarioValidationBypass("proposal", input.RequestID,
+					fmt.Sprintf("kind=%s reason=%s", approval.Kind, approval.ReasonCode))
+			}
 		}
 	}
-	if err := validateScenarioPublicTrace(input.RequestID, input.Content, result, question.Content.HiddenWorld, question.Content.PublicScenario, nextState); err != nil {
-		return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
-			Status:  http.StatusBadGateway,
-			Code:    "public_trace_rejected",
-			Message: "排查导师返回了未通过公开协议校验的过程事件",
+	if s.scenarioValidationMode != scenarioValidationOff {
+		if err := validateScenarioReply(result.Reply, question.Content.HiddenWorld, question.Content.PublicScenario, nextState); err != nil {
+			if s.scenarioValidationMode == scenarioValidationLog {
+				s.recordScenarioValidationBypass("reply_guard", input.RequestID, err.Error())
+			} else {
+				return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
+					Status:  http.StatusBadGateway,
+					Code:    "reply_guard_rejected",
+					Message: "排查导师回复未通过安全校验",
+				}
+			}
 		}
+		if err := validateScenarioPublicTrace(input.RequestID, input.Content, result, question.Content.HiddenWorld, question.Content.PublicScenario, nextState); err != nil {
+			if s.scenarioValidationMode == scenarioValidationLog {
+				s.recordScenarioValidationBypass("public_trace", input.RequestID, err.Error())
+			} else {
+				return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
+					Status:  http.StatusBadGateway,
+					Code:    "public_trace_rejected",
+					Message: "排查导师返回了未通过公开协议校验的过程事件",
+				}
+			}
+		}
+	}
+	// 流式影子模式下放行的违规统一在这里落审计（proposal 已在上方即时记录）。
+	if streamValidator != nil {
+		streamValidator.drainBypasses(s)
 	}
 	nextSession := *session
 	nextSession.CurrentTurn++
@@ -485,6 +535,9 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 		reply += " 当前会话已达到最大轮次，请提交最终根因答案。"
 	}
 	runEvents := buildScenarioRunEvents(input.RequestID, input.Content, result, reply)
+	if len(streamedReplyChunks) > 0 {
+		runEvents = rebuildScenarioRunEvents(runEvents, input.RequestID, streamedReplyChunks, tracesBeforeReply)
+	}
 	publicTrace := marshalAgentAudit(runEvents)
 	message = domain.ScenarioMessage{
 		SessionID:        session.ID,
@@ -519,8 +572,71 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 	committedSession := commitResult.Record.SessionSnapshot
 	return commitResult.Record.Message, &committedSession, nil
 }
-func buildScenarioConversationSummary(existing string, question *domain.ScenarioQuestion, messages []domain.ScenarioMessage) string {
-	if len(messages) == 0 {
+// rebuildScenarioRunEvents 按"实时流出顺序"重建落库 run_events：user_message →
+// mentor 流式前的公开过程事件 → 真实 reply_delta 块 → mentor 后的公开过程事件
+// （mentor_buffered / guard_passed 等）→ proposal_approved → turn_completed。
+// 序号与实时下发时完全一致，断线重连（after_sequence）回放才能与实时流对齐，
+// 前端按 (request_id, sequence) 去重也不会冲突。
+// tracesBeforeReply 是首个 reply_delta 到达前已发出的公开过程事件数；
+// 调用方保证 len(chunks) > 0 时它 >= 0。
+func rebuildScenarioRunEvents(events []domain.ScenarioRunEvent, requestID string, chunks []string, tracesBeforeReply int) []domain.ScenarioRunEvent {
+	if tracesBeforeReply < 0 {
+		tracesBeforeReply = 0
+	}
+	userContent := ""
+	if len(events) > 0 {
+		userContent = events[0].Text
+	}
+	var before, after []domain.ScenarioRunEvent
+	processed := 0
+	for _, event := range events {
+		if event.Kind == "reply_delta" || event.Kind == "user_message" || event.Kind == "turn_completed" {
+			continue
+		}
+		// buildScenarioRunEvents 产出：user_message(1) + 公开过程事件（按
+		// result.PublicTrace 原序）+ proposal_approved + 伪 reply_delta +
+		// turn_completed。跳过 user_message / 伪 delta / turn_completed 后，
+		// 余下事件按 tracesBeforeReply 拆成 delta 前后两段。
+		if processed < tracesBeforeReply {
+			before = append(before, event)
+		} else {
+			after = append(after, event)
+		}
+		processed++
+	}
+	out := make([]domain.ScenarioRunEvent, 0, 1+len(before)+len(chunks)+len(after)+1)
+	out = append(out, domain.ScenarioRunEvent{
+		RequestID: requestID,
+		Kind:      "user_message",
+		Status:    "completed",
+		Text:      userContent,
+	})
+	out = append(out, before...)
+	for _, chunk := range chunks {
+		if chunk == "" {
+			continue
+		}
+		out = append(out, domain.ScenarioRunEvent{
+			RequestID: requestID,
+			Kind:      "reply_delta",
+			Status:    "running",
+			Text:      chunk,
+		})
+	}
+	out = append(out, after...)
+	out = append(out, domain.ScenarioRunEvent{
+		RequestID: requestID,
+		Kind:      "turn_completed",
+		Status:    "completed",
+		Summary:   "本轮排查已完成。",
+	})
+	for i := range out {
+		out[i].Sequence = i + 1
+	}
+	return out
+}
+
+func buildScenarioConversationSummary(existing string, question *domain.ScenarioQuestion, messages []domain.ScenarioMessage) string {	if len(messages) == 0 {
 		return strings.TrimSpace(existing)
 	}
 	limit := len(messages) - 5

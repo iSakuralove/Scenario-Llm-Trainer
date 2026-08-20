@@ -38,6 +38,11 @@ type Server struct {
 	stt                    STTProvider
 	embedding              ai.EmbeddingClient
 	scenarioAgent          scenarioAgentClient
+	scenarioAgentTimeout   time.Duration
+	scenarioTurnDeadlineMS int
+	// scenarioValidationMode 控制排查工坊 Go 侧校验器的执行方式（strict/log/off），
+	// 见 scenario_validation_mode.go。revision/幂等/原子提交不受它影响。
+	scenarioValidationMode scenarioValidationMode
 	scenarioTurnMu         sync.Mutex
 	scenarioTurnFlights    map[string]*scenarioTurnFlight
 	assets                 AssetStorage
@@ -54,6 +59,14 @@ func envOrDefault(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func positiveIntEnvOrDefault(key string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(key)))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 type agentAuditPayload struct {
@@ -84,6 +97,12 @@ func NewServer(dataStore store.Store, authManager *auth.Manager, limiter ratelim
 		llmRouter = routers[0]
 	}
 	assetStorage := NewAssetStorageFromEnv()
+	scenarioTurnDeadlineMS := positiveIntEnvOrDefault("AGENT_TURN_DEADLINE_MS", 15000)
+	scenarioAgentTimeout := time.Duration(positiveIntEnvOrDefault("AGENT_TIMEOUT_SECONDS", 20)) * time.Second
+	minimumAgentTimeout := time.Duration(scenarioTurnDeadlineMS)*time.Millisecond + 5*time.Second
+	if scenarioAgentTimeout < minimumAgentTimeout {
+		scenarioAgentTimeout = minimumAgentTimeout
+	}
 	server := &Server{
 		store:                  dataStore,
 		auth:                   authManager,
@@ -101,10 +120,13 @@ func NewServer(dataStore store.Store, authManager *auth.Manager, limiter ratelim
 		embedding:              ai.NewEmbeddingClientFromEnv(),
 		scenarioAgent: agentclient.New(agentclient.Config{
 			BaseURL: envOrDefault("AGENT_BASE_URL", "http://127.0.0.1:8091"),
-			Timeout: 20 * time.Second,
+			Timeout: scenarioAgentTimeout,
 		}),
-		scenarioTurnFlights: map[string]*scenarioTurnFlight{},
-		jobStop:             map[string]context.CancelFunc{},
+		scenarioAgentTimeout:   scenarioAgentTimeout,
+		scenarioTurnDeadlineMS: scenarioTurnDeadlineMS,
+		scenarioValidationMode: scenarioValidationModeFromEnv(),
+		scenarioTurnFlights:    map[string]*scenarioTurnFlight{},
+		jobStop:                map[string]context.CancelFunc{},
 	}
 	server.applyPromptOverrides()
 	return server

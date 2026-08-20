@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"strings"
 	"time"
 )
 
@@ -212,6 +213,10 @@ type PublicScenario struct {
 	Environment         string   `json:"environment,omitempty"`
 	InitialSymptoms     []string `json:"initial_symptoms"`
 	ArchitectureDiagram string   `json:"architecture_diagram"`
+	// ArchitectureDiagramSpec 是生成模型输出的结构化架构描述；
+	// 后端用 BuildMermaidFromSpec 确定性渲染成 ArchitectureDiagram，
+	// 避免 LLM 手写 Mermaid 引入语法错误或注入风险。
+	ArchitectureDiagramSpec *ScenarioDiagramSpec `json:"architecture_diagram_spec,omitempty"`
 }
 
 type HiddenWorld struct {
@@ -219,8 +224,23 @@ type HiddenWorld struct {
 	Hypotheses         []Hypothesis        `json:"hypotheses"`
 	EvidenceGraph      []EvidenceNode      `json:"evidence_graph"`
 	Observations       []Observation       `json:"observations"`
+	VirtualTools       []VirtualTool       `json:"virtual_tools,omitempty"`
 	SolutionRubric     SolutionRubric      `json:"solution_rubric"`
 	MisconceptionRules []MisconceptionRule `json:"misconception_rules"`
+}
+
+// VirtualTool 描述题目自带的只读模拟查询入口。查询文本仅用于意图匹配，
+// 后端与 Agent 都不得执行真实 SQL、Shell、HTTP 或外部 API。
+type VirtualTool struct {
+	ToolID             string   `json:"tool_id"`
+	Kind               string   `json:"kind"`
+	Target             string   `json:"target"`
+	Aliases            []string `json:"aliases"`
+	QueryPatterns      []string `json:"query_patterns"`
+	RedactedParameters []string `json:"redacted_parameters"`
+	SimulatedOutput    string   `json:"simulated_output"`
+	ObservationAction  string   `json:"observation_action"`
+	EvidenceIDs        []string `json:"evidence_ids"`
 }
 
 type RootCause struct {
@@ -552,11 +572,23 @@ type AIJob struct {
 	Model            string     `json:"model,omitempty"`
 	Validated        bool       `json:"validated"`
 	FallbackUsed     bool       `json:"fallback_used"`
+	FallbackEvents   []string   `json:"fallback_events,omitempty"`
 	ResultQuestionID string     `json:"result_question_id,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`
 	StartedAt        *time.Time `json:"started_at,omitempty"`
 	CompletedAt      *time.Time `json:"completed_at,omitempty"`
 	UpdatedAt        time.Time  `json:"updated_at"`
+}
+
+// AppendFallbackEvent 记录一条回退轨迹（如 "deepseek:auth → glm"），供前端展示 provider 切换过程。
+func (j *AIJob) AppendFallbackEvent(event string) {
+	if strings.TrimSpace(event) == "" {
+		return
+	}
+	if len(j.FallbackEvents) >= 8 {
+		j.FallbackEvents = j.FallbackEvents[1:]
+	}
+	j.FallbackEvents = append(j.FallbackEvents, event)
 }
 
 type Asset struct {

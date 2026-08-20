@@ -23,7 +23,7 @@ func TestAdminRejectsUnstructuredScenarioGeneratePrompt(t *testing.T) {
 	}
 
 	status, env := requestJSON(t, handler, http.MethodPut, "/api/v1/admin/prompts/scenario_generate", adminToken, map[string]string{
-		"content": "请输出符合 scenario_question validator 的 JSON 结构。",
+		"content": "请输出符合 hiddenworld_question validator 的 JSON 结构。",
 	})
 	if status != http.StatusBadRequest {
 		t.Fatalf("expected short scenario prompt to return 400, got status=%d message=%s", status, env.Message)

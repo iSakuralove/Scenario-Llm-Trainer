@@ -203,6 +203,7 @@ func approveScenarioProposals(
 	session *domain.ScenarioSession,
 	world *domain.HiddenWorld,
 	result agentclient.TurnResult,
+	mode scenarioValidationMode,
 ) (domain.ScenarioLearnerState, []scenarioProposalApproval, error) {
 	if session == nil || world == nil {
 		return domain.ScenarioLearnerState{}, nil, errors.New("hiddenworld session state is unavailable")
@@ -226,108 +227,125 @@ func approveScenarioProposals(
 
 	for _, proposal := range result.Proposals {
 		approval := scenarioProposalApproval{Kind: proposal.Kind}
-		reject := func(code string) (domain.ScenarioLearnerState, []scenarioProposalApproval, error) {
-			approval.ReasonCode = code
-			approvals = append(approvals, approval)
-			return domain.ScenarioLearnerState{}, approvals, fmt.Errorf("proposal %s rejected: %s", proposal.Kind, code)
-		}
-		switch proposal.Kind {
-		case "release_evidence":
-			if lowConfidence {
-				return reject("low_confidence_mutation")
-			}
-			node, ok := evidence[proposal.EvidenceID]
-			if !ok || scenarioContainsString(state.CollectedEvidence, proposal.EvidenceID) {
-				return reject("invalid_evidence")
-			}
-			if !intersects(actions, stringSet(node.ObtainedBy)) {
-				return reject("evidence_not_requested")
-			}
-			if !containsAll(state.CollectedEvidence, node.Prerequisites) {
-				return reject("evidence_prerequisite_missing")
-			}
-			state.CollectedEvidence = append(state.CollectedEvidence, proposal.EvidenceID)
-			progress = true
-		case "release_evidence_on_stall":
-			// 卡住兜底释放。刻意不复用 release_evidence 的 lowConfidence 与
-			// evidence_not_requested 闸门——卡住的学生必然同时踩中这两条，
-			// 那正是他越求助拿到的越少的原因。但也不能因此放松：这里不看
-			// 模型自报的 is_stuck，只认 Go 自己持有的 StalledTurns。
-			if stallReleases >= 1 {
-				return reject("stall_release_limit_exceeded")
-			}
-			if session.LearnerState.StalledTurns < scenarioStallUnlockThreshold {
-				return reject("stall_threshold_not_met")
-			}
-			node, ok := evidence[proposal.EvidenceID]
-			if !ok || scenarioContainsString(state.CollectedEvidence, proposal.EvidenceID) {
-				return reject("invalid_evidence")
-			}
-			if len(node.Prerequisites) > 0 {
-				return reject("stall_release_requires_no_prerequisite")
-			}
-			state.CollectedEvidence = append(state.CollectedEvidence, proposal.EvidenceID)
-			stallReleases++
-			// 不置 progress：兜底释放是系统给的，不是学生挣来的。
-			// 因此 stalled_turns 继续累加，effective_turns 不推进。
-		case "record_action":
-			if lowConfidence || proposal.Action == "" || !actions[proposal.Action] {
-				return reject("action_not_in_turn_analysis")
-			}
-			state.ActionsTaken = appendUnique(state.ActionsTaken, proposal.Action)
-		case "record_established_fact":
-			if lowConfidence || proposal.Fact == "" || !facts[proposal.Fact] {
-				return reject("fact_not_in_turn_analysis")
-			}
-			before := len(state.EstablishedFacts)
-			state.EstablishedFacts = appendUnique(state.EstablishedFacts, proposal.Fact)
-			progress = progress || len(state.EstablishedFacts) > before
-		case "set_current_hypothesis":
-			if lowConfidence || !hypotheses[proposal.HypothesisID] || proposal.HypothesisID != result.TurnAnalysis.HypothesisID {
-				return reject("invalid_hypothesis")
-			}
-			if state.CurrentHypothesis != proposal.HypothesisID {
-				state.CurrentHypothesis = proposal.HypothesisID
+		// 闸门判定与状态变更放在同一闭包里：命中闸门时先于任何状态变更返回
+		// 拒绝码，保证软拒绝（log 模式）下这条提议的副作用完全不会发生。
+		rejectCode := func() string {
+			gated := mode != scenarioValidationOff
+			switch proposal.Kind {
+			case "release_evidence":
+				if gated {
+					if lowConfidence {
+						return "low_confidence_mutation"
+					}
+					node, ok := evidence[proposal.EvidenceID]
+					if !ok || scenarioContainsString(state.CollectedEvidence, proposal.EvidenceID) {
+						return "invalid_evidence"
+					}
+					if !intersects(actions, stringSet(node.ObtainedBy)) {
+						return "evidence_not_requested"
+					}
+					if !containsAll(state.CollectedEvidence, node.Prerequisites) {
+						return "evidence_prerequisite_missing"
+					}
+				}
+				state.CollectedEvidence = append(state.CollectedEvidence, proposal.EvidenceID)
 				progress = true
+			case "release_evidence_on_stall":
+				// 卡住兜底释放。刻意不复用 release_evidence 的 lowConfidence 与
+				// evidence_not_requested 闸门——卡住的学生必然同时踩中这两条，
+				// 那正是他越求助拿到的越少的原因。但也不能因此放松：这里不看
+				// 模型自报的 is_stuck，只认 Go 自己持有的 StalledTurns。
+				if gated {
+					if stallReleases >= 1 {
+						return "stall_release_limit_exceeded"
+					}
+					if session.LearnerState.StalledTurns < scenarioStallUnlockThreshold {
+						return "stall_threshold_not_met"
+					}
+					node, ok := evidence[proposal.EvidenceID]
+					if !ok || scenarioContainsString(state.CollectedEvidence, proposal.EvidenceID) {
+						return "invalid_evidence"
+					}
+					if len(node.Prerequisites) > 0 {
+						return "stall_release_requires_no_prerequisite"
+					}
+				}
+				state.CollectedEvidence = append(state.CollectedEvidence, proposal.EvidenceID)
+				stallReleases++
+				// 不置 progress：兜底释放是系统给的，不是学生挣来的。
+				// 因此 stalled_turns 继续累加，effective_turns 不推进。
+			case "record_action":
+				if gated && (lowConfidence || proposal.Action == "" || !actions[proposal.Action]) {
+					return "action_not_in_turn_analysis"
+				}
+				state.ActionsTaken = appendUnique(state.ActionsTaken, proposal.Action)
+			case "record_established_fact":
+				if gated && (lowConfidence || proposal.Fact == "" || !facts[proposal.Fact]) {
+					return "fact_not_in_turn_analysis"
+				}
+				before := len(state.EstablishedFacts)
+				state.EstablishedFacts = appendUnique(state.EstablishedFacts, proposal.Fact)
+				progress = progress || len(state.EstablishedFacts) > before
+			case "set_current_hypothesis":
+				if gated && (lowConfidence || !hypotheses[proposal.HypothesisID] || proposal.HypothesisID != result.TurnAnalysis.HypothesisID) {
+					return "invalid_hypothesis"
+				}
+				if state.CurrentHypothesis != proposal.HypothesisID {
+					state.CurrentHypothesis = proposal.HypothesisID
+					progress = true
+				}
+			case "rule_out_hypothesis":
+				if gated && (!hypotheses[proposal.HypothesisID] || !ruledOut[proposal.HypothesisID]) {
+					return "hypothesis_not_ruled_out_this_turn"
+				}
+				before := len(state.RuledOutHypotheses)
+				state.RuledOutHypotheses = appendUnique(state.RuledOutHypotheses, proposal.HypothesisID)
+				progress = progress || len(state.RuledOutHypotheses) > before
+			case "set_current_focus":
+				if gated && !validScenarioFocus(proposal.Focus) {
+					return "invalid_focus"
+				}
+				state.CurrentFocus = proposal.Focus
+			case "advance_effective_turn":
+				if gated && (proposal.Value != 1 || !progress) {
+					return "effective_turn_without_progress"
+				}
+				state.EffectiveTurns++
+			case "set_stalled_turns":
+				expected := session.LearnerState.StalledTurns
+				if progress {
+					expected = 0
+				} else if !result.TurnAnalysis.IsNoise {
+					expected++
+				}
+				if gated && proposal.Value != expected {
+					return "invalid_stalled_turns"
+				}
+				state.StalledTurns = proposal.Value
+			case "record_opening":
+				if gated && (proposal.Text == "" || proposal.Text != mentorOpening(result.Reply)) {
+					return "opening_not_from_reply"
+				}
+				state.RecentOpenings = appendUnique(state.RecentOpenings, proposal.Text)
+				if len(state.RecentOpenings) > 3 {
+					state.RecentOpenings = append([]string{}, state.RecentOpenings[len(state.RecentOpenings)-3:]...)
+				}
+			default:
+				// 未知提议类型在任何模式下都无变更逻辑可执行，只能拒绝。
+				return "unsupported_proposal_kind"
 			}
-		case "rule_out_hypothesis":
-			if !hypotheses[proposal.HypothesisID] || !ruledOut[proposal.HypothesisID] {
-				return reject("hypothesis_not_ruled_out_this_turn")
+			return ""
+		}()
+		if rejectCode != "" {
+			approval.Accepted = false
+			approval.ReasonCode = rejectCode
+			approvals = append(approvals, approval)
+			// strict：一条被拒整轮失败（历史行为）；log：软拒绝，记审计后
+			// 跳过这条提议继续；off 到不了这里（闸门已全部跳过，除非未知类型）。
+			if mode == scenarioValidationLog {
+				continue
 			}
-			before := len(state.RuledOutHypotheses)
-			state.RuledOutHypotheses = appendUnique(state.RuledOutHypotheses, proposal.HypothesisID)
-			progress = progress || len(state.RuledOutHypotheses) > before
-		case "set_current_focus":
-			if !validScenarioFocus(proposal.Focus) {
-				return reject("invalid_focus")
-			}
-			state.CurrentFocus = proposal.Focus
-		case "advance_effective_turn":
-			if proposal.Value != 1 || !progress {
-				return reject("effective_turn_without_progress")
-			}
-			state.EffectiveTurns++
-		case "set_stalled_turns":
-			expected := session.LearnerState.StalledTurns
-			if progress {
-				expected = 0
-			} else if !result.TurnAnalysis.IsNoise {
-				expected++
-			}
-			if proposal.Value != expected {
-				return reject("invalid_stalled_turns")
-			}
-			state.StalledTurns = proposal.Value
-		case "record_opening":
-			if proposal.Text == "" || proposal.Text != mentorOpening(result.Reply) {
-				return reject("opening_not_from_reply")
-			}
-			state.RecentOpenings = appendUnique(state.RecentOpenings, proposal.Text)
-			if len(state.RecentOpenings) > 3 {
-				state.RecentOpenings = append([]string{}, state.RecentOpenings[len(state.RecentOpenings)-3:]...)
-			}
-		default:
-			return reject("unsupported_proposal_kind")
+			return domain.ScenarioLearnerState{}, approvals, fmt.Errorf("proposal %s rejected: %s", proposal.Kind, rejectCode)
 		}
 		approval.Accepted = true
 		approval.ReasonCode = "approved"
@@ -404,12 +422,13 @@ func validateScenarioPublicTrace(
 	phaseByKind := map[string]int{
 		"reasoning_summary_delta":     1,
 		"reasoning_summary_completed": 1,
-		"tool_started":                2,
-		"tool_result":                 2,
-		"tool_completed":              2,
-		"response_summary":            3,
-		"mentor_buffered":             4,
-		"guard_passed":                5,
+		"observation_result":          2,
+		"tool_started":                3,
+		"tool_result":                 3,
+		"tool_completed":              3,
+		"response_summary":            4,
+		"mentor_buffered":             5,
+		"guard_passed":                6,
 	}
 
 	previousSequence := 0
@@ -451,11 +470,35 @@ func validateScenarioPublicTrace(
 				return fmt.Errorf("public reasoning summary rejected: %w", err)
 			}
 		}
+		if trace.Kind == "observation_result" {
+			if trace.Observation == nil || strings.TrimSpace(trace.Observation.Action) == "" || strings.TrimSpace(trace.Observation.Result) == "" {
+				return errors.New("public observation result is invalid")
+			}
+			if !stringSet(result.TurnAnalysis.Actions)[trace.Observation.Action] {
+				return errors.New("public observation is not sourced from the current actions")
+			}
+			matched := false
+			for _, observation := range world.Observations {
+				if observation.Action == trace.Observation.Action {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return errors.New("public observation action is not configured")
+			}
+			if err := validateScenarioPublicObservation(trace.Observation, world); err != nil {
+				return err
+			}
+		}
 
 		isToolEvent := trace.Kind == "tool_started" || trace.Kind == "tool_result" || trace.Kind == "tool_completed"
 		if !isToolEvent {
 			if trace.Tool != nil || trace.ToolName != "" || trace.DurationMS != 0 {
 				return errors.New("non-tool public trace contains tool payload")
+			}
+			if trace.Kind != "observation_result" && trace.Observation != nil {
+				return errors.New("non-observation public trace contains observation payload")
 			}
 		} else {
 			if !shouldCompareAnswer {
@@ -524,17 +567,20 @@ func validateScenarioPublicTrace(
 }
 
 type scenarioPublicTraceStream struct {
-	requestID       string
-	userContent     string
-	world           *domain.HiddenWorld
-	publicScenario  *domain.PublicScenario
-	state           domain.ScenarioLearnerState
-	analysis        *agentclient.TurnAnalysis
-	lastSequence    int
-	lastPhase       int
-	toolStage       int
-	guardCount      int
-	emittedCount    int
+	requestID      string
+	userContent    string
+	world          *domain.HiddenWorld
+	publicScenario *domain.PublicScenario
+	state          domain.ScenarioLearnerState
+	analysis       *agentclient.TurnAnalysis
+	lastSequence   int
+	lastPhase      int
+	toolStage      int
+	guardCount     int
+	emittedCount   int
+	mode           scenarioValidationMode
+	// bypasses 收集 log 模式下放行的违规，轮次结束后统一落审计。
+	bypasses        []string
 	validationError error
 }
 
@@ -544,6 +590,7 @@ func newScenarioPublicTraceStream(
 	world *domain.HiddenWorld,
 	publicScenario *domain.PublicScenario,
 	state domain.ScenarioLearnerState,
+	mode scenarioValidationMode,
 ) *scenarioPublicTraceStream {
 	return &scenarioPublicTraceStream{
 		requestID:      requestID,
@@ -551,6 +598,7 @@ func newScenarioPublicTraceStream(
 		world:          world,
 		publicScenario: publicScenario,
 		state:          state,
+		mode:           mode,
 	}
 }
 
@@ -564,6 +612,13 @@ func (stream *scenarioPublicTraceStream) onPublicTrace(trace agentclient.PublicT
 		return stream.validationError
 	}
 	if err := stream.validate(trace); err != nil {
+		// log 模式：记下违规但继续消费事件流——中断会连累 reply_delta
+		// 一起断流，前端表现为「回复到一半挂了」。off 模式 validate 恒 nil。
+		if stream.mode == scenarioValidationLog {
+			stream.bypasses = append(stream.bypasses, err.Error())
+			stream.emittedCount++
+			return nil
+		}
 		stream.validationError = err
 		return err
 	}
@@ -571,16 +626,34 @@ func (stream *scenarioPublicTraceStream) onPublicTrace(trace agentclient.PublicT
 	return nil
 }
 
+// drainBypasses 把流中放行的违规落审计并清空，供轮次收尾调用。
+func (stream *scenarioPublicTraceStream) drainBypasses(s *Server) {
+	for _, violation := range stream.bypasses {
+		s.recordScenarioValidationBypass("public_trace_stream", stream.requestID, violation)
+	}
+	stream.bypasses = nil
+}
+
 func (stream *scenarioPublicTraceStream) validate(trace agentclient.PublicTraceEvent) error {
+	if stream.mode == scenarioValidationOff {
+		// off：跳过全部协议闸门。序号仍需推进，否则 rebuildScenarioRunEvents
+		// 拆分 delta 前后事件段时序号会错位。
+		if trace.Sequence <= stream.lastSequence {
+			return errors.New("public trace sequence is not strictly increasing")
+		}
+		stream.lastSequence = trace.Sequence
+		return nil
+	}
 	phaseByKind := map[string]int{
 		"reasoning_summary_delta":     1,
 		"reasoning_summary_completed": 1,
-		"tool_started":                2,
-		"tool_result":                 2,
-		"tool_completed":              2,
-		"response_summary":            3,
-		"mentor_buffered":             4,
-		"guard_passed":                5,
+		"observation_result":          2,
+		"tool_started":                3,
+		"tool_result":                 3,
+		"tool_completed":              3,
+		"response_summary":            4,
+		"mentor_buffered":             5,
+		"guard_passed":                6,
 	}
 	phase, ok := phaseByKind[trace.Kind]
 	if !ok {
@@ -613,9 +686,33 @@ func (stream *scenarioPublicTraceStream) validate(trace agentclient.PublicTraceE
 			return fmt.Errorf("public reasoning summary rejected: %w", err)
 		}
 	}
+	if trace.Kind == "observation_result" {
+		if stream.analysis == nil || trace.Observation == nil || strings.TrimSpace(trace.Observation.Action) == "" || strings.TrimSpace(trace.Observation.Result) == "" {
+			return errors.New("public observation result is invalid")
+		}
+		if !stringSet(stream.analysis.Actions)[trace.Observation.Action] {
+			return errors.New("public observation is not sourced from the current actions")
+		}
+		matched := false
+		for _, observation := range stream.world.Observations {
+			if observation.Action == trace.Observation.Action {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return errors.New("public observation action is not configured")
+		}
+		if err := validateScenarioPublicObservation(trace.Observation, stream.world); err != nil {
+			return err
+		}
+	}
 	if trace.Kind != "tool_started" && trace.Kind != "tool_result" && trace.Kind != "tool_completed" {
 		if trace.Tool != nil || trace.ToolName != "" || trace.DurationMS != 0 {
 			return errors.New("non-tool public trace contains tool payload")
+		}
+		if trace.Kind != "observation_result" && trace.Observation != nil {
+			return errors.New("non-observation public trace contains observation payload")
 		}
 	} else {
 		if stream.analysis == nil || !stream.analysis.ContainsAnswerAttempt || stream.analysis.Confidence < interpreterLowConfidenceThreshold {
@@ -701,6 +798,43 @@ func validateScenarioPublicComparison(
 
 func scenarioTraceStatusAllowed(status string) bool {
 	return status == "started" || status == "running" || status == "completed" || status == "failed"
+}
+
+func validateScenarioPublicObservation(observation *agentclient.PublicObservation, world *domain.HiddenWorld) error {
+	if observation == nil {
+		return errors.New("public observation result is invalid")
+	}
+	for _, configured := range world.Observations {
+		if configured.Action != observation.Action {
+			continue
+		}
+		allowedResults := []struct {
+			result     string
+			isNegative bool
+		}{{result: configured.Result, isNegative: configured.IsNegative}}
+		allowedResults = append(allowedResults, struct {
+			result     string
+			isNegative bool
+		}{result: "本轮暂未形成新的可公开观察。"})
+		if configured.UnmetPrerequisiteResult != "" {
+			allowedResults = append(allowedResults, struct {
+				result     string
+				isNegative bool
+			}{result: configured.UnmetPrerequisiteResult})
+		} else {
+			allowedResults = append(allowedResults, struct {
+				result     string
+				isNegative bool
+			}{result: "当前还缺少足够上下文，暂时无法得到这项观察。"})
+		}
+		for _, item := range allowedResults {
+			if item.result == observation.Result && item.isNegative == observation.IsNegative {
+				return nil
+			}
+		}
+		return errors.New("public observation result does not match the configured observation")
+	}
+	return errors.New("public observation action is not configured")
 }
 
 func scenarioReasoningStageAllowed(stage string) bool {
@@ -893,6 +1027,13 @@ func mapScenarioPublicTraceEvent(requestID string, trace agentclient.PublicTrace
 		event.Reasoning = &domain.ScenarioPublicReasoningSummary{
 			Stage: trace.Reasoning.Stage,
 			Text:  trace.Reasoning.Text,
+		}
+	}
+	if trace.Observation != nil {
+		event.Observation = &domain.ScenarioPublicObservation{
+			Action:     trace.Observation.Action,
+			Result:     trace.Observation.Result,
+			IsNegative: trace.Observation.IsNegative,
 		}
 	}
 	if trace.Tool != nil {

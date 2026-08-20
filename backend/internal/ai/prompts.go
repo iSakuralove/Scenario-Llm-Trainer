@@ -101,6 +101,7 @@ func ValidateManagedPromptContent(name, text string) error {
 		`"sufficient_evidence_sets"`,
 		`"evidence_graph"`,
 		`"observations"`,
+		`"virtual_tools"`,
 		`"solution_rubric"`,
 		`"misconception_rules"`,
 	}

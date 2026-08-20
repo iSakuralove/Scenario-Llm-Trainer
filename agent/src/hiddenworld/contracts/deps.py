@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from .answer import PublicAnswerComparison
 from .learner import LearnerStateView, Turn
 from .teaching import TeachingConstraints
-from .world import Hypothesis, PublicScenario
+from .world import Hypothesis, PublicScenario, VirtualTool
 
 
 @dataclass
@@ -40,6 +40,10 @@ class InterpreterDeps:
     known_actions: list[str] = field(
         default_factory=list,
         metadata={"why": "世界支持的动作词表，帮助模型把口语映射到规范动作串"},
+    )
+    virtual_tools: list[VirtualTool] = field(
+        default_factory=list,
+        metadata={"why": "题目声明的只读虚拟工具目录，仅用于意图匹配"},
     )
 
 
@@ -73,6 +77,14 @@ class MentorDeps:
     transcript: list[Turn]
     learner_state: LearnerStateView
     constraints: TeachingConstraints
+    current_user_message: str = ""
+    current_intent: str = "investigate"
+    requested_action_raw: str = ""
+    action_match_status: str = "none"
+    simulation_tools: list[str] = field(
+        default_factory=list,
+        metadata={"why": "公开的虚拟工具类型与目标，不含隐藏证据"},
+    )
     released_evidence: list[str] = field(default_factory=list)
     answer_comparison: PublicAnswerComparison | None = None
 

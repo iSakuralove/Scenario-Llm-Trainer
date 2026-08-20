@@ -37,7 +37,41 @@
         "description": {"type": "string", "minLength": 1},
         "environment": {"type": "string"},
         "initial_symptoms": {"type": "array", "items": {"type": "string"}},
-        "architecture_diagram": {"type": "string", "enum": [""]}
+        "architecture_diagram": {
+          "type": "string",
+          "description": "AI 输出必须保持为空字符串；后端用 architecture_diagram_spec 确定性渲染最终 Mermaid。"
+        },
+        "architecture_diagram_spec": {"$ref": "#/$defs/diagram_spec"}
+      }
+    },
+    "diagram_spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["direction", "nodes", "edges"],
+      "properties": {
+        "direction": {"type": "string", "enum": ["TD", "LR"]},
+        "nodes": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/diagram_node"}},
+        "edges": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/diagram_edge"}}
+      }
+    },
+    "diagram_node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"},
+        "label": {"type": "string", "minLength": 1}
+      }
+    },
+    "diagram_edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to"],
+      "properties": {
+        "from": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"},
+        "to": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"},
+        "label": {"type": "string"},
+        "style": {"type": "string", "enum": ["solid", "dotted"]}
       }
     },
     "hidden_world": {
@@ -49,6 +83,7 @@
         "hypotheses": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/hypothesis"}},
         "evidence_graph": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}},
         "observations": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/observation"}},
+        "virtual_tools": {"type": "array", "items": {"$ref": "#/$defs/virtual_tool"}},
         "solution_rubric": {"$ref": "#/$defs/rubric"},
         "misconception_rules": {"type": "array", "items": {"$ref": "#/$defs/misconception"}}
       }
@@ -93,6 +128,21 @@
         "yields_evidence": {"type": "array", "items": {"type": "string"}},
         "rules_out": {"type": "array", "items": {"type": "string"}},
         "unmet_prerequisite_result": {"type": "string"}
+      }
+    },
+    "virtual_tool": {
+      "type": "object", "additionalProperties": false,
+      "required": ["tool_id", "kind", "target", "aliases", "query_patterns", "redacted_parameters", "simulated_output", "observation_action", "evidence_ids"],
+      "properties": {
+        "tool_id": {"type": "string", "minLength": 1},
+        "kind": {"type": "string", "enum": ["logs", "config", "metrics", "database", "dependency"]},
+        "target": {"type": "string", "minLength": 1},
+        "aliases": {"type": "array", "items": {"type": "string"}},
+        "query_patterns": {"type": "array", "items": {"type": "string"}},
+        "redacted_parameters": {"type": "array", "items": {"type": "string"}},
+        "simulated_output": {"type": "string", "minLength": 1},
+        "observation_action": {"type": "string", "minLength": 1},
+        "evidence_ids": {"type": "array", "items": {"type": "string"}}
       }
     },
     "rubric": {

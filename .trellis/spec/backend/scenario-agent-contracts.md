@@ -258,3 +258,60 @@ Python 侧给 `TurnAnalysis` / `AgentTurnResult` 任何一层加字段而 Go 结
 
 **Fix / Prevention**：任何 `ProposalKind`、`RunEventKind`、Guard 判定规则的改动，
 先在 `scenario_agent.go` 找到对应的校验分支，两侧同时改、同时加测试。
+
+## Scenario 6: 题目级虚拟工具目录必须闭环
+
+### 1. Scope / Trigger
+新增日志、配置、指标、数据库或依赖类模拟查询，或修改生成题目 JSON 结构。
+
+### 2. Signatures
+```json
+{
+  "tool_id": "tool.logs.callback",
+  "kind": "logs",
+  "target": "回调访问日志",
+  "aliases": ["看回调日志"],
+  "query_patterns": ["SELECT * FROM callback_access_log"],
+  "redacted_parameters": ["time_range"],
+  "simulated_output": "仅用于题目虚拟数据的模拟输出",
+  "observation_action": "inspect:logs.callback_timeout",
+  "evidence_ids": ["E_CALLBACK_TIMEOUT"]
+}
+```
+
+### 3. Contracts
+- `virtual_tools` 是 `HiddenWorld` 的可选字段；旧题目为空时继续使用 `observations`。
+- Interpreter 只允许把自然语言或 `SELECT/SHOW/DESCRIBE/EXPLAIN/WITH` 只读查询映射到题目声明的唯一 `observation_action`。
+- SQL、Shell、HTTP 和外部 API 永远不执行；题目未声明的表、字段或命令返回 `unsupported`。
+- `observation_result` 仍是跨层事件，前端集中渲染为线索释放卡片并按 `action + result` 去重。
+
+### 4. Validation & Error Matrix
+| 条件 | 结果 |
+|---|---|
+| 工具引用不存在的 observation/evidence | 生成题校验失败 |
+| 同一自然语言命中多个不同动作 | 不释放观察，标记 `ambiguous` |
+| 未声明的 SQL 或外部命令 | 不执行，标记 `unsupported` |
+| 重复请求已公开动作 | 不重复释放相同线索 |
+
+### 5. Good/Base/Bad Cases
+- Good：`看一下数据库日志` 命中 database 工具并显示题目声明的订单写入模拟记录。
+- Base：没有 `virtual_tools` 的旧题目仍可按规范 action 查询。
+- Bad：把“数据库日志”静默替换成网关日志，或提示学生登录真实服务器。
+
+### 6. Tests Required
+- 生成题 Schema/Validator 断言工具字段完整且引用有效动作。
+- Agent 运行时断言自然语言、只读 SQL、重复请求和未声明查询的四种路径。
+- Go 严格解码断言 `virtual_tools` 与 `observation_result` 可跨层传输。
+- 前端断言历史线索恢复不播放动画，新线索只播放一次且不在聊天流重复显示。
+
+### 7. Wrong vs Correct
+#### Wrong
+```text
+学生：看一下数据库日志
+导师：数据库日志这个动作没有开放，请去服务器查看。
+```
+#### Correct
+```text
+学生：看一下数据库日志
+系统：在题目虚拟数据上模拟订单写入日志，并把状态码、连接池和超时字段放入线索卡。
+```

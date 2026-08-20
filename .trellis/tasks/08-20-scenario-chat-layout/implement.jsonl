@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "第 66 行「AI 与用户消息同时使用头像、左右位置和文字标签区分，不能只依赖颜色」是本次改动的直接约束——删文字标签必须用 aria-label 补上"}
+{"file": ".trellis/spec/backend/scenario-agent-contracts.md", "reason": "Scenario 4 说明 guard_passed 等事件只能停止渲染、不能停止发送，否则整轮 public_trace_rejected"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范入口"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "头像与左右分栏必须复用面试舱 .timeline-message 的既有视觉 token，不新造设计语言"}

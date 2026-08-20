@@ -105,6 +105,17 @@ def _validate_structure(
     actions = [o.action for o in world.observations]
     if len(actions) != len(set(actions)):
         report.errors.append("observation.action 存在重复，同一动作只能有一条响应")
+    tool_ids = [tool.tool_id for tool in world.virtual_tools]
+    if len(tool_ids) != len(set(tool_ids)):
+        report.errors.append("virtual_tools.tool_id 存在重复")
+    for tool in world.virtual_tools:
+        if tool.observation_action not in actions:
+            report.errors.append(
+                f"虚拟工具 {tool.tool_id} 引用了不存在的观察动作 {tool.observation_action}"
+            )
+        for evidence_id in tool.evidence_ids:
+            if evidence_id not in evidence_ids:
+                report.errors.append(f"虚拟工具 {tool.tool_id} 引用了不存在的证据 {evidence_id}")
 
     if not require_fixed_bank_scale:
         return report

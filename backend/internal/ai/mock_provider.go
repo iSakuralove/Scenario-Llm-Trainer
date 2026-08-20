@@ -193,8 +193,22 @@ func mockPublicScenario(title, description string, variant mockScenarioVariant) 
 			"同一时间窗口内只有部分业务路径受到影响。",
 			fmt.Sprintf("题面背景：%s", variant.Description),
 		},
-		// 生成模型不得手写架构图；服务端后续可按公开信息生成安全投影。
+		// 生成模型不得手写架构图；后端由 spec 确定性渲染安全投影。
 		ArchitectureDiagram: "",
+		ArchitectureDiagramSpec: &domain.ScenarioDiagramSpec{
+			Direction: "TD",
+			Nodes: []domain.ScenarioDiagramNode{
+				{ID: "Client", Label: "客户端"},
+				{ID: "Gateway", Label: "API 网关"},
+				{ID: "Service", Label: "业务服务"},
+				{ID: "Storage", Label: "数据存储"},
+			},
+			Edges: []domain.ScenarioDiagramEdge{
+				{From: "Client", To: "Gateway", Label: "请求"},
+				{From: "Gateway", To: "Service", Label: "转发"},
+				{From: "Service", To: "Storage", Label: "读写"},
+			},
+		},
 	}
 }
 
@@ -257,6 +271,12 @@ func mockHiddenWorld(variant mockScenarioVariant, req ScenarioGenerationRequest)
 			{Action: "inspect:change.diff", Result: "对比变更前后的配置或结构，发现关键差异。", YieldsEvidence: []string{"E_DIFF"}, RulesOut: []string{}, UnmetPrerequisiteResult: "还没有可对比的变更记录。"},
 			{Action: "inspect:resource.metrics", Result: "资源指标正常，暂时没有资源饱和证据。", IsNegative: true, YieldsEvidence: []string{"E_RESOURCE"}, RulesOut: []string{"H_RESOURCE"}, UnmetPrerequisiteResult: ""},
 			{Action: "inspect:dependency.network", Result: "依赖链路延迟稳定，没有观察到网络抖动。", IsNegative: true, YieldsEvidence: []string{"E_NETWORK"}, RulesOut: []string{"H_DEPENDENCY"}, UnmetPrerequisiteResult: ""},
+		},
+		VirtualTools: []domain.VirtualTool{
+			{ToolID: "tool.logs.primary", Kind: "logs", Target: "主请求日志", Aliases: []string{"看日志", "查看主请求日志"}, QueryPatterns: []string{"SELECT * FROM request_log", "status=", "connect timeout"}, RedactedParameters: []string{"time_range", "service"}, SimulatedOutput: "返回主请求状态码、目标和耗时的模拟日志。", ObservationAction: "inspect:logs.primary", EvidenceIDs: []string{"E_PRIMARY"}},
+			{ToolID: "tool.database.confirm", Kind: "database", Target: "业务确认数据", Aliases: []string{"看数据库", "数据库日志", "查数据库"}, QueryPatterns: []string{"SELECT * FROM business", "SELECT count(*)"}, RedactedParameters: []string{"table", "time_range"}, SimulatedOutput: "返回题目虚拟数据库中的只读确认结果。", ObservationAction: "inspect:data.confirm", EvidenceIDs: []string{"E_CONFIRM"}},
+			{ToolID: "tool.config.release", Kind: "config", Target: "发布配置", Aliases: []string{"看配置", "看发布记录"}, QueryPatterns: []string{"SELECT * FROM release", "config diff"}, RedactedParameters: []string{"release_id"}, SimulatedOutput: "返回发布窗口附近的模拟配置记录。", ObservationAction: "inspect:change.release", EvidenceIDs: []string{"E_RELEASE"}},
+			{ToolID: "tool.metrics.resource", Kind: "metrics", Target: "资源指标", Aliases: []string{"看指标", "看资源"}, QueryPatterns: []string{"SELECT cpu", "metrics"}, RedactedParameters: []string{"service", "time_range"}, SimulatedOutput: "返回资源指标的模拟结果。", ObservationAction: "inspect:resource.metrics", EvidenceIDs: []string{"E_RESOURCE"}},
 		},
 		SolutionRubric: domain.SolutionRubric{
 			RequiredActions:   requiredActions,

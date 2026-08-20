@@ -4,6 +4,7 @@ export type ScenarioRunEventKind =
   | 'user_message'
   | 'reasoning_summary_delta'
   | 'reasoning_summary_completed'
+  | 'observation_result'
   | 'tool_started'
   | 'tool_result'
   | 'tool_completed'
@@ -18,6 +19,12 @@ export type ScenarioRunEventKind =
 export interface ScenarioPublicReasoningSummary {
   stage: 'understanding_message' | 'checking_observations' | 'verifying_answer' | 'composing_reply'
   text: string
+}
+
+export interface ScenarioPublicObservation {
+  action: string
+  result: string
+  is_negative: boolean
 }
 
 export interface ScenarioPublicAnswerComparison {
@@ -43,6 +50,7 @@ export interface ScenarioRunEvent {
   text?: string
   summary?: string
   reasoning?: ScenarioPublicReasoningSummary
+  observation?: ScenarioPublicObservation
   tool?: ScenarioToolEventPayload
   error_code?: string
 }

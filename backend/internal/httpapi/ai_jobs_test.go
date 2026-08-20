@@ -347,6 +347,69 @@ func TestScenarioGenerationJobsUpdateRouterTelemetry(t *testing.T) {
 	}
 }
 
+// 生题任务在 provider 切换瞬间应实时把当前 provider 写进 job（前端可显示"已切换 GLM 重试"），
+// 完成后 job 保留回退轨迹。
+func TestScenarioGenerationJobRecordsFallbackSwitching(t *testing.T) {
+	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "deepseek unavailable", http.StatusBadGateway)
+	}))
+	defer deepSeek.Close()
+	glm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/chat/completions") {
+			t.Fatalf("unexpected glm path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(openAICompatibleScenarioResponse("glm switched scenario")))
+	}))
+	defer glm.Close()
+
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	server := NewServer(dataStore, auth.NewManager("test-secret", time.Hour), nil, ai.NewRouter(ai.Config{
+		Provider: ai.ProviderDeepSeek,
+		BaseURL:  deepSeek.URL,
+		APIKey:   "deepseek-key",
+		Model:    ai.ProviderDeepSeek,
+		Timeout:  time.Second,
+		ProviderConfigs: map[string]ai.Config{
+			ai.ProviderGLM: {
+				Provider: ai.ProviderGLM,
+				BaseURL:  glm.URL + "/api/paas/v4",
+				APIKey:   "glm-key",
+				Model:    "glm-4.7",
+				Timeout:  time.Second,
+			},
+		},
+	}))
+	handler := server.Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/scenarios/generate/jobs", token, map[string]interface{}{
+		"domain":        "database",
+		"difficulty":    "L2",
+		"scenario_type": "troubleshooting",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("create generation job status=%d message=%s", status, env.Message)
+	}
+	var created struct {
+		Job domain.AIJob `json:"job"`
+	}
+	mustDecodeData(t, env, &created)
+
+	job := waitForAIJobStatus(t, dataStore, created.Job.ID, domain.AIJobStatusCompleted)
+	if job.Provider != ai.ProviderGLM || job.Model != "glm-4.7" {
+		t.Fatalf("expected glm provider after fallback, got %+v", job)
+	}
+	if !job.FallbackUsed {
+		t.Fatalf("expected fallback_used, got %+v", job)
+	}
+	if len(job.FallbackEvents) == 0 {
+		t.Fatalf("expected fallback events trace, got %+v", job)
+	}
+	if !strings.Contains(job.FallbackEvents[0], ai.ProviderDeepSeek) || !strings.Contains(job.FallbackEvents[0], ai.ProviderGLM) {
+		t.Fatalf("expected fallback event to mention deepseek and glm, got %+v", job.FallbackEvents)
+	}
+}
+
 func TestScenarioGenerationJobPersistsActualModel(t *testing.T) {
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {

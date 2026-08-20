@@ -18,6 +18,11 @@ MENTOR_INSTRUCTIONS = """
 3. 不得复用 recent_openings 中已经出现的开场句式。
 4. 你是尊重学生推理过程的导师，不按固定检查表逐项盘问。
 5. 你不负责替学生排除方向、不负责把他直接带到答案，也不负责判断结论对错。
+6. 如果学生本轮是在澄清或要求解释，先直接回答这个问题；不要用反问代替解释。
+7. 只能解释公开题面和已经展示给学生的观察，不得假设学生看到了未展示的内部证据。
+8. 当前是题目自带的虚拟工具环境，不存在可供学生登录的服务器、终端或配置文件。
+   支持的检查会由系统直接模拟并在题目快照侧显示为线索卡；不要说“去服务器看”“打开配置文件”或“回来后再确认”。
+9. 学生可以用自然语言描述要查的对象，也可以输入只读 SQL、日志查询或配置查询语句；这些内容只在题目虚拟数据上解释，不会真实执行。
 
 严格遵守 must_not；只能请求 may_release 中的证据。输出 MentorAction JSON。
 """.strip()
@@ -35,6 +40,8 @@ def build_mentor_prompt(deps: MentorDeps) -> str:
         MENTOR_INSTRUCTIONS,
         _render_scenario(deps),
         _render_transcript(deps),
+        _render_current_user_message(deps),
+        _render_intent_context(deps),
         _render_learner(deps),
         _render_released_evidence(deps),
         _render_answer_comparison(deps),
@@ -51,6 +58,8 @@ def _render_scenario(deps: MentorDeps) -> str:
     if scenario.initial_symptoms:
         lines.append("学生一开始就能看到的现象：")
         lines.extend(f"- {item}" for item in scenario.initial_symptoms)
+    if scenario.architecture_diagram:
+        lines.extend(["公开链路图：", scenario.architecture_diagram])
     return "\n".join(lines)
 
 
@@ -60,6 +69,26 @@ def _render_transcript(deps: MentorDeps) -> str:
     speaker = {"user": "学生", "mentor": "你"}
     lines = ["## 对话记录"]
     lines.extend(f"{speaker.get(turn.role, turn.role)}：{turn.content}" for turn in deps.transcript)
+    return "\n".join(lines)
+
+
+def _render_current_user_message(deps: MentorDeps) -> str:
+    text = deps.current_user_message.strip()
+    if not text:
+        return ""
+    return f"## 学生本轮消息\n{text}"
+
+
+def _render_intent_context(deps: MentorDeps) -> str:
+    lines = [f"## 本轮消息类型\n{deps.current_intent}"]
+    if deps.current_intent in {"clarification", "explanation_request"}:
+        lines.append("这是澄清/解释请求：先直接回答学生问的对象，不要继续用排查反问替代回答。")
+    if deps.action_match_status == "unsupported" and deps.requested_action_raw:
+        lines.append(
+            f"学生请求的检查「{deps.requested_action_raw}」不在本题公开动作中；明确说明无法直接提供该观察，不要替换成相近动作。"
+        )
+    if deps.simulation_tools:
+        lines.append("本题可请求的虚拟工具：" + "；".join(deps.simulation_tools))
     return "\n".join(lines)
 
 

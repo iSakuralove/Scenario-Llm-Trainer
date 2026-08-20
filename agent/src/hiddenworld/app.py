@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from asyncio import Queue, create_task
 from functools import lru_cache
@@ -17,10 +18,13 @@ from hiddenworld.agents.models import (
     ModelConfigurationError,
     build_deepseek_model,
     build_glm_model,
+    build_litellm_model,
     build_xuan_model,
 )
 from hiddenworld.contracts import AgentTurnRequest, AgentTurnResult, ContractVersionMismatch
 from hiddenworld.runtime import HiddenWorldRuntime, TurnDeadlineExceeded
+
+logger = logging.getLogger("hiddenworld.app")
 
 
 def create_app(runtime: HiddenWorldRuntime | None = None) -> FastAPI:
@@ -56,7 +60,7 @@ def create_app(runtime: HiddenWorldRuntime | None = None) -> FastAPI:
         active_runtime = runtime if runtime is not None else _runtime_from_env()
 
         async def event_stream():
-            queue: Queue[tuple[str, Any]] = Queue(maxsize=64)
+            queue: Queue[tuple[str, Any]] = Queue(maxsize=512)
 
             async def on_analysis(analysis) -> None:
                 await queue.put(("turn_analysis", analysis.model_dump(mode="json")))
@@ -64,12 +68,16 @@ def create_app(runtime: HiddenWorldRuntime | None = None) -> FastAPI:
             async def on_trace(event) -> None:
                 await queue.put(("public_trace", event.model_dump(mode="json")))
 
+            async def on_reply_delta(piece: str) -> None:
+                await queue.put(("reply_delta", {"text": piece}))
+
             async def produce() -> None:
                 try:
                     result = await active_runtime.run_turn(
                         request,
                         on_turn_analysis=on_analysis,
                         on_public_trace=on_trace,
+                        on_reply_delta=on_reply_delta,
                     )
                     await queue.put(("result", result.model_dump(mode="json")))
                 except ContractVersionMismatch as exc:
@@ -78,11 +86,15 @@ def create_app(runtime: HiddenWorldRuntime | None = None) -> FastAPI:
                     await queue.put(("error", _stream_error("model_not_configured", str(exc))))
                 except TurnDeadlineExceeded as exc:
                     await queue.put(("error", _stream_error("turn_deadline_exceeded", str(exc))))
-                except Exception:
+                except Exception as exc:
+                    logger.exception("agent turn failed: request_id=%s", request.request_id)
                     await queue.put(
                         (
                             "error",
-                            _stream_error("agent_internal_error", "HiddenWorld Agent 本轮处理失败"),
+                            _stream_error(
+                                "agent_internal_error",
+                                f"HiddenWorld Agent 本轮处理失败：{type(exc).__name__}",
+                            ),
                         )
                     )
                 finally:
@@ -106,7 +118,11 @@ def create_app(runtime: HiddenWorldRuntime | None = None) -> FastAPI:
         return StreamingResponse(
             event_stream(),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache"},
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
         )
 
     return app
@@ -135,12 +151,19 @@ def _runtime_from_env() -> HiddenWorldRuntime:
 
 def _model_for_provider(env_name: str):
     provider = os.getenv(env_name, "glm").strip().lower()
+    # litellm 网关支持按角色选别名：HIDDENWORLD_INTERPRETER_PROVIDER →
+    # LITELLM_INTERPRETER_MODEL，HIDDENWORLD_MENTOR_PROVIDER →
+    # LITELLM_MENTOR_MODEL（缺省落 LITELLM_MODEL → mentor-default）。
+    role = env_name.removeprefix("HIDDENWORLD_").removesuffix("_PROVIDER")
+    role_model = os.getenv(f"LITELLM_{role}_MODEL") or os.getenv("LITELLM_MODEL")
     if provider == "deepseek":
         return build_deepseek_model()
     if provider in {"glm", "zai"}:
         return build_glm_model()
     if provider == "xuan":
         return build_xuan_model()
+    if provider in {"litellm", "gateway"}:
+        return build_litellm_model(model=role_model)
     raise ModelConfigurationError(f"unsupported provider configured in {env_name}")
 
 

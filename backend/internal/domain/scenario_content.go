@@ -66,6 +66,9 @@ func (content ScenarioContent) WithHiddenWorldCompatibility() ScenarioContent {
 	content.StandardProcedure = append(content.StandardProcedure, world.SolutionRubric.RollbackNotes...)
 	if content.PublicScenario != nil {
 		content.ArchitectureDiagram = content.PublicScenario.ArchitectureDiagram
+		if content.PublicScenario.ArchitectureDiagramSpec != nil {
+			content.ArchitectureDiagramSpec = content.PublicScenario.ArchitectureDiagramSpec
+		}
 	}
 	return content
 }

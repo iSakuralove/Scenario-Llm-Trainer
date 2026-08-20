@@ -237,6 +237,39 @@
   overflow-wrap: anywhere;
 }
 
+.observationResult {
+  min-width: 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--run-accent);
+  background: rgba(142, 240, 219, 0.07);
+  color: rgba(230, 237, 245, 0.86);
+}
+
+.observationHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.observationHeader strong {
+  color: rgba(235, 241, 248, 0.92);
+  font-size: 13px;
+}
+
+.observationHeader span {
+  color: rgba(142, 240, 219, 0.76);
+  font-size: 11px;
+}
+
+.observationResult p {
+  margin: 4px 0 0;
+  color: rgba(220, 228, 238, 0.76);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
 .streamingText {
   white-space: pre-wrap;
 }

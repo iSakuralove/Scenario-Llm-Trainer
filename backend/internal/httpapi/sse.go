@@ -22,6 +22,9 @@ type sseWriter struct {
 func newSSEWriter(w http.ResponseWriter) *sseWriter {
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
+	// 经 Nginx/CDN 代理时禁用响应缓冲，保证 token 级 delta 实时到达浏览器。
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.Header().Set("Connection", "keep-alive")
 	flusher, _ := w.(http.Flusher)
 	return &sseWriter{w: w, flusher: flusher}
 }

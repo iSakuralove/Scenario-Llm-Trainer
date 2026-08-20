@@ -545,7 +545,7 @@ function normalizeProviderPool(
 }
 
 function buildFallbackOrder(ai: Partial<AIStatus> | undefined) {
-  const ordered = ['deepseek', 'qwen', 'ernie', 'openai_compatible', 'mock']
+  const ordered = ['deepseek', 'glm', 'qwen', 'ernie', 'openai_compatible', 'mock']
   const active = new Set<string>()
   if (ai?.provider) active.add(ai.provider)
   Object.keys(ai?.telemetry?.provider_calls ?? {}).forEach((provider) => active.add(provider))

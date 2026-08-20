@@ -29,6 +29,7 @@ export function ScenariosPage() {
   const generationStartedAt = useScenarioGenerationStore((state) => state.generationStartedAt)
   const generationElapsed = useScenarioGenerationStore((state) => state.generationElapsed)
   const generationJob = useScenarioGenerationStore((state) => state.generationJob)
+  const lastProviderSwitch = useScenarioGenerationStore((state) => state.lastProviderSwitch)
   const lastGenerated = useScenarioGenerationStore((state) => state.lastGenerated)
   const lastGenerationFailure = useScenarioGenerationStore((state) => state.lastGenerationFailure)
   const lastGenerationCanceled = useScenarioGenerationStore((state) => state.lastGenerationCanceled)
@@ -175,7 +176,7 @@ export function ScenariosPage() {
             </strong>
             <span>
               {isGenerating
-                ? `任务 ${generationJob?.id.slice(0, 8) || '创建中'}，${aiJobStageLabel(generationJob)}${aiJobModelLabel(generationJob)}，已等待 ${generationElapsed} 秒。完成后会自动插入列表第一位。`
+                ? `${lastProviderSwitch ? `${providerSwitchLabel(lastProviderSwitch)}，` : ''}任务 ${generationJob?.id.slice(0, 8) || '创建中'}，${aiJobStageLabel(generationJob)}${aiJobModelLabel(generationJob)}，已等待 ${generationElapsed} 秒${lastProviderSwitch ? '（切换后重新计时）' : ''}。完成后会自动插入列表第一位。`
                 : lastGenerationFailure
                   ? `任务 ${lastGenerationFailure.jobId ? lastGenerationFailure.jobId.slice(0, 8) : '未知'} 失败：${lastGenerationFailure.message}。${lastGenerationFailure.validationErrors.length > 0 ? `校验项：${lastGenerationFailure.validationErrors.join('；')}。` : ''}${formatGenerationFailureMeta(lastGenerationFailure)}`
                   : lastGenerationCanceled
@@ -563,6 +564,24 @@ function scenarioSourceLabel(item: ScenarioQuestion) {
   if (item.source === 'llm_generated') return 'AI生成'
   if (item.source === 'ugc_structured') return '用户生成'
   return '系统生成'
+}
+
+// provider 回退切换提示：如"DeepSeek 调用失败，已自动切换 GLM 重试"。
+function providerSwitchLabel(switchEvent: { fromProvider: string; toProvider: string } | null) {
+  if (!switchEvent) return ''
+  const from = providerDisplayName(switchEvent.fromProvider)
+  const to = providerDisplayName(switchEvent.toProvider)
+  return `${from} 调用失败，已自动切换 ${to} 重试`
+}
+
+function providerDisplayName(provider: string) {
+  if (provider === 'deepseek') return 'DeepSeek'
+  if (provider === 'glm') return 'GLM'
+  if (provider === 'openai_compatible') return '第三方中转站'
+  if (provider === 'mock') return 'Mock LLM'
+  if (provider === 'qwen') return '通义千问'
+  if (provider === 'ernie') return '文心一言'
+  return provider || '未知模型'
 }
 
 function notifyRouterTelemetryUpdated() {

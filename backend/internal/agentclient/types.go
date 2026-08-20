@@ -59,6 +59,10 @@ type TurnAnalysis struct {
 	// 整轮会以 agent_invalid_response 失败，而且失败发生在正文流完之后，
 	// 表现为"明明响应成功却被判无效"。
 	PublicSummary         string   `json:"public_summary"`
+	Intent                string   `json:"intent"`
+	RequestedActionRaw    string   `json:"requested_action_raw"`
+	ClarificationTarget   string   `json:"clarification_target"`
+	ActionMatchStatus     string   `json:"action_match_status"`
 	Actions               []string `json:"actions"`
 	HypothesisID          string   `json:"hypothesis_id"`
 	HypothesisRaw         string   `json:"hypothesis_raw"`
@@ -84,15 +88,22 @@ type Proposal struct {
 }
 
 type PublicTraceEvent struct {
-	Sequence   int                     `json:"sequence"`
-	Kind       string                  `json:"kind"`
-	Status     string                  `json:"status"`
-	Summary    string                  `json:"summary"`
-	Text       string                  `json:"text"`
-	Reasoning  *PublicReasoningSummary `json:"reasoning,omitempty"`
-	Tool       *ToolEventPayload       `json:"tool,omitempty"`
-	ToolName   string                  `json:"tool_name"`
-	DurationMS int                     `json:"duration_ms"`
+	Sequence    int                     `json:"sequence"`
+	Kind        string                  `json:"kind"`
+	Status      string                  `json:"status"`
+	Summary     string                  `json:"summary"`
+	Text        string                  `json:"text"`
+	Reasoning   *PublicReasoningSummary `json:"reasoning,omitempty"`
+	Observation *PublicObservation      `json:"observation,omitempty"`
+	Tool        *ToolEventPayload       `json:"tool,omitempty"`
+	ToolName    string                  `json:"tool_name"`
+	DurationMS  int                     `json:"duration_ms"`
+}
+
+type PublicObservation struct {
+	Action     string `json:"action"`
+	Result     string `json:"result"`
+	IsNegative bool   `json:"is_negative"`
 }
 
 type PublicReasoningSummary struct {

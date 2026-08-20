@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from time import perf_counter
@@ -24,6 +26,7 @@ from hiddenworld.contracts import (
     Observation,
     Proposal,
     PublicAnswerComparison,
+    PublicObservation,
     PublicReasoningSummary,
     PublicTraceEvent,
     ToolEventPayload,
@@ -37,7 +40,7 @@ from hiddenworld.kernel import (
     RootCauseVerifier,
     TeachingPolicy,
 )
-from hiddenworld.kernel.guard import extract_forbidden_entities
+from hiddenworld.kernel.guard import Guard, extract_forbidden_entities
 from hiddenworld.retry import run_with_network_retries
 from hiddenworld.streaming_json import StreamingFieldExtractor
 
@@ -53,6 +56,7 @@ ReplyDeltaCallback = Callable[[str], Awaitable[None]]
 # 卡住兜底释放的阈值。Go 侧 scenarioStallUnlockThreshold 必须与此保持一致——
 # Python 提前判断只是为了不发出注定被拒的提议，真正的权威复核在 Go。
 STALL_UNLOCK_THRESHOLD = 2
+logger = logging.getLogger("hiddenworld.runtime")
 
 
 class _StreamSequencer:
@@ -117,6 +121,7 @@ class HiddenWorldRuntime:
             hypotheses=request.hidden_world.hypotheses,
             transcript=request.transcript,
             known_actions=[item.action for item in request.hidden_world.observations],
+            virtual_tools=list(request.hidden_world.virtual_tools),
         )
 
         async def emit_reasoning_delta(piece: str) -> None:
@@ -151,26 +156,33 @@ class HiddenWorldRuntime:
         interpreter_result = await run_with_network_retries(interpreter_call)
         interpreter_ms = _elapsed_ms(interpreter_started)
         analysis = interpreter_result.output
+        analysis = _resolve_declared_virtual_tool(request, analysis)
         if on_turn_analysis is not None:
             await on_turn_analysis(analysis)
 
         # 低置信 / 噪声时不把动作提交进状态：Go 的 approveScenarioProposals 对
         # release_evidence / record_action / record_established_fact /
         # set_current_hypothesis 全部有 lowConfidence 闸门，这里发出去整轮会被拒。
-        # 所以低置信档位不能靠"少提交一点"来放宽——唯一的安全出口是把未提交的
-        # 意图另外告诉 Mentor，而 Mentor 本来就能从 transcript 读到学生原话，
-        # 再加一个字段只会拓宽 MentorDeps 这条显式守卫的安全边界，不划算。
-        actions = [] if analysis.is_low_confidence() or analysis.is_noise else analysis.actions
-        approved_releases = ClueGate().approve(
-            request.hidden_world,
-            actions=actions,
-            collected_evidence=request.learner_state.collected_evidence,
-            max_releases=request.budget.max_releases,
+        # 所以低置信档位不能靠"少提交一点"来放宽；当前消息仍由 Mentor 通过
+        # MentorDeps.current_user_message 显式接收，但不会因此获得隐藏状态。
+        is_clarification = analysis.intent in {"clarification", "explanation_request"}
+        action_match_is_unsafe = analysis.action_match_status in {"unsupported", "ambiguous"}
+        actions = [] if analysis.is_low_confidence() or analysis.is_noise or is_clarification or action_match_is_unsafe else analysis.actions
+        approved_releases = (
+            []
+            if is_clarification
+            else ClueGate().approve(
+                request.hidden_world,
+                actions=actions,
+                collected_evidence=request.learner_state.collected_evidence,
+                max_releases=request.budget.max_releases,
+            )
         )
         # 卡住兜底：说不出动作的学生走不到上面那条路，越求助拿到的越少。
         stall_release = ""
         if (
-            not approved_releases
+            not is_clarification
+            and not approved_releases
             and analysis.is_stuck
             and request.learner_state.stalled_turns >= STALL_UNLOCK_THRESHOLD
         ):
@@ -180,15 +192,19 @@ class HiddenWorldRuntime:
             )
             if stall_release:
                 approved_releases = [stall_release]
-        observations = _observe_actions(
+        observations = [] if is_clarification else _observe_actions(
             request,
             actions=actions,
             approved_releases=approved_releases,
         )
-        projected_state = EvidenceEngine().advance(
-            request.learner_state,
-            analysis=analysis,
-            observations=observations,
+        projected_state = (
+            request.learner_state.model_copy(deep=True)
+            if is_clarification
+            else EvidenceEngine().advance(
+                request.learner_state,
+                analysis=analysis,
+                observations=observations,
+            )
         )
         if stall_release:
             # 刻意放在 advance 之后：兜底释放是系统给的，不是学生挣来的，
@@ -259,6 +275,7 @@ class HiddenWorldRuntime:
 
         public_trace = _public_trace_before_mentor(
             public_summary=analysis.public_summary,
+            observations=observations,
             analysis_contains_answer=analysis.contains_answer_attempt,
             answer_attempt_id=answer_attempt_id,
             answer_public=answer_public,
@@ -272,6 +289,11 @@ class HiddenWorldRuntime:
             transcript=request.transcript,
             learner_state=_learner_view(request, projected_state),
             constraints=constraints,
+            current_user_message=request.user_message,
+            current_intent=analysis.intent,
+            requested_action_raw=analysis.requested_action_raw,
+            action_match_status=analysis.action_match_status,
+            simulation_tools=_simulation_tool_labels(request),
             released_evidence=_released_evidence_text(request, projected_state),
             answer_comparison=answer_public,
             guard_only=GuardContext(
@@ -280,11 +302,36 @@ class HiddenWorldRuntime:
                 may_release=approved_releases,
             ),
         )
-        mentor_result = await run_with_network_retries(
-            lambda: self._run_mentor(mentor_deps, on_reply_delta=on_reply_delta)
-        )
+        mentor_fallback = False
+        try:
+            mentor_result = await run_with_network_retries(
+                lambda: self._run_mentor(mentor_deps, on_reply_delta=on_reply_delta)
+            )
+            mentor_action = mentor_result.output
+        except Exception:
+            # Interpreter 和确定性内核已经完成，本轮公开观察也已经准备好；
+            # Mentor 上游短暂失败时，不能把整轮已完成的排查一起判成失败。
+            # 兜底正文只使用当前已公开上下文，并继续走同一个 Guard。
+            mentor_fallback = True
+            logger.exception("mentor generation failed; using public-context fallback")
+            mentor_action = _fallback_mentor_action(
+                request=request,
+                analysis=analysis,
+                observations=observations,
+                constraints=constraints,
+                guard_context=mentor_deps.guard_only,
+            )
         mentor_ms = _elapsed_ms(mentor_started)
-        mentor_action = mentor_result.output
+        mentor_action = mentor_action.model_copy(
+            update={"reply": _normalize_mentor_reply(request, analysis, observations, mentor_action.reply)},
+        )
+        if mentor_fallback:
+            # 规范化后的文本仍通过 Guard，避免兜底逻辑成为安全校验旁路。
+            mentor_action = Guard().validate(
+                mentor_action,
+                constraints=constraints,
+                context=mentor_deps.guard_only,
+            )
         final_trace = _public_trace_after_mentor(start_sequence=len(public_trace) + 1)
         public_trace.extend(final_trace)
         await _emit_public_trace(on_public_trace, final_trace, sequencer)
@@ -303,7 +350,10 @@ class HiddenWorldRuntime:
             public_trace=public_trace,
             internal_verification=verification,
             internal_audit=AuditTrace(
-                reason_codes=_reason_codes(analysis, observations, answer_public),
+                reason_codes=(
+                    _reason_codes(analysis, observations, answer_public)
+                    + (["mentor_fallback"] if mentor_fallback else [])
+                ),
                 mentor_rationale=mentor_action.rationale,
                 interpreter_ms=interpreter_ms,
                 mentor_ms=mentor_ms,
@@ -390,15 +440,34 @@ def _observe_actions(
     observations: list[Observation] = []
     engine = HiddenWorldEngine()
     for action in actions:
+        configured = next((item for item in request.hidden_world.observations if item.action == action), None)
+        if configured is None:
+            continue
+        # 已经公开过同一工具的完整结果时，只保留状态上下文，不再重复释放卡片。
+        # 若此前只是因为前置不足而得到中性回应，所需证据仍未收集，允许再次查询。
+        if action in request.learner_state.actions_taken:
+            configured_evidence = set(configured.yields_evidence)
+            prerequisites_ready = all(
+                set(node.prerequisites).issubset(available)
+                for evidence_id in configured_evidence
+                if (node := request.hidden_world.evidence_by_id(evidence_id)) is not None
+            )
+            if (not configured_evidence or configured_evidence.issubset(available)) and prerequisites_ready:
+                continue
         observation = engine.observe(
             request.hidden_world,
             action=action,
             collected_evidence=available,
         )
-        allowed_yields = [item for item in observation.yields_evidence if item in approved]
-        if observation.yields_evidence and not allowed_yields:
+        allowed_yields = [item for item in observation.yields_evidence if item in approved or item in available]
+        if observation.yields_evidence and set(allowed_yields) != set(observation.yields_evidence):
             observation = observation.model_copy(
-                update={"yields_evidence": [], "rules_out": []},
+                update={
+                    "result": "本轮暂未形成新的可公开观察。",
+                    "is_negative": False,
+                    "yields_evidence": [],
+                    "rules_out": [],
+                },
                 deep=True,
             )
         elif allowed_yields != observation.yields_evidence:
@@ -406,6 +475,90 @@ def _observe_actions(
         available.update(allowed_yields)
         observations.append(observation)
     return observations
+
+
+def _resolve_declared_virtual_tool(request: AgentTurnRequest, analysis):
+    """把自然语言和只读查询绑定到题目声明的唯一虚拟工具。
+
+    LLM 仍负责意图、假设和教学状态判断；这里负责安全边界内的确定性映射，
+    避免模型把“数据库日志”误改写成相近的网关动作。
+    """
+
+    tools = request.hidden_world.virtual_tools
+    if not tools or analysis.intent in {"clarification", "explanation_request", "help_request", "chat"}:
+        return analysis
+    text = request.user_message.strip().lower()
+    if not text:
+        return analysis
+
+    candidates = []
+    for tool in tools:
+        signals = [item.strip().lower() for item in [*tool.aliases, *tool.query_patterns] if item.strip()]
+        if any(signal in text for signal in signals):
+            candidates.append(tool)
+
+    # 对 SELECT/SHOW/EXPLAIN 等只读语句，优先按题目声明的 query_patterns 匹配；
+    # 没有匹配时不执行、不猜测，继续走 unsupported 分支。
+    readonly = bool(re.match(r"^(select|show|describe|desc|explain|with)\b", text, re.I))
+    external_command = bool(re.match(r"^(curl|wget|ssh|kubectl|docker|bash|sh|cat|tail|grep|psql|mysql)\b", text, re.I))
+    if readonly and candidates:
+        pass
+    elif readonly and not candidates:
+        candidates = [
+            tool
+            for tool in tools
+            if any(pattern.lower() in text for pattern in tool.query_patterns if pattern.strip())
+        ]
+
+    if (readonly or external_command) and not candidates:
+        return analysis.model_copy(
+            update={
+                "actions": [],
+                "requested_action_raw": request.user_message.strip(),
+                "action_match_status": "unsupported",
+                "intent": "investigate",
+            }
+        )
+
+    unique_actions = {tool.observation_action for tool in candidates}
+    if len(unique_actions) != 1:
+        return analysis
+    action = next(iter(unique_actions))
+    return analysis.model_copy(
+        update={
+            "actions": [action],
+            "requested_action_raw": request.user_message.strip(),
+            "action_match_status": "matched",
+            "intent": "investigate",
+        }
+    )
+
+
+def _simulation_tool_labels(request: AgentTurnRequest) -> list[str]:
+    if request.hidden_world.virtual_tools:
+        return [f"{item.kind}：{item.target}" for item in request.hidden_world.virtual_tools]
+    return [item.action for item in request.hidden_world.observations]
+
+
+def _normalize_mentor_reply(request: AgentTurnRequest, analysis, observations: list[Observation], reply: str) -> str:
+    """兜住模型偶发的现实环境措辞和求助答非所问。"""
+
+    text = (reply or "").strip()
+    help_request = analysis.intent == "help_request" or any(
+        phrase in request.user_message for phrase in ("我怎么看", "怎么从日志动手", "不知道怎么看", "怎么查")
+    )
+    if help_request:
+        return "这是题目自带的模拟文本环境，不需要连接真实服务器。你可以直接用自然语言说想查的对象，例如“看回调服务日志”；也可以输入只读 SQL、日志查询或配置查询语句，系统会在本题的虚拟数据上返回线索。"
+    if analysis.action_match_status == "unsupported" and analysis.requested_action_raw:
+        labels = _simulation_tool_labels(request)
+        available = "、".join(labels[:4]) if labels else "日志、配置、指标或依赖"
+        return f"当前题目没有声明“{analysis.requested_action_raw}”对应的模拟查询，不会替换成相近动作。可以改查：{available}。"
+    prohibited = ("去服务器", "登录服务器", "打开配置文件", "到终端", "执行命令", "回来后", "回来看")
+    if any(phrase in text for phrase in prohibited):
+        if observations:
+            return "这次查询的模拟结果已经放在线索卡里。先根据其中的时间、目标和状态字段判断异常位于哪一段，再决定要继续查询日志、配置还是依赖。"
+        return "这是题目自带的模拟文本环境，直接在输入框描述要查的对象即可；系统会返回当前题目允许的虚拟线索。"
+    return text or "可以继续用自然语言描述想查的对象，或输入只读 SQL、日志查询和配置查询语句；系统只会在本题虚拟数据上模拟。"
 
 
 def _learner_view(request: AgentTurnRequest, state: LearnerState) -> LearnerStateView:
@@ -492,6 +645,7 @@ def _state_proposals(
 def _public_trace_before_mentor(
     *,
     public_summary: str,
+    observations: list[Observation],
     analysis_contains_answer: bool,
     answer_attempt_id: str,
     answer_public: PublicAnswerComparison | None,
@@ -514,6 +668,19 @@ def _public_trace_before_mentor(
                 reasoning=PublicReasoningSummary(
                     stage="understanding_message",
                     text=summary_text,
+                ),
+            )
+        )
+        sequence += 1
+    for observation in observations:
+        trace.append(
+            PublicTraceEvent(
+                sequence=sequence,
+                kind="observation_result",
+                observation=PublicObservation(
+                    action=observation.action,
+                    result=observation.result,
+                    is_negative=observation.is_negative,
                 ),
             )
         )

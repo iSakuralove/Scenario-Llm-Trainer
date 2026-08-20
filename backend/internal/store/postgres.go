@@ -1459,7 +1459,7 @@ func (s *PostgresStore) CreateAIJob(job domain.AIJob) (domain.AIJob, error) {
 
 func (s *PostgresStore) GetAIJob(id string) (*domain.AIJob, bool) {
 	row := s.pool.QueryRow(context.Background(), `
-		SELECT id, user_id, kind, status, stage, progress, error_message, provider, model, validation_errors,
+		SELECT id, user_id, kind, status, stage, progress, error_message, provider, model, validation_errors, fallback_events,
 		       validated, fallback_used, result_question_id, created_at, started_at,
 		       completed_at, updated_at
 		FROM ai_jobs
@@ -1490,7 +1490,7 @@ func (s *PostgresStore) ListAIJobs(limit int) []domain.AIJob {
 		limit = 500
 	}
 	rows, err := s.pool.Query(context.Background(), `
-		SELECT id, user_id, kind, status, stage, progress, error_message, provider, model, validation_errors,
+		SELECT id, user_id, kind, status, stage, progress, error_message, provider, model, validation_errors, fallback_events,
 		       validated, fallback_used, result_question_id, created_at, started_at,
 		       completed_at, updated_at
 		FROM ai_jobs
@@ -1880,12 +1880,16 @@ func (s *PostgresStore) upsertAIJob(ctx context.Context, job *domain.AIJob) erro
 	if err != nil {
 		return err
 	}
+	fallbackEvents, err := marshal(job.FallbackEvents)
+	if err != nil {
+		return err
+	}
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO ai_jobs
-		    (id, user_id, kind, status, stage, progress, error_message, provider, model, validation_errors,
+		    (id, user_id, kind, status, stage, progress, error_message, provider, model, validation_errors, fallback_events,
 		     validated, fallback_used, result_question_id, created_at, started_at,
 		     completed_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 		ON CONFLICT (id) DO UPDATE SET
 		    status = EXCLUDED.status,
 		    stage = EXCLUDED.stage,
@@ -1894,6 +1898,7 @@ func (s *PostgresStore) upsertAIJob(ctx context.Context, job *domain.AIJob) erro
 		    provider = EXCLUDED.provider,
 		    model = EXCLUDED.model,
 		    validation_errors = EXCLUDED.validation_errors,
+		    fallback_events = EXCLUDED.fallback_events,
 		    validated = EXCLUDED.validated,
 		    fallback_used = EXCLUDED.fallback_used,
 		    result_question_id = EXCLUDED.result_question_id,
@@ -1901,7 +1906,7 @@ func (s *PostgresStore) upsertAIJob(ctx context.Context, job *domain.AIJob) erro
 		    completed_at = EXCLUDED.completed_at,
 		    updated_at = EXCLUDED.updated_at
 	`, job.ID, job.UserID, job.Kind, job.Status, job.Stage, job.Progress,
-		emptyToNil(job.ErrorMessage), emptyToNil(job.Provider), emptyToNil(job.Model), validationErrors,
+		emptyToNil(job.ErrorMessage), emptyToNil(job.Provider), emptyToNil(job.Model), validationErrors, fallbackEvents,
 		job.Validated, job.FallbackUsed, emptyToNil(job.ResultQuestionID), job.CreatedAt,
 		job.StartedAt, job.CompletedAt, job.UpdatedAt)
 	return err
@@ -2519,9 +2524,9 @@ func scanAuditEventRows(rows pgx.Rows) (domain.AuditEvent, error) {
 func scanAIJob(row scanner) (*domain.AIJob, bool) {
 	var item domain.AIJob
 	var stage, errorMessage, provider, model, resultQuestionID *string
-	var validationErrors []byte
+	var validationErrors, fallbackEvents []byte
 	err := row.Scan(&item.ID, &item.UserID, &item.Kind, &item.Status, &stage,
-		&item.Progress, &errorMessage, &provider, &model, &validationErrors, &item.Validated, &item.FallbackUsed,
+		&item.Progress, &errorMessage, &provider, &model, &validationErrors, &fallbackEvents, &item.Validated, &item.FallbackUsed,
 		&resultQuestionID, &item.CreatedAt, &item.StartedAt, &item.CompletedAt,
 		&item.UpdatedAt)
 	if err != nil {
@@ -2545,6 +2550,10 @@ func scanAIJob(row scanner) (*domain.AIJob, bool) {
 	_ = unmarshal(validationErrors, &item.ValidationErrors)
 	if item.ValidationErrors == nil {
 		item.ValidationErrors = []string{}
+	}
+	_ = unmarshal(fallbackEvents, &item.FallbackEvents)
+	if item.FallbackEvents == nil {
+		item.FallbackEvents = []string{}
 	}
 	return &item, true
 }

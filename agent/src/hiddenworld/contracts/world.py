@@ -82,6 +82,31 @@ class Observation(_Strict):
     )
 
 
+class VirtualTool(_Strict):
+    """题目自带的只读虚拟工具声明。
+
+    工具只描述可模拟的查询入口，运行时永远不会执行 SQL、Shell、HTTP 或外部 API。
+    ``simulated_output`` 必须与对应 Observation 的公开结果保持一致；真正的证据
+    释放仍由 Observation/EvidenceEngine 控制。
+    """
+
+    tool_id: str = Field(description='稳定的工具标识，如 "tool.logs.callback"')
+    kind: str = Field(description="工具类型：logs/config/metrics/database/dependency")
+    target: str = Field(description="可查询的对象，例如回调服务日志或订单库写入")
+    aliases: list[str] = Field(default_factory=list, description="自然语言入口别名")
+    query_patterns: list[str] = Field(
+        default_factory=list,
+        description="允许识别的只读 SQL、日志查询或配置查询片段；仅用于意图匹配",
+    )
+    redacted_parameters: list[str] = Field(
+        default_factory=list,
+        description="可在公开线索中显示的脱敏参数名",
+    )
+    simulated_output: str = Field(description="该工具在题目虚拟数据集上的模拟输出")
+    observation_action: str = Field(description="映射到 observations 的规范动作")
+    evidence_ids: list[str] = Field(default_factory=list, description="该工具可关联的公开 evidence id")
+
+
 
 class RootCause(_Strict):
     """真相。永不进入任何 prompt。"""
@@ -121,6 +146,30 @@ class MisconceptionRule(_Strict):
     why_wrong: str = Field(description="为什么这条路走不通。仅供内部审计与 TeachingPolicy 参考。")
 
 
+class ArchitectureDiagramNode(_Strict):
+    """后端生成的架构图节点；仅作为题面上下文透传。"""
+
+    id: str
+    label: str
+
+
+class ArchitectureDiagramEdge(_Strict):
+    """后端生成的架构图连线；仅作为题面上下文透传。"""
+
+    from_node: str = Field(alias="from")
+    to: str
+    label: str = ""
+    style: str = ""
+
+
+class ArchitectureDiagramSpec(_Strict):
+    """结构化架构图描述，与 Go 侧 PublicScenario 保持兼容。"""
+
+    direction: str = ""
+    nodes: list[ArchitectureDiagramNode] = Field(default_factory=list)
+    edges: list[ArchitectureDiagramEdge] = Field(default_factory=list)
+
+
 class PublicScenario(_Strict):
     """学生可见的题面。这是唯一允许进入 Mentor 上下文的场景描述。"""
 
@@ -129,6 +178,10 @@ class PublicScenario(_Strict):
     environment: str = Field(default="", description="架构/环境说明")
     initial_symptoms: list[str] = Field(default_factory=list, description="学生一开始就知道的现象")
     architecture_diagram: str = Field(default="", description="Mermaid 源码，可为空")
+    architecture_diagram_spec: ArchitectureDiagramSpec | None = Field(
+        default=None,
+        description="后端生成的结构化架构图描述；Agent 只读，不参与根因判断。",
+    )
 
 
 class HiddenWorld(_Strict):
@@ -138,6 +191,10 @@ class HiddenWorld(_Strict):
     hypotheses: list[Hypothesis]
     evidence_graph: list[EvidenceNode]
     observations: list[Observation]
+    virtual_tools: list[VirtualTool] = Field(
+        default_factory=list,
+        description="题目自带的虚拟工具目录；为空时由 observations 向后兼容",
+    )
     solution_rubric: SolutionRubric
     misconception_rules: list[MisconceptionRule] = Field(default_factory=list)
 

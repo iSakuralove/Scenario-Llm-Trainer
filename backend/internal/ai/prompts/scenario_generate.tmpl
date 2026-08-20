@@ -16,7 +16,12 @@
       "description": "...",
       "environment": "...",
       "initial_symptoms": ["..."],
-      "architecture_diagram": ""
+      "architecture_diagram": "",
+      "architecture_diagram_spec": {
+        "direction": "TD",
+        "nodes": [{"id":"Client","label":"客户端"}, {"id":"Gateway","label":"网关"}, {"id":"Service","label":"业务服务"}],
+        "edges": [{"from":"Client","to":"Gateway","label":"请求","style":"solid"}, {"from":"Gateway","to":"Service","label":"转发","style":"solid"}]
+      }
     },
     "hidden_world": {
       "root_cause": {
@@ -38,6 +43,9 @@
       "observations": [
         {"action":"inspect:...","result":"...","is_negative":false,"yields_evidence":["E_..."],"rules_out":[],"unmet_prerequisite_result":""}
       ],
+      "virtual_tools": [
+        {"tool_id":"tool.logs.example","kind":"logs","target":"可查询对象","aliases":["看日志"],"query_patterns":["service=example"],"redacted_parameters":["time_range"],"simulated_output":"与对应 observation 一致的模拟输出","observation_action":"inspect:logs.example","evidence_ids":["E_..."]}
+      ],
       "solution_rubric": {
         "required_actions": ["..."],
         "verification_steps": ["..."],
@@ -57,7 +65,14 @@
 - 每个 evidence_id 只能由一个 observation 产出；前置关系不能成环，所有充分证据路径必须可由 observation 走通。
 - 每个干扰假设至少要被一个阴性 observation 的 rules_out 排除。
 - 未覆盖动作也要有自然的中性回应，不得暴露隐藏答案或“系统机制”。
+- 对日志、配置、指标、数据库或依赖类题目，优先声明 virtual_tools；每个工具必须有自然语言别名、只读查询片段、脱敏参数、模拟输出、对应 observation_action 和 evidence_ids。模拟输出只能来自题目虚拟数据，不得要求访问真实环境。
 - public_scenario.architecture_diagram 必须保持为空字符串；不要手写 Mermaid。
+- 必须输出 architecture_diagram_spec：后端将据此确定性渲染架构图（Mermaid）。
+- architecture_diagram_spec.direction 只能是 TD 或 LR。
+- architecture_diagram_spec.nodes 至少 3 个（体现题面架构，如 客户端/网关/服务/存储/依赖），edges 至少 2 条。
+- architecture_diagram_spec.nodes[].id 只能使用英文字母开头的 A-Z/a-z/0-9/_，例如 Client、DNSResolver、BadIP；不要使用中文、连字符或空格作为 id。
+- architecture_diagram_spec.nodes[].label 可以使用中文、括号、冒号、斜杠等业务文本。
+- architecture_diagram_spec.edges[].style 只能省略、solid 或 dotted。
 - category 只能使用 logs、metrics、data、change、resource、dependency、behavior 之一。
 - 本次生成 nonce：{{.Nonce}}。请围绕 nonce 自主选择不同故障现象、指标和排查链路，避免重复模板题。
 - 标签参考：{{.TagsText}}。
@@ -70,3 +85,12 @@
   证据路径方向：{{.EvidencePathHintsText}}
   常见误解方向：{{.MisconceptionHintsText}}
   解决方案方向：{{.SolutionHintsText}}
+{{- if .RepairInstruction}}
+修复模式：你上一次生成的题目未通过结构校验，错误如下：
+{{.RepairInstruction}}
+请重新生成完整题目，这一次必须优先满足上述被违反的约束。修复要点：
+- 报错为“distractor hypothesis has no ruling-out observation: H_X”时：为该假设新增或修改一条阴性观察（is_negative=true），把 H_X 放进其 rules_out；
+- 报错为“hidden world requires at least one negative observation”时：把某条排除干扰假设的观察设为 is_negative=true；
+- 报错为“evidence is produced by multiple observations”或图不可达/成环时：调整 prerequisites 或 yields_evidence，保证每个证据恰好由一个观察产出且依赖无环可走通；
+- 写完后自查：每个干扰假设（非 accepted、非 H_OTHER）是否都能在 observations 的 rules_out 中找到。
+{{- end}}

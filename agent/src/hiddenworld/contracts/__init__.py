@@ -10,6 +10,7 @@ from __future__ import annotations
 from .answer import InternalAnswerComparison, PublicAnswerComparison, SupportStatus
 from .deps import GuardContext, InterpreterDeps, MentorDeps
 from .events import (
+    PublicObservation,
     PublicReasoningSummary,
     PublicTraceEvent,
     ReasoningStage,
@@ -55,11 +56,13 @@ from .world import (
     PublicScenario,
     RootCause,
     SolutionRubric,
+    VirtualTool,
 )
 
 # 会被学生的浏览器看到的每一个类型。契约测试逐个扫描它们的 schema。
 PUBLIC_MODELS = (
     PublicAnswerComparison,
+    PublicObservation,
     PublicReasoningSummary,
     PublicTraceEvent,
     RunEvent,
@@ -153,9 +156,11 @@ __all__ = [
     "MisconceptionRule",
     "MustNotConstraint",
     "Observation",
+    "VirtualTool",
     "Proposal",
     "ProposalKind",
     "PublicAnswerComparison",
+    "PublicObservation",
     "PublicReasoningSummary",
     "PublicScenario",
     "PublicTraceEvent",

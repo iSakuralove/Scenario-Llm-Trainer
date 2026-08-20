@@ -56,11 +56,13 @@ export function aiCapabilitySummary(status: AIStatus | null) {
 
 const defaultGLMModelLabel = 'glm-4.7'
 
+// fallbackUsed 只说明"发生过回退"，不代表降级到 mock。
+// 只有最终 provider 是 mock 才是 Mock 兜底；GLM 等真实模型接管时按实际 provider 展示。
 export function aiProviderLabel(provider?: string, fallbackUsed?: boolean) {
-  if (fallbackUsed) return 'Mock LLM 兜底'
-  if (provider === 'deepseek') return 'DeepSeek deepseek-v4-flash'
-  if (provider === 'glm') return `GLM ${defaultGLMModelLabel}`
-  if (provider === 'openai_compatible') return '第三方中转站'
+  if (provider === 'deepseek') return fallbackUsed ? 'DeepSeek deepseek-v4-flash（回退后接管）' : 'DeepSeek deepseek-v4-flash'
+  if (provider === 'glm') return `GLM ${defaultGLMModelLabel}${fallbackUsed ? '（回退接管）' : ''}`
+  if (provider === 'openai_compatible') return fallbackUsed ? '第三方中转站（回退后接管）' : '第三方中转站'
+  if (provider === 'mock') return 'Mock LLM 兜底'
   return provider || '未知来源'
 }
 

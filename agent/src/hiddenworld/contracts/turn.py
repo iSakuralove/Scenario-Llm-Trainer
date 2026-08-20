@@ -43,6 +43,25 @@ class TurnAnalysis(BaseModel):
             "这是学生唯一会看到的解析过程，先写它再做后面的判断。"
         ),
     )
+    intent: str = Field(
+        default="investigate",
+        description=(
+            "学生当前消息的高层意图：investigate（要求检查/排查）、clarification（澄清上一句话）、"
+            "explanation_request（要求解释公开信息）、answer_attempt（提交结论）、help_request（求助）、chat。"
+        ),
+    )
+    requested_action_raw: str = Field(
+        default="",
+        description="学生请求检查但无法映射到规范动作时，原样保留其请求；没有检查请求时为空字符串。",
+    )
+    clarification_target: str = Field(
+        default="",
+        description="学生要求澄清的对象或原话；不是澄清/解释请求时为空字符串。",
+    )
+    action_match_status: str = Field(
+        default="none",
+        description="动作匹配状态：matched、unsupported、ambiguous、none。",
+    )
     actions: list[str] = Field(
         description='学生本轮想做的观察动作，如 ["inspect:metrics.cpu"]。没有就给空数组。',
     )
