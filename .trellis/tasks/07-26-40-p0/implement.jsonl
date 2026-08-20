@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "面试舱页面改动需遵循组件与测试锚点约定"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "历史清空的异步错误处理走 store/页面状态约定"}
+{"file": ".trellis/spec/backend/interview-launchpad-contracts.md", "reason": "面试轮次与作答落库契约，影响时间轴与收束判定"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "SSE delta 从 handler 到 agent 再到前端 store 的跨层链路"}
