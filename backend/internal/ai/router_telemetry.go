@@ -165,7 +165,7 @@ func classifyRouterError(err error) string {
 	}
 	message := strings.ToLower(err.Error())
 	switch {
-	case strings.Contains(message, "schema"), strings.Contains(message, "json"), strings.Contains(message, "validate"):
+	case strings.Contains(message, "schema"), strings.Contains(message, "json"), strings.Contains(message, "validate"), strings.Contains(message, "validation"):
 		return "validation"
 	case strings.Contains(message, "timeout"), strings.Contains(message, "deadline"):
 		return "timeout"

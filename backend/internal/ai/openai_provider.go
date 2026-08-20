@@ -172,6 +172,7 @@ func (p *OpenAICompatibleProvider) GenerateScenario(ctx context.Context, req Sce
 		"EvidencePathHintsText":  strings.Join(req.Constraints.EvidencePathHints, "、"),
 		"MisconceptionHintsText": strings.Join(req.Constraints.MisconceptionHints, "、"),
 		"SolutionHintsText":      strings.Join(req.Constraints.SolutionHints, "、"),
+		"RepairInstruction":      req.PreviousValidationError,
 	})
 	if err != nil {
 		return domain.ScenarioQuestion{}, err
@@ -633,6 +634,8 @@ func (q domainQuestion) toDomain(req ScenarioGenerationRequest) domain.ScenarioQ
 	if strings.TrimSpace(publicScenario.Description) == "" {
 		publicScenario.Description = q.Description
 	}
+	// ArchitectureDiagram 由后端在 PrepareScenarioQuestion 阶段从
+	// ArchitectureDiagramSpec 确定性渲染；此处仅清空 AI 可能手写的 Mermaid。
 	publicScenario.ArchitectureDiagram = ""
 	content := q.Content.toDomain(publicScenario)
 	return domain.ScenarioQuestion{

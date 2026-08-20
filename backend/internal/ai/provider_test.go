@@ -300,19 +300,27 @@ func TestConfigFromEnvDeepSeekWinsOverJianyi(t *testing.T) {
 	t.Setenv("LLM_MODEL", "gpt-5.5")
 	t.Setenv("JIANYI_API_KEY", "jianyi-test-key")
 	t.Setenv("DEEPSEEK_KEY", "deepseek-test-key")
+	t.Setenv("GLM_API_KEY", "")
+	t.Setenv("QWEN_API_KEY", "")
+	t.Setenv("ERNIE_API_KEY", "")
 
 	cfg := ConfigFromEnv()
-	if cfg.Provider != ProviderDeepSeek {
-		t.Fatalf("expected deepseek to win, got %s", cfg.Provider)
+	// 显式网关配置（LLM_BASE_URL+LLM_API_KEY 同时存在）现在优先于
+	// 残留的厂商 key：统一走 LiteLLM 网关时不应被失效的 DeepSeek key 抢占。
+	if cfg.Provider != ProviderOpenAICompatible {
+		t.Fatalf("expected openai_compatible gateway to win, got %s", cfg.Provider)
 	}
-	if cfg.BaseURL != defaultDeepSeekBaseURL {
-		t.Fatalf("expected deepseek base url, got %s", cfg.BaseURL)
+	if cfg.BaseURL != "https://jeniya.top" {
+		t.Fatalf("expected gateway base url, got %s", cfg.BaseURL)
 	}
-	if cfg.Model != defaultDeepSeekModel {
-		t.Fatalf("expected deepseek model, got %s", cfg.Model)
+	if cfg.Model != "gpt-5.5" {
+		t.Fatalf("expected gateway model, got %s", cfg.Model)
 	}
-	if cfg.APIKey != "deepseek-test-key" {
-		t.Fatal("expected DEEPSEEK_KEY to override stale compatible key")
+	if cfg.APIKey != "stale-compatible-key" {
+		t.Fatal("expected gateway key to stay primary")
+	}
+	if _, ok := cfg.ProviderConfigs[ProviderDeepSeek]; !ok {
+		t.Fatal("expected deepseek to remain available as fallback provider config")
 	}
 }
 

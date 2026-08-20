@@ -22,7 +22,9 @@ const (
 
 	defaultDeepSeekBaseURL  = "https://api.deepseek.com"
 	defaultDeepSeekModel    = "deepseek-v4-flash"
-	scenarioGenerateTimeout = 75 * time.Second
+	// HiddenWorld 架构的生题输出大 JSON（public_scenario + hidden_world 全量结构），
+	// glm-4.7 关思考后实测仍需 90s+；上限提到 150s，job 外层用 180s。
+	scenarioGenerateTimeout = 150 * time.Second
 	defaultJianyiBaseURL    = "https://jeniya.top"
 	defaultJianyiModel      = "gpt-5.5"
 	defaultQwenBaseURL      = "https://dashscope.aliyuncs.com/compatible-mode"
@@ -96,6 +98,10 @@ type ScenarioGenerationRequest struct {
 	Constraints  ScenarioGenerationConstraints
 	UserID       string
 	Nonce        string
+	// PreviousValidationError 携带上一次生成的内容校验错误；
+	// 非空时 prompt 会附加修复指令，让模型在原有输出基础上定向修正，
+	// 避免每次重试都从零随机重猜 HiddenWorld 的全部结构约束。
+	PreviousValidationError string
 }
 
 type ScenarioGenerationConstraints struct {
@@ -253,11 +259,38 @@ func ConfigFromEnv() Config {
 		StreamConfigured: true,
 	}
 	providerConfigs := map[string]Config{}
+	// 显式网关配置（LLM_BASE_URL + LLM_API_KEY）优先于各厂商 key：
+	// 统一走 LiteLLM 网关时，残留的 GLM/DeepSeek key 不应抢主配置。
+	gatewayBaseURL := strings.TrimSpace(os.Getenv("LLM_BASE_URL"))
+	gatewayAPIKey := strings.TrimSpace(os.Getenv("LLM_API_KEY"))
+	gatewayConfigured := gatewayBaseURL != "" && gatewayAPIKey != ""
+	if gatewayConfigured {
+		cfg.Provider = ProviderOpenAICompatible
+		cfg.APIKey = gatewayAPIKey
+		cfg.BaseURL = gatewayBaseURL
+		cfg.Model = strings.TrimSpace(os.Getenv("LLM_MODEL"))
+		providerConfigs[ProviderOpenAICompatible] = Config{
+			Provider:         ProviderOpenAICompatible,
+			APIKey:           gatewayAPIKey,
+			BaseURL:          gatewayBaseURL,
+			Model:            strings.TrimSpace(os.Getenv("LLM_MODEL")),
+			Timeout:          cfg.Timeout,
+			Temperature:      cfg.Temperature,
+			TopP:             cfg.TopP,
+			TopK:             cfg.TopK,
+			MaxTokens:        cfg.MaxTokens,
+			StreamEnabled:    cfg.StreamEnabled,
+			StreamConfigured: true,
+		}
+	}
 	if deepSeekKey != "" {
-		cfg.Provider = ProviderDeepSeek
-		cfg.APIKey = deepSeekKey
-		cfg.Model = ""
-		cfg.BaseURL = ""
+		// 网关接管主配置时，DeepSeek 只降级为 fallback 候选，不再抢 primary。
+		if !gatewayConfigured {
+			cfg.Provider = ProviderDeepSeek
+			cfg.APIKey = deepSeekKey
+			cfg.Model = ""
+			cfg.BaseURL = ""
+		}
 		providerConfigs[ProviderDeepSeek] = Config{
 			Provider:         ProviderDeepSeek,
 			APIKey:           deepSeekKey,
@@ -269,11 +302,12 @@ func ConfigFromEnv() Config {
 			StreamEnabled:    cfg.StreamEnabled,
 			StreamConfigured: true,
 		}
-	} else if jianyiKey != "" {
+	} else if jianyiKey != "" && !gatewayConfigured {
 		cfg.Provider = ProviderOpenAICompatible
 		cfg.APIKey = jianyiKey
 	}
-	if jianyiKey != "" {
+	// 网关已作为主配置时，不让 jianyi key 覆盖 ProviderConfigs 里的网关项。
+	if jianyiKey != "" && !gatewayConfigured {
 		providerConfigs[ProviderOpenAICompatible] = Config{
 			Provider:         ProviderOpenAICompatible,
 			APIKey:           jianyiKey,
@@ -344,9 +378,8 @@ func ConfigFromEnv() Config {
 			StreamEnabled:    cfg.StreamEnabled,
 			StreamConfigured: true,
 		}
-		// GLM 是当前可用的主模型；即使环境中残留不可用的 DeepSeek，
-		// 只要配置了 GLM，就优先使用 GLM，避免每轮先命中失效 provider。
-		if cfg.Provider == "" || glmKey != "" {
+		// 网关已接管主配置时，不再让 GLM key 反向覆盖（仅保留为 fallback 候选）。
+		if cfg.Provider == "" || (!gatewayConfigured && glmKey != "") {
 			cfg.Provider = ProviderGLM
 			cfg.APIKey = glmKey
 			cfg.BaseURL = strings.TrimSpace(os.Getenv("GLM_BASE_URL"))
@@ -782,7 +815,9 @@ func isTerminalScenarioGenerateError(err error) bool {
 		return false
 	}
 	switch classifyRouterError(err) {
-	case "timeout", "validation", "provider", "auth", "rate_limit", "unknown":
+	// network/provider 类错误（连接拒绝、DNS 失败、5xx）恰恰是切换 provider 最能救的场景，
+	// 不列入终止名单；timeout/auth/rate_limit/validation 属于"换家也一样或用户需介入"的终止类。
+	case "timeout", "validation", "auth", "rate_limit":
 		return true
 	default:
 		return errors.Is(err, context.DeadlineExceeded)
@@ -823,6 +858,17 @@ func shouldStopFallback(req RouterRequest, err error, providers []Provider, fail
 	return true
 }
 
+// filterMockProviders 返回剔除 mock 后的 provider 列表；全部是 mock 时返回 nil（保留原链）。
+func filterMockProviders(providers []Provider) []Provider {
+	kept := make([]Provider, 0, len(providers))
+	for _, provider := range providers {
+		if provider.Info().Provider != ProviderMock {
+			kept = append(kept, provider)
+		}
+	}
+	return kept
+}
+
 func providerWithTaskModel(provider Provider, req RouterRequest) Provider {
 	if provider == nil {
 		return nil
@@ -856,6 +902,7 @@ func providerWithTaskModel(provider Provider, req RouterRequest) Provider {
 func (r *Router) call(ctx context.Context, req RouterRequest, fn func(Provider) (interface{}, error), processors ...outputProcessFunc) (interface{}, CallMeta, error) {
 	started := time.Now()
 	_ = ctx
+	fallbackObserver := FallbackObserverFromContext(ctx)
 	if r == nil || r.primary == nil {
 		provider := NewMockProvider()
 		traceID := nextRouterTraceID(req.Task)
@@ -876,6 +923,13 @@ func (r *Router) call(ctx context.Context, req RouterRequest, fn func(Provider) 
 	traceID := nextRouterTraceID(req.Task)
 	attempts := []FallbackAttempt{}
 	providers := r.executableProviders(req)
+	// 严格失败任务（如生题）绝不降级到 mock 模板题：只要链上还有真实 provider，
+	// 就把 mock 从执行链中剔除，任何错误类型都只在真实 provider 之间回退。
+	if req.StrictFailure {
+		if kept := filterMockProviders(providers); len(kept) > 0 {
+			providers = kept
+		}
+	}
 	var firstErr error
 	for index, provider := range providers {
 		provider = providerWithTaskModel(provider, req)
@@ -963,13 +1017,26 @@ func (r *Router) call(ctx context.Context, req RouterRequest, fn func(Provider) 
 			meta.LatencyMS = decision.LatencyMS
 			return nil, meta, err
 		}
-		attempt := fallbackAttempt(info, attemptStarted, time.Now(), err, firstErr)
-		attempts = append(attempts, attempt)
-		r.recordProviderHealth(info.Provider, err)
-		if firstErr == nil {
-			firstErr = err
-		}
+	attempt := fallbackAttempt(info, attemptStarted, time.Now(), err, firstErr)
+	attempts = append(attempts, attempt)
+	r.recordProviderHealth(info.Provider, err)
+	if firstErr == nil {
+		firstErr = err
 	}
+	// 即将切换到链上下一个 provider：实时通知观察者（如生题任务用它更新 job 状态）。
+	if index < len(providers)-1 {
+		fallbackObserver.OnProviderFallback(FallbackEvent{
+			Task:            req.Task,
+			FromProvider:    info.Provider,
+			FromModel:       info.Model,
+			FromErrorType:   classifyRouterError(err),
+			ToProvider:      providers[index+1].Info().Provider,
+			ToModel:         providers[index+1].Info().Model,
+			AttemptIndex:    index,
+			FailedLatencyMS: time.Since(attemptStarted).Milliseconds(),
+		})
+	}
+}
 	lastInfo := providers[len(providers)-1].Info()
 	callErr := fmt.Errorf("llm provider failed")
 	meta := CallMeta{Provider: lastInfo.Provider, Model: lastInfo.Model, FallbackUsed: len(attempts) > 1, TraceID: traceID, Task: req.Task, ErrorType: classifyRouterError(firstErr)}

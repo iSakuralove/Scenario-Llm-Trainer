@@ -160,20 +160,21 @@ func TestRouterFallsBackWhenProviderRateLimited(t *testing.T) {
 	router.rateLimiter = newProviderRateLimiter(1)
 	router.rateLimiter.inFlight[ProviderDeepSeek] = 1
 
-	question, meta, err := router.GenerateScenario(context.Background(), ScenarioGenerationRequest{Domain: "database", Difficulty: "L2", ScenarioType: "troubleshooting"})
-	if err != nil {
-		t.Fatal(err)
+	// 生题是严格失败任务：链上只有 deepseek（mock 被剔除）时，限流必须直接失败，
+	// 不允许降级 mock 模板题。
+	_, meta, err := router.GenerateScenario(context.Background(), ScenarioGenerationRequest{Domain: "database", Difficulty: "L2", ScenarioType: "troubleshooting"})
+	if err == nil {
+		t.Fatalf("expected strict rate limit failure without mock degradation, got meta=%+v", meta)
 	}
-	if question.Title == "" || meta.Provider != ProviderMock || !meta.FallbackUsed || meta.ErrorType != "rate_limit" {
-		t.Fatalf("expected mock fallback after rate limit, question=%+v meta=%+v", question, meta)
+	if meta.Provider == ProviderMock || meta.FallbackUsed {
+		t.Fatalf("scenario generate must not degrade to mock, got %+v", meta)
 	}
-	info := router.Info()
-	if info.Telemetry.SuccessfulCalls != 1 || info.Telemetry.FallbackCalls != 1 {
-		t.Fatalf("expected one successful fallback call, got %+v", info.Telemetry)
+	if meta.ErrorType != "rate_limit" {
+		t.Fatalf("expected rate_limit error type, got %+v", meta)
 	}
-	attempts := info.ProviderPool.RecentAttempts
-	if len(attempts) < 2 || attempts[0].Provider != ProviderDeepSeek || attempts[0].ErrorType != "rate_limit" || attempts[1].Provider != ProviderMock || !attempts[1].Success {
-		t.Fatalf("expected rate limited deepseek then mock success, got %+v", attempts)
+	attempts := router.Info().ProviderPool.RecentAttempts
+	if len(attempts) == 0 || attempts[0].Provider != ProviderDeepSeek || attempts[0].ErrorType != "rate_limit" {
+		t.Fatalf("expected rate limited deepseek attempt, got %+v", attempts)
 	}
 }
 

@@ -27,6 +27,17 @@ var providerCapabilityRegistry = map[string]providerCapabilityDefinition{
 		TopP:              true,
 		TopK:              true,
 	},
+	ProviderGLM: {
+		Transport:         "openai-compatible",
+		CostTier:          "low",
+		MaxTokens:         8192,
+		Priority:          15,
+		SupportsStreaming: true,
+		SupportsJSON:      true,
+		Temperature:       true,
+		TopP:              true,
+		TopK:              true,
+	},
 	ProviderQwen: {
 		Transport:         "openai-compatible",
 		CostTier:          "standard",
