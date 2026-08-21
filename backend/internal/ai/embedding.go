@@ -63,6 +63,20 @@ type embeddingResponse struct {
 }
 
 func EmbeddingConfigFromEnv() EmbeddingConfig {
+	// llm_routes.yaml 的 embedding 段优先；key 直接写在文件里。
+	if routes, err := LoadLLMRoutes(os.Getenv("LLM_ROUTES_FILE")); err == nil && routes != nil && routes.Embedding != nil {
+		endpoint := routes.Embedding
+		if strings.TrimSpace(endpoint.APIKey) != "" && !IsUnresolvedEnvPlaceholder(endpoint.APIKey) {
+			return NormalizeEmbeddingConfig(EmbeddingConfig{
+				BaseURL:       endpoint.BaseURL,
+				APIKey:        endpoint.APIKey,
+				Model:         endpoint.Model,
+				FallbackModel: endpoint.FallbackModel,
+				Timeout:       endpoint.Timeout,
+			})
+		}
+	}
+	// 兼容回退：旧 EMBEDDING_* 环境变量（不再在 README 文档化）。
 	timeout := time.Duration(parseInt(os.Getenv("EMBEDDING_TIMEOUT_SECONDS"), 8)) * time.Second
 	return NormalizeEmbeddingConfig(EmbeddingConfig{
 		BaseURL:       os.Getenv("EMBEDDING_BASE_URL"),

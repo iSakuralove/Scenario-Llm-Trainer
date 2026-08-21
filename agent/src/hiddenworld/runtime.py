@@ -639,7 +639,11 @@ def _resolve_declared_virtual_tool(request: AgentTurnRequest, analysis):
 
     candidates = []
     for tool in tools:
-        signals = [item.strip().lower() for item in [*tool.aliases, *tool.query_patterns] if item.strip()]
+        signals = [
+            item.strip().lower()
+            for item in [*tool.aliases, *tool.query_patterns, *_legacy_virtual_tool_aliases(tool)]
+            if item.strip()
+        ]
         if any(signal in text for signal in signals):
             candidates.append(tool)
 
@@ -680,6 +684,24 @@ def _resolve_declared_virtual_tool(request: AgentTurnRequest, analysis):
     )
 
 
+def _legacy_virtual_tool_aliases(tool) -> tuple[str, ...]:
+    """为已创建的旧会话补充已批准的明确别名，不做模糊关键词猜测。
+
+    场景会把题目快照复制进 session；题库 JSON 更新后，旧 session 不会自动重写。
+    这里仅按稳定 observation_action 提供向后兼容短语，避免用户必须重开会话，
+    同时不把任意包含“日志/数据库”的消息放行。
+    """
+
+    compatibility_aliases = {
+        "inspect:database.order_write": (
+            "订单库日志",
+            "订单库写入日志",
+            "看订单库日志",
+        ),
+    }
+    return compatibility_aliases.get(tool.observation_action, ())
+
+
 def _simulation_tool_labels(request: AgentTurnRequest) -> list[str]:
     if request.hidden_world.virtual_tools:
         return [f"{item.kind}：{item.target}" for item in request.hidden_world.virtual_tools]
@@ -702,9 +724,57 @@ def _normalize_mentor_reply(request: AgentTurnRequest, analysis, observations: l
     prohibited = ("去服务器", "登录服务器", "打开配置文件", "到终端", "执行命令", "回来后", "回来看")
     if any(phrase in text for phrase in prohibited):
         if observations:
-            return "这次查询的模拟结果已经放在线索卡里。先根据其中的时间、目标和状态字段判断异常位于哪一段，再决定要继续查询日志、配置还是依赖。"
+            return _public_observation_summary(observations)
         return "这是题目自带的模拟文本环境，直接在输入框描述要查的对象即可；系统会返回当前题目允许的虚拟线索。"
+    # 工具结果已经由 Runtime 和 QuickActions 展示；模型不能借这轮观察
+    # 替学生判断根因、规划下一步或指定要查的下一项。提示词是软约束，
+    # 这里再做一次确定性收口，避免偶发的“建议下一步检查……”穿透到页面。
+    guidance_markers = (
+        "问题已经比较清晰",
+        "建议下一步",
+        "下一步检查",
+        "下一步可以",
+        "应该检查",
+        "应当检查",
+        "需要检查",
+    )
+    if observations and any(marker in text for marker in guidance_markers):
+        return _public_observation_summary(observations)
     return text or "可以继续用自然语言描述想查的对象，或输入只读 SQL、日志查询和配置查询语句；系统只会在本题虚拟数据上模拟。"
+
+
+def _public_observation_summary(observations: list[Observation]) -> str:
+    """只复述本轮已经公开的观察，不替学生给出判断或下一步。"""
+
+    results = [item.result.strip() for item in observations if item.result.strip()]
+    if not results:
+        return "本轮公开观察已经返回。"
+    return "本轮公开观察：" + "；".join(results)
+
+
+def _fallback_mentor_action(
+    *,
+    request: AgentTurnRequest,
+    analysis: TurnAnalysis,
+    observations: list[Observation],
+    constraints,
+    guard_context: GuardContext,
+) -> MentorAction:
+    """模型失败时的最小公开回复；仍需经过同一 Guard，不执行旁路。"""
+
+    if observations:
+        reply = _public_observation_summary(observations)
+    elif analysis.is_stuck:
+        reply = "先不用急着下结论，可以从题面里最容易验证的一条现象开始。"
+    else:
+        reply = "可以继续描述你想核对的对象，系统会在本题允许的虚拟数据上返回公开观察。"
+    return MentorAction(
+        rationale="deterministic_fallback",
+        reply=reply,
+        requested_releases=[],
+        confirms_hypothesis=False,
+        expected_effort="quick",
+    )
 
 
 def _learner_view(request: AgentTurnRequest, state: LearnerState) -> LearnerStateView:

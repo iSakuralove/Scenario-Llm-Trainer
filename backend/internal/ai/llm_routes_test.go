@@ -39,14 +39,14 @@ providers:
 		t.Fatalf("load routes: %v", err)
 	}
 	// key 未定义的 deepseek 条目被跳过，只保留 glm-official。
-	if len(routes) != 1 {
-		t.Fatalf("expected 1 usable route (empty-key skipped), got %d: %+v", len(routes), routes)
+	if routes == nil || len(routes.Providers) != 1 {
+		t.Fatalf("expected 1 usable route (empty-key skipped), got %+v", routes)
 	}
-	if routes[0].APIKey != "sk-glm-test" || routes[0].Provider != "glm-official" {
-		t.Fatalf("first route mismatch: %+v", routes[0])
+	if routes.Providers[0].APIKey != "sk-glm-test" || routes.Providers[0].Provider != "glm-official" {
+		t.Fatalf("first route mismatch: %+v", routes.Providers[0])
 	}
-	if routes[0].ExtraHeaders["X-Custom"] != "yes" {
-		t.Fatalf("extra headers not interpolated: %+v", routes[0].ExtraHeaders)
+	if routes.Providers[0].ExtraHeaders["X-Custom"] != "yes" {
+		t.Fatalf("extra headers not interpolated: %+v", routes.Providers[0].ExtraHeaders)
 	}
 }
 
@@ -63,11 +63,14 @@ providers:
 	if err != nil {
 		t.Fatalf("load routes: %v", err)
 	}
-	if routes[0].BaseURL != defaultRouteGLMBaseURL || routes[0].Model != defaultRouteGLMModel {
-		t.Fatalf("glm defaults not filled: %+v", routes[0])
+	if routes == nil || len(routes.Providers) != 2 {
+		t.Fatalf("expected two usable routes: %+v", routes)
 	}
-	if routes[1].BaseURL != defaultRouteMiniMaxBaseURL || routes[1].Model != "MiniMax-M9" {
-		t.Fatalf("minimax defaults/model mismatch: %+v", routes[1])
+	if routes.Providers[0].BaseURL != defaultRouteGLMBaseURL || routes.Providers[0].Model != defaultRouteGLMModel {
+		t.Fatalf("glm defaults not filled: %+v", routes.Providers[0])
+	}
+	if routes.Providers[1].BaseURL != defaultRouteMiniMaxBaseURL || routes.Providers[1].Model != "MiniMax-M9" {
+		t.Fatalf("minimax defaults/model mismatch: %+v", routes.Providers[1])
 	}
 
 	unknownPath := writeLLMRoutesFile(t, `

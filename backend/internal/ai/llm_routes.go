@@ -31,6 +31,43 @@ import (
 //	      User-Agent: python-httpx/0.28.1
 type llmRoutesFile struct {
 	Providers []llmRouteProvider `yaml:"providers"`
+	Embedding *llmRouteEndpoint  `yaml:"embedding"`
+	STT       *llmRouteEndpoint  `yaml:"stt"`
+}
+
+// llmRouteEndpoint 是 embedding / stt 专用端点段：key 直接写在文件里，
+// 也可以 ${VAR} 引用环境变量（系统变量同样生效）。
+type llmRouteEndpoint struct {
+	BaseURL        string            `yaml:"base_url"`
+	APIKey         string            `yaml:"api_key"`
+	Model          string            `yaml:"model"`
+	FallbackModel  string            `yaml:"fallback_model"`
+	TimeoutSeconds int               `yaml:"timeout_seconds"`
+	ExtraHeaders   map[string]string `yaml:"extra_headers"`
+}
+
+// LLMRoutes 是一次配置加载的完整结果。
+type LLMRoutes struct {
+	Providers []Config
+	Embedding *EmbeddingRoute
+	STT       *STTRoute
+}
+
+// EmbeddingRoute 是语义检索 embedding 端点配置。
+type EmbeddingRoute struct {
+	BaseURL       string
+	APIKey        string
+	Model         string
+	FallbackModel string
+	Timeout       time.Duration
+}
+
+// STTRoute 是语音转写端点配置。
+type STTRoute struct {
+	BaseURL string
+	APIKey  string
+	Model   string
+	Timeout time.Duration
 }
 
 type llmRouteProvider struct {
@@ -38,6 +75,7 @@ type llmRouteProvider struct {
 	BaseURL      string            `yaml:"base_url"`
 	APIKey       string            `yaml:"api_key"`
 	Model        string            `yaml:"model"`
+	MaxTokens    int               `yaml:"max_tokens"`
 	ExtraHeaders map[string]string `yaml:"extra_headers"`
 }
 
@@ -46,9 +84,9 @@ var llmRoutesEnvPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // DefaultLLMRoutesPath 是未显式配置 LLM_ROUTES_FILE 时的探测路径（工作目录下）。
 const DefaultLLMRoutesPath = "llm_routes.yaml"
 
-// LoadLLMRoutes 读取并解析顺序路由配置，返回按声明顺序的 provider Config 列表。
+// LoadLLMRoutes 读取并解析路由配置（providers + embedding + stt）。
 // 返回 nil, nil 表示文件不存在（沿用旧的环境变量配置方式）。
-func LoadLLMRoutes(path string) ([]Config, error) {
+func LoadLLMRoutes(path string) (*LLMRoutes, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		path = DefaultLLMRoutesPath
@@ -67,7 +105,28 @@ func LoadLLMRoutes(path string) ([]Config, error) {
 	if len(parsed.Providers) == 0 {
 		return nil, fmt.Errorf("llm routes %s declares no providers", path)
 	}
-	routes := make([]Config, 0, len(parsed.Providers))
+	routes := &LLMRoutes{}
+	if endpoint := parsed.Embedding; endpoint != nil {
+		routes.Embedding = &EmbeddingRoute{
+			BaseURL:       strings.TrimSpace(interpolateLLMRoutesEnv(endpoint.BaseURL)),
+			APIKey:        strings.TrimSpace(interpolateLLMRoutesEnv(endpoint.APIKey)),
+			Model:         strings.TrimSpace(interpolateLLMRoutesEnv(endpoint.Model)),
+			FallbackModel: strings.TrimSpace(interpolateLLMRoutesEnv(endpoint.FallbackModel)),
+			Timeout:       time.Duration(endpoint.TimeoutSeconds) * time.Second,
+		}
+	}
+	if endpoint := parsed.STT; endpoint != nil {
+		if endpoint.TimeoutSeconds <= 0 {
+			endpoint.TimeoutSeconds = 60
+		}
+		routes.STT = &STTRoute{
+			BaseURL: strings.TrimSpace(interpolateLLMRoutesEnv(endpoint.BaseURL)),
+			APIKey:  strings.TrimSpace(interpolateLLMRoutesEnv(endpoint.APIKey)),
+			Model:   strings.TrimSpace(interpolateLLMRoutesEnv(endpoint.Model)),
+			Timeout: time.Duration(endpoint.TimeoutSeconds) * time.Second,
+		}
+	}
+	candidates := make([]Config, 0, len(parsed.Providers))
 	seen := map[string]bool{}
 	skipped := []string{}
 	for index, provider := range parsed.Providers {
@@ -83,7 +142,7 @@ func LoadLLMRoutes(path string) ([]Config, error) {
 		baseURL := strings.TrimSpace(interpolateLLMRoutesEnv(provider.BaseURL))
 		// key 留空（未填 ${VAR} 或直接为空）= 该站不参与路由，静默跳过；
 		// 请求默认落到声明顺序中第一个有 key 的站点。
-		if apiKey == "" || isUnresolvedEnvPlaceholder(apiKey) {
+		if apiKey == "" || IsUnresolvedEnvPlaceholder(apiKey) {
 			skipped = append(skipped, name)
 			continue
 		}
@@ -104,20 +163,26 @@ func LoadLLMRoutes(path string) ([]Config, error) {
 		for key, value := range provider.ExtraHeaders {
 			extraHeaders[strings.TrimSpace(key)] = strings.TrimSpace(interpolateLLMRoutesEnv(value))
 		}
-		routes = append(routes, Config{
+		maxTokens := provider.MaxTokens
+		if maxTokens <= 0 {
+			maxTokens = defaultMaxTokensForRoute(baseURL)
+		}
+		candidates = append(candidates, Config{
 			Provider:     name,
 			BaseURL:      baseURL,
 			APIKey:       apiKey,
 			Model:        model,
+			MaxTokens:    maxTokens,
 			ExtraHeaders: extraHeaders,
 		})
 	}
-	if len(routes) == 0 {
+	if len(candidates) == 0 {
 		return nil, fmt.Errorf(
-			"llm routes %s: all providers skipped (missing api_key): %v — 填好任一 ${VAR} 后生效",
+			"llm routes %s: all providers skipped (missing api_key): %v — 填好任一站点的 api_key 后生效",
 			path, skipped,
 		)
 	}
+	routes.Providers = candidates
 	return routes, nil
 }
 
@@ -168,7 +233,9 @@ func applyLLMRouteDefaults(route *Config, base Config) {
 	route.Temperature = base.Temperature
 	route.TopP = base.TopP
 	route.TopK = base.TopK
-	route.MaxTokens = base.MaxTokens
+	if route.MaxTokens <= 0 {
+		route.MaxTokens = base.MaxTokens
+	}
 	route.StreamEnabled = base.StreamEnabled
 	route.StreamConfigured = true
 }
@@ -193,11 +260,17 @@ const (
 	defaultRouteDeepSeekModel   = "deepseek-v4-flash"
 	defaultRouteMiniMaxBaseURL  = "https://api.minimax.io/v1"
 	defaultRouteMiniMaxModel    = "MiniMax-M2.7"
+
+	// 官方文档标注的最大输出 token：GLM-4.7 128K、DeepSeek-V4 384K、
+	// MiniMax-M2.7 最大 128K（通常 16K 已够用）。
+	defaultRouteGLMMaxTokens      = 131072
+	defaultRouteDeepSeekMaxTokens = 393216
+	defaultRouteMiniMaxMaxTokens  = 131072
 )
 
-// isUnresolvedEnvPlaceholder 判断值是否仍是未定义的 ${VAR} 字面量
+// IsUnresolvedEnvPlaceholder 判断值是否仍是未定义的 ${VAR} 字面量
 // （变量没设置时插值保持原样，等价于 key 为空）。
-func isUnresolvedEnvPlaceholder(value string) bool {
+func IsUnresolvedEnvPlaceholder(value string) bool {
 	return llmRoutesEnvPattern.MatchString(strings.TrimSpace(value))
 }
 
@@ -213,6 +286,21 @@ func defaultModelForRoute(baseURL string) string {
 		return defaultRouteMiniMaxModel
 	default:
 		return ""
+	}
+}
+
+// defaultMaxTokensForRoute 按已知官方域名补默认输出上限。
+func defaultMaxTokensForRoute(baseURL string) int {
+	lower := strings.ToLower(baseURL)
+	switch {
+	case strings.Contains(lower, "bigmodel.cn"):
+		return defaultRouteGLMMaxTokens
+	case strings.Contains(lower, "deepseek.com"):
+		return defaultRouteDeepSeekMaxTokens
+	case strings.Contains(lower, "minimax"):
+		return defaultRouteMiniMaxMaxTokens
+	default:
+		return 0
 	}
 }
 

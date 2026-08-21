@@ -41,6 +41,13 @@ _VENDOR_MODELS = {
     "deepseek": "deepseek-v4-flash",
     "minimax": "MiniMax-M2.7",
 }
+# 官方文档标注的最大输出 token：GLM-4.7 128K、DeepSeek-V4 384K、
+# MiniMax-M2.7 最大 128K（通常 16K 已够用）。
+_VENDOR_MAX_TOKENS = {
+    "glm": 131072,
+    "deepseek": 393216,
+    "minimax": 131072,
+}
 _PLACEHOLDER_NAMES = ("base_url", "api_key", "model")
 
 
@@ -52,6 +59,7 @@ class RouteCandidate:
     base_url: str
     api_key: str
     model: str
+    max_tokens: int = 0
     extra_headers: dict[str, str] = field(default_factory=dict)
     client: AsyncOpenAI | None = None
 
@@ -131,12 +139,16 @@ def load_llm_routes(path: str | None = None) -> list[RouteCandidate]:
             for k, v in (item.get("extra_headers") or {}).items()
             if str(k).strip() and str(v).strip()
         }
+        max_tokens = int(item.get("max_tokens") or 0)
+        if max_tokens <= 0:
+            max_tokens = _VENDOR_MAX_TOKENS.get(vendor or "", 0)
         candidates.append(
             RouteCandidate(
                 name=name,
                 base_url=base_url,
                 api_key=api_key,
                 model=model,
+                max_tokens=max_tokens,
                 extra_headers=extra_headers,
             )
         )
@@ -188,6 +200,8 @@ class OrderedFallbackRouter:
         last_error: Exception | None = None
         for index, candidate in enumerate(self._candidates):
             client = candidate.build_client(self._timeout)
+            if candidate.max_tokens > 0:
+                kwargs.setdefault("max_tokens", candidate.max_tokens)
             try:
                 return await client.chat.completions.create(model=candidate.model, **kwargs)
             except Exception as exc:  # noqa: BLE001 —— 任何站点错误都切下一站

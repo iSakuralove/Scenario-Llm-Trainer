@@ -6,9 +6,11 @@ from pydantic_ai.models.test import TestModel
 
 from hiddenworld.agents.interpreter import create_interpreter_agent
 from hiddenworld.agents.mentor import create_mentor_agent
+from hiddenworld.agents.scenario_agent import create_scenario_agent_runner
 from hiddenworld.app import create_app
 from hiddenworld.contracts import AgentTurnRequest
 from hiddenworld.runtime import HiddenWorldRuntime, TurnDeadlineExceeded
+from hiddenworld.scenario_runtime import SingleAgentRuntime
 
 
 @pytest.mark.asyncio
@@ -170,3 +172,95 @@ async def test_turn_endpoint_returns_structured_deadline_error(
 
     assert response.status_code == 504
     assert response.json()["detail"]["code"] == "turn_deadline_exceeded"
+
+
+def test_unified_agent_provider_uses_single_agent_runtime(monkeypatch) -> None:
+    from pydantic_ai.models.test import TestModel
+
+    from hiddenworld import app as app_module
+
+    monkeypatch.setenv("HIDDENWORLD_ALLOW_MODEL_REQUESTS", "1")
+    monkeypatch.setenv("HIDDENWORLD_AGENT_PROVIDER", "glm")
+    monkeypatch.setattr(
+        app_module,
+        "_model_for_provider_value",
+        lambda provider, role="AGENT": TestModel(),
+    )
+    app_module._runtime_from_env.cache_clear()
+    runtime = app_module._runtime_from_env()
+
+    assert isinstance(runtime, SingleAgentRuntime)
+    assert isinstance(runtime.agent, type(create_scenario_agent_runner(TestModel())))
+    app_module._runtime_from_env.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_single_agent_runtime_endpoint_returns_legacy_transport_result(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    from hiddenworld.agents.scenario_agent import create_scenario_agent_runner
+
+    runner = create_scenario_agent_runner(
+        TestModel(custom_output_text=json.dumps({"kind": "final_reply", "reply": "先根据公开现象继续判断。"}))
+    )
+    request = AgentTurnRequest(
+        request_id="request-single-agent-http",
+        session_id="session-1",
+        state_revision=2,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="先根据公开现象判断",
+    )
+    app = create_app(SingleAgentRuntime(runner))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/turn", json=request.model_dump(mode="json"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["contract_version"] == "hiddenworld.v1"
+    assert payload["reply"].startswith("先根据公开")
+    assert payload["internal_audit"]["reason_codes"][0] == "single_agent_runtime"
+
+
+@pytest.mark.asyncio
+async def test_single_agent_runtime_stream_emits_trace_before_reply_delta(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    class StreamingRunner:
+        async def run(self, context):
+            from hiddenworld.contracts import FinalReplyOutput
+
+            return FinalReplyOutput(kind="final_reply", reply="流式回复")
+
+        async def run_stream(self, context, *, on_reply_delta):
+            from hiddenworld.contracts import FinalReplyOutput
+
+            await on_reply_delta("流式")
+            await on_reply_delta("回复")
+            return FinalReplyOutput(kind="final_reply", reply="流式回复")
+
+    request = AgentTurnRequest(
+        request_id="request-single-agent-stream",
+        session_id="session-1",
+        state_revision=2,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="继续判断",
+    )
+    app = create_app(SingleAgentRuntime(StreamingRunner()))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/turn/stream", json=request.model_dump(mode="json"))
+
+    assert response.status_code == 200
+    blocks = [item for item in response.text.split("\n\n") if item.strip()]
+    names = [block.splitlines()[0].removeprefix("event: ") for block in blocks]
+    assert names[-1] == "result"
+    assert names.index("public_trace") < names.index("reply_delta") < names.index("result")

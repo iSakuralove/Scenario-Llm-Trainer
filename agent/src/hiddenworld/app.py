@@ -14,6 +14,7 @@ from pydantic_ai import models
 
 from hiddenworld.agents.interpreter import create_interpreter_agent
 from hiddenworld.agents.mentor import create_mentor_agent
+from hiddenworld.agents.scenario_agent import create_scenario_agent_runner
 from hiddenworld.agents.models import (
     ModelConfigurationError,
     build_deepseek_model,
@@ -24,6 +25,7 @@ from hiddenworld.agents.models import (
 )
 from hiddenworld.contracts import AgentTurnRequest, AgentTurnResult, ContractVersionMismatch
 from hiddenworld.runtime import HiddenWorldRuntime, TurnDeadlineExceeded
+from hiddenworld.scenario_runtime import SingleAgentRuntime
 
 logger = logging.getLogger("hiddenworld.app")
 
@@ -140,10 +142,16 @@ def _encode_sse(name: str, payload: Any) -> str:
 
 
 @lru_cache(maxsize=1)
-def _runtime_from_env() -> HiddenWorldRuntime:
+def _runtime_from_env() -> HiddenWorldRuntime | SingleAgentRuntime:
     if os.getenv("HIDDENWORLD_ALLOW_MODEL_REQUESTS", "0") != "1":
         raise ModelConfigurationError("real model requests are disabled")
     models.ALLOW_MODEL_REQUESTS = True
+    unified_provider = os.getenv("HIDDENWORLD_AGENT_PROVIDER", "").strip()
+    if unified_provider:
+        # 统一入口切换到真正的单 Agent 主链：一个模型节点负责工具规划和最终回复，
+        # Runtime 本地执行确定性工具、状态归约和 Guard，不再额外调用 Interpreter/Mentor。
+        model = _model_for_provider_value(unified_provider, role="AGENT")
+        return SingleAgentRuntime(create_scenario_agent_runner(model))
     return HiddenWorldRuntime(
         interpreter=create_interpreter_agent(_model_for_provider("HIDDENWORLD_INTERPRETER_PROVIDER")),
         mentor=create_mentor_agent(_model_for_provider("HIDDENWORLD_MENTOR_PROVIDER")),
@@ -152,22 +160,27 @@ def _runtime_from_env() -> HiddenWorldRuntime:
 
 def _model_for_provider(env_name: str):
     provider = os.getenv(env_name, "glm").strip().lower()
-    # litellm 网关支持按角色选别名：HIDDENWORLD_INTERPRETER_PROVIDER →
-    # LITELLM_INTERPRETER_MODEL，HIDDENWORLD_MENTOR_PROVIDER →
-    # LITELLM_MENTOR_MODEL（缺省落 LITELLM_MODEL → mentor-default）。
+    # 角色模型由统一分派函数按 provider 读取；旧 LiteLLM 入口仍兼容各角色别名。
     role = env_name.removeprefix("HIDDENWORLD_").removesuffix("_PROVIDER")
-    role_model = os.getenv(f"LITELLM_{role}_MODEL") or os.getenv("LITELLM_MODEL")
+    return _model_for_provider_value(provider, role=role)
+
+
+def _model_for_provider_value(provider: str, *, role: str = "AGENT"):
+    provider = provider.strip().lower()
+    role_model = os.getenv(f"GLM_{role}_MODEL") or os.getenv("GLM_MODEL")
     if provider in {"routes", "router", "llm_routes"}:
         return build_routed_model()
     if provider == "deepseek":
         return build_deepseek_model()
     if provider in {"glm", "zai"}:
-        return build_glm_model()
+        return build_glm_model(model=role_model)
     if provider == "xuan":
         return build_xuan_model()
     if provider in {"litellm", "gateway"}:
-        return build_litellm_model(model=role_model)
-    raise ModelConfigurationError(f"unsupported provider configured in {env_name}")
+        # 兼容旧部署配置；新部署不应再使用 LiteLLM。
+        legacy_model = os.getenv(f"LITELLM_{role}_MODEL") or os.getenv("LITELLM_MODEL")
+        return build_litellm_model(model=legacy_model)
+    raise ModelConfigurationError(f"unsupported provider configured: {provider}")
 
 
 app = create_app()

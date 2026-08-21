@@ -247,8 +247,8 @@ func ConfigFromEnv() Config {
 	// LLM 路由：第一个条目是主站点，其余按声明顺序作为故障转移链。
 	if routes, err := LoadLLMRoutes(os.Getenv("LLM_ROUTES_FILE")); err != nil {
 		log.Printf("[llm-routes] config file ignored, falling back to env providers: %v", err)
-	} else if len(routes) > 0 {
-		return configFromLLMRoutes(routes)
+	} else if routes != nil && len(routes.Providers) > 0 {
+		return configFromLLMRoutes(routes.Providers)
 	}
 	timeoutSeconds := parseInt(os.Getenv("LLM_TIMEOUT_SECONDS"), 30)
 	temperature := parseFloat(os.Getenv("LLM_TEMPERATURE"), 0.2)

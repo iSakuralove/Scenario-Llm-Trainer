@@ -103,6 +103,7 @@ def test_fallback_router_tries_candidates_in_order(monkeypatch):
         def __init__(self, name, model, fail):
             self.name = name
             self.model = model
+            self.max_tokens = 0
             self._fail = fail
 
         def build_client(self, timeout):

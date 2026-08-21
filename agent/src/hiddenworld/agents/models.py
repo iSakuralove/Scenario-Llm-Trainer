@@ -60,7 +60,7 @@ def build_deepseek_model(*, api_key: str | None = None) -> OpenAIChatModel:
     )
 
 
-def build_glm_model(*, api_key: str | None = None) -> ZaiModel:
+def build_glm_model(*, api_key: str | None = None, model: str | None = None) -> ZaiModel:
     explicit_key = (api_key or "").strip()
     zai_key = (os.getenv("ZAI_API_KEY") or "").strip()
     glm_key = (os.getenv("GLM_API_KEY") or "").strip()
@@ -79,15 +79,21 @@ def build_glm_model(*, api_key: str | None = None) -> ZaiModel:
         base_url = (os.getenv("GLM_BASE_URL") or GLM_BASE_URL).strip()
     else:
         raise ModelConfigurationError("ZAI_API_KEY or GLM_API_KEY is required")
+    configured_model = (model or os.getenv("GLM_MODEL") or GLM_MODEL_ID).strip()
+    if not configured_model:
+        raise ModelConfigurationError("GLM_MODEL must not be empty")
+    thinking = (os.getenv("GLM_THINKING", "disabled") or "disabled").strip().lower()
+    if thinking not in {"enabled", "disabled"}:
+        raise ModelConfigurationError("GLM_THINKING must be enabled or disabled")
     client = AsyncOpenAI(
         api_key=key,
         base_url=base_url,
         max_retries=0,
     )
     return ZaiModel(
-        GLM_MODEL_ID,
+        configured_model,
         provider=ZaiProvider(openai_client=client),
-        settings={"thinking": False},
+        settings={"thinking": thinking == "enabled"},
     )
 
 

@@ -23,6 +23,30 @@ def test_glm_model_uses_native_zai_model_and_disables_sdk_retries() -> None:
     assert model.client.max_retries == 0
 
 
+def test_glm_model_reads_model_and_thinking_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv("GLM_MODEL", "glm-4.7-flash")
+    monkeypatch.setenv("GLM_THINKING", "enabled")
+
+    model = build_glm_model(api_key="test-zai-key")
+
+    assert model.model_name == "glm-4.7-flash"
+    assert model.settings["thinking"] is True
+
+
+def test_glm_model_rejects_unknown_thinking_mode(monkeypatch) -> None:
+    monkeypatch.setenv("GLM_THINKING", "sometimes")
+
+    with pytest.raises(ValueError, match="GLM_THINKING"):
+        build_glm_model(api_key="test-zai-key")
+
+
+def test_provider_value_reports_the_provider_name(monkeypatch) -> None:
+    from hiddenworld.app import _model_for_provider_value
+
+    with pytest.raises(ValueError, match="unsupported provider configured: unknown"):
+        _model_for_provider_value("unknown")
+
+
 def test_glm_model_accepts_project_glm_environment_alias(monkeypatch) -> None:
     monkeypatch.delenv("ZAI_API_KEY", raising=False)
     monkeypatch.setenv("ZAI_BASE_URL", "https://api.z.ai/api/paas/v4")

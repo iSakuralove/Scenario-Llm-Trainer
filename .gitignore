@@ -102,6 +102,8 @@ docs/adr/
 docs/memos-agent-prompt.md
 features/2026-06-11-agents-generated-doc.md
 *.md
+# LLM 路由真实配置（含 key）：example 模板入库，本地文件忽略
+config/llm_routes.yaml
 # 项目文档：LLM 路由与 Runtime V2 说明需要随仓库分发（负例须晚于上面的 *.md）
 !docs/llm-routing.md
 !docs/scenario-runtime-v2.md

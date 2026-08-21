@@ -8,10 +8,17 @@
 from __future__ import annotations
 
 from .answer import CanonicalAnswer, InternalAnswerComparison, PublicAnswerComparison, SupportStatus
+from .agent_context import (
+    ActionCatalogEntry,
+    AgentBudgetView,
+    AgentContext,
+    AgentToolResult,
+    AgentTurnControlView,
+)
 from .authorization import AuthorizedActionRef, StructuredUserAction, UserActionAuthorization
 from .debug_trace import DebugTraceEvent
 from .dimensions import TeachingDimensionCategory, TeachingDimensionRef
-from .model_output import AgentModelOutput, FinalReplyOutput, ToolCall, ToolCallsOutput
+from .model_output import AgentModelOutput, AgentOutputEnvelope, FinalReplyOutput, ToolCall, ToolCallsOutput
 from .validator import ScenarioContractValidationError, ScenarioContractValidator, validate_scenario_contract
 from .deps import GuardContext, InterpreterDeps, MentorDeps
 from .events import (
@@ -140,6 +147,12 @@ __all__ = [
     "AgentTurnRequest",
     "AgentTurnResult",
     "AgentModelOutput",
+    "AgentOutputEnvelope",
+    "ActionCatalogEntry",
+    "AgentBudgetView",
+    "AgentContext",
+    "AgentToolResult",
+    "AgentTurnControlView",
     "AuthorizedActionRef",
     "StructuredUserAction",
     "AllowedDirection",

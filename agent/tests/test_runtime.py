@@ -6,8 +6,122 @@ from pydantic_ai.models.test import TestModel
 
 from hiddenworld.agents.interpreter import create_interpreter_agent
 from hiddenworld.agents.mentor import create_mentor_agent
-from hiddenworld.contracts import AgentTurnRequest
-from hiddenworld.runtime import HiddenWorldRuntime, TurnDeadlineExceeded
+from hiddenworld.contracts import AgentTurnRequest, Observation, TurnAnalysis, VirtualTool
+from hiddenworld.runtime import (
+    HiddenWorldRuntime,
+    TurnDeadlineExceeded,
+    _normalize_mentor_reply,
+    _resolve_declared_virtual_tool,
+)
+
+
+def _analysis_for_runtime_test(**updates) -> TurnAnalysis:
+    values = {
+        "public_summary": "你想查看公开日志。",
+        "intent": "investigate",
+        "requested_action_raw": "",
+        "clarification_target": "",
+        "action_match_status": "none",
+        "actions": [],
+        "hypothesis_id": "",
+        "hypothesis_raw": "",
+        "made_claim": False,
+        "contains_answer_attempt": False,
+        "answer_attempt_text": "",
+        "established_facts": [],
+        "is_stuck": False,
+        "is_noise": False,
+        "student_affect": "engaged",
+        "confidence": 0.95,
+    }
+    values.update(updates)
+    return TurnAnalysis(**values)
+
+
+def test_runtime_matches_explicit_order_log_alias_to_declared_virtual_tool(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    action = "inspect:database.order_write"
+    world = hidden_world.model_copy(
+        deep=True,
+        update={
+            "virtual_tools": [
+                VirtualTool(
+                    tool_id="tool.database.orders",
+                    kind="database",
+                    target="订单库回调写入日志",
+                    # 模拟已经创建的旧 session：没有本次新增的正式别名。
+                    aliases=["数据库日志"],
+                    query_patterns=[],
+                    redacted_parameters=["time_range"],
+                    simulated_output="返回订单库写入观察。",
+                    observation_action=action,
+                    evidence_ids=[],
+                )
+            ],
+            "observations": [
+                *hidden_world.observations,
+                Observation(
+                    action=action,
+                    result="订单库回调写入观察已返回。",
+                    is_negative=False,
+                    yields_evidence=[],
+                ),
+            ],
+        },
+    )
+    request = AgentTurnRequest(
+        request_id="runtime-order-log-alias",
+        session_id="session-1",
+        state_revision=1,
+        public_scenario=public_scenario,
+        hidden_world=world,
+        learner_state=learner_state,
+        user_message="发订单库日志给我",
+    )
+
+    result = _resolve_declared_virtual_tool(
+        request,
+        _analysis_for_runtime_test(),
+    )
+
+    assert result.action_match_status == "matched"
+    assert result.actions == [action]
+
+
+def test_runtime_does_not_keep_model_guidance_after_public_observation(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    action = hidden_world.observations[0].action
+    request = AgentTurnRequest(
+        request_id="runtime-observation-boundary",
+        session_id="session-1",
+        state_revision=1,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="查看回调访问日志",
+    )
+    analysis = _analysis_for_runtime_test(
+        requested_action_raw="查看回调访问日志",
+        action_match_status="matched",
+        actions=[action],
+    )
+    observations = [hidden_world.observations[0]]
+    reply = (
+        "根据刚才查询的回调访问日志，问题已经比较清晰：zone-b 出现了大量 HTTP 401 和连接超时，"
+        "建议下一步检查网关 VIP 的发布记录。"
+    )
+
+    normalized = _normalize_mentor_reply(request, analysis, observations, reply)
+
+    assert "问题已经比较清晰" not in normalized
+    assert "建议下一步" not in normalized
+    assert normalized == f"本轮公开观察：{observations[0].result}"
 
 
 @pytest.mark.asyncio

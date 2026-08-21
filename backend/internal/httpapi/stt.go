@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"situational-teaching/backend/internal/ai"
 	"situational-teaching/backend/internal/domain"
 	"strconv"
 	"strings"
@@ -91,6 +92,18 @@ const (
 )
 
 func NewSTTProviderFromEnv(assets AssetStorage) STTProvider {
+	// llm_routes.yaml 的 stt 段优先；key 直接写在文件里。
+	if routes, err := ai.LoadLLMRoutes(os.Getenv("LLM_ROUTES_FILE")); err == nil && routes != nil && routes.STT != nil {
+		endpoint := routes.STT
+		if strings.TrimSpace(endpoint.APIKey) != "" && !ai.IsUnresolvedEnvPlaceholder(endpoint.APIKey) {
+			return NewOpenAITranscriptionProvider(STTConfig{
+				BaseURL: strings.TrimRight(endpoint.BaseURL, "/"),
+				APIKey:  endpoint.APIKey,
+				Model:   endpoint.Model,
+				Timeout: endpoint.Timeout,
+			}, assets)
+		}
+	}
 	sttAPIKey := strings.TrimSpace(os.Getenv("STT_API_KEY"))
 	zetaKey := strings.TrimSpace(os.Getenv("ZETA_KEY"))
 	jianyiKey := strings.TrimSpace(os.Getenv("JIANYI_API_KEY"))
