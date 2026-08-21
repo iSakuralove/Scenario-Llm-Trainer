@@ -28,7 +28,6 @@ docker-compose.yml  API、Agent、PostgreSQL、Redis 本地编排
 
 管理员查看情景题时可看到完整根因和标准步骤；学员接口会自动脱敏。UGC 转化为正式情景题时，题目创建人记录为终审管理员，避免原作者以 owner 身份看到完整答案。
 
-
 ## 快速开始
 
 仓库地址：https://github.com/iSakuralove/Scenario-Llm-Trainer
@@ -167,8 +166,6 @@ npm run build
 5. 选题 → 调整本场设置 → 开始面试，连续认真回答两轮，确认正常评分与追问
 6. 使用管理员账号查看系统状态中的 AI provider
 
----
-
 ## 最近更新（2026-08）
 
 ### 排查工坊 Runtime V2
@@ -190,7 +187,6 @@ npm run build
 详见 [docs/llm-routing.md](docs/llm-routing.md)。
 
 > 更早的更新记录见 [docs/changelog-2026-07.md](docs/changelog-2026-07.md)。
----
 
 ## 环境变量
 
@@ -233,12 +229,6 @@ STT_TIMEOUT_SECONDS=60
 - 语音转写优先使用 `STT_API_KEY`，其次 `ZETA_KEY`，最后兼容 `JIANYI_API_KEY`；存在 `ZETA_KEY` 时默认 `STT_BASE_URL=https://api.zetatechs.com`，默认 `STT_MODEL=gpt-4o-mini-transcribe-2025-12-15`。
 - Zeta 可选路线包括 `https://api.zetatechs.com`、`https://api.zetatechs.online`、`https://ent.zetatechs.com`、`https://ent.zetatechs.online`，用 `STT_BASE_URL` 切换。
 - 不要把真实模型 Key 写入仓库；用系统环境变量或本机 `.env` 注入。
-
-## 向量数据库与排查评分
-
-排查会话的证据检索和评分优先走 PostgreSQL + pgvector 主路线；Docker Compose 提供可直接启动的 PostgreSQL/pgvector 镜像环境，用于持久化索引和比赛演示。Go 后端在没有 Docker、PostgreSQL 或 pgvector 扩展时会自动降级为内存向量索引，保留本地验证、开发和基础排查评分能力。
-
-详细验证步骤见 `docs/vector-scoring-verification.md`。文档中的命令使用占位配置，不写入任何真实 API key。
 
 ## Docker 启动
 
@@ -323,174 +313,4 @@ npm run e2e
 ```powershell
 cd frontend
 npx playwright install chromium
-```
-
-## MVP 覆盖范围
-
-- 用户体系：注册、登录、刷新 Token、当前用户、个人档案设置。
-- 情景题：种子题、真实 LLM 生成题、列表筛选、详情脱敏、创建会话。
-- 排查工坊：Reveal Strategy 分层线索、深层线索前置条件、防猜拦截、提示升级、答案评估、复盘。
-- 面试舱：自由选题、岗位专项和简历深挖三种启动方式，支持真实题目精确选择、简历优先推荐、多轮追问、五维评分、最终报告与雷达图。
-- 学习闭环：仪表盘展示能力画像、短板解释、今日推荐、三天复习计划和每日打卡。
-- 案例工坊：发布真实案例并生成 AI 结构化预览，讲师可编辑结构化内容并初审，管理员终审发布为正式情景题，审核历史全程保留。
-- 数据支撑：PostgreSQL 持久化业务数据，Redis 支撑基础限流。
-- AI 接入：默认优先使用 DeepSeek 真实模型；也支持 OpenAI-compatible 第三方中转站，只有缺少模型 Key 或真实调用失败时才走本地兜底。
-- 异步与流式：生成题目支持异步任务进度查询；排查消息支持 `text/event-stream` 流式展示。
-- Prompt 编排：真实 Provider 的题目生成、UGC 结构化、排查回复和面试评语使用 `backend/internal/ai/prompts/*.tmpl` 模板管理。
-- 上下文压缩：排查会话超过 10 轮后，后端会保留摘要和最近 5 轮原始对话再发往 LLM，控制上下文长度。
-- 系统状态：管理员可打开系统状态页，检查 API、DB、Redis、AI、种子数据、演示账号和脚本入口。
-- 导出能力：排查复盘页和面试报告页支持浏览器打印，可在打印窗口中保存为 PDF。
-
-## SRS 功能代号速查
-
-- `UR`：用户与权限模块，覆盖登录、个人资料、角色权限。
-- `SC`：情景题生成与管理模块，覆盖题目生成、脱敏、分页筛选、Fork 派生自定义。
-- `DG`：渐进式排查会话模块，覆盖多轮排查、线索释放、提示、提交、评分、复盘。
-- `IV`：技术面试模拟与评估模块，覆盖面试会话、追问、评分、报告、语音答案。
-- `CM`：UGC 社区与案例工坊模块，覆盖案例提交、结构化预览、讲师初审、管理员终审。
-- `PF`：个人学习档案模块，覆盖能力画像、薄弱点、错题复习日历、推荐题。
-- `AI`：AI 交互与编排模块，覆盖 Prompt、模型配置、结构化输出校验、安全过滤、上下文管理。
-- `SR`：安全需求，覆盖答案泄露防护、敏感信息检测、统一鉴权、限流与审计。
-
-## 比赛演示流程
-
-推荐按以下顺序演示：
-
-1. 使用 `admin/admin123` 登录，打开系统状态页，确认 API、DB、Redis、AI、种子数据和脚本入口正常。
-2. 使用 `demo/demo123` 登录，在仪表盘查看今日推荐、短板解释、三天复习计划，并点击今日打卡。
-3. 进入排查工坊，生成或选择情景题，开始排查并提交最终答案。
-   - 点击“生成题目”后，顶部蓝色状态条应显示“模型：deepseek-v4-flash”；完成后应显示“来源：DeepSeek deepseek-v4-flash”。若 DeepSeek 不可用，再观察是否切到 fallback。
-4. 在排查复盘页点击“打印/导出 PDF”，展示标准答案、标准步骤、关键证据和对话记录。
-5. 进入面试舱，演示真实题号搜索和题卡选择，再切换岗位专项或简历深挖创建面试；完成追问后打开报告页查看五维雷达图和综合评语。
-6. 进入案例工坊，用学员账号发布 UGC 案例，状态进入“待讲师初审”。
-7. 使用 `instructor/instructor123` 登录案例工坊，对 UGC 结构化预览做必要编辑并初审通过。
-8. 使用 `admin/admin123` 登录案例工坊，对初审通过的 UGC 终审发布为正式情景题。
-9. 回到学员账号，在排查工坊查看新发布题目，确认学员看到的是脱敏版。
-
-阶段 18-22 增强验收建议：
-
-1. `IV-02（面试语音答案）`：在面试会话页上传音频，确认后端真实保存音频文件并生成转写草稿，可回填到答案框并提交；面试报告页能看到语音提交记录、资产摘要和可回放语音证据。
-2. `AI-01（管理员 Prompt/模型配置）` 与 `AI-02（显式结构化 Schema）`：管理员进入系统状态页，编辑 Prompt、保存模型参数，确认结构化校验器状态可见。
-3. `AI-03/SR-02（UGC 敏感信息检测）`：学员发布带 IP、密码或密钥特征的案例，案例工坊应显示风险提示和脱敏建议，审核端也能看到检测结果。
-4. `SR-03（审计与限流可视化）`：管理员在系统状态页查看最近审计事件、限流状态和 AI 错误摘要，确认不展示 token、密码或完整密钥。
-5. `SC-06（Fork 作者自定义编辑）`：在排查工坊点击“派生题目”，确认进入案例工坊草稿，作者可编辑标题、描述、标签和结构化内容后提交初审。
-6. `PF-04（真实错题复习日历）` 与 `PF-05（AI 动态推荐题）`：完成低分排查或面试后回到仪表盘，确认复习计划显示来源和推荐理由；模型不可用时显示规则回退推荐。
-
-赛前可运行一键验收脚本检查主流程：
-
-```powershell
-.\scripts\demo-acceptance.ps1
-```
-
-如果想减少真实模型调用次数，可以跳过题目生成，仍验证登录、排查、面试、UGC 审核等主流程：
-
-```powershell
-.\scripts\demo-acceptance.ps1 -SkipScenarioGenerate
-```
-
-赛前回归建议顺序：
-
-```powershell
-git diff --check
-cd backend
-go test ./...
-cd ..\frontend
-npm run lint
-npm run build
-npm run e2e
-cd ..
-.\scripts\demo-acceptance.ps1 -SkipScenarioGenerate
-```
-
-## API 约定
-
-- Base URL：`/api/v1`
-- 认证：`Authorization: Bearer <JWT>`
-- 响应：`{ "code": 200, "message": "success", "data": ... }`
-- 限流：启用 Redis 时，未登录接口按 IP 每分钟 60 次，登录接口按用户每分钟 120 次。
-
-UGC 审核接口：
-
-- `GET /community/posts?status=pending_review`：讲师/管理员查看审核队列；学员默认只看自己的帖子。
-- `POST /community/posts/{id}/instructor-review`：讲师初审，`decision=approve|reject`，可携带 `structured_content` 保存讲师编辑版。
-- `POST /community/posts/{id}/final-review`：管理员终审，`decision=publish|reject`；发布时优先使用讲师编辑版。
-- `GET /admin/users`、`PUT /admin/users/{id}/role`：管理员用户角色管理。
-
-学习闭环接口：
-
-- `GET /users/me/dashboard`：返回统计、能力雷达、短板、推荐题、学习计划和复习日历。
-- `GET /users/me/learning-plan`：返回领域洞察、推荐项和三天复习计划。
-- `GET /users/me/review-calendar`：返回今日打卡状态、连续天数、复习计划和下一步行动。
-- `POST /users/me/checkin`：记录今日打卡，重复调用保持幂等。
-
-系统状态接口：
-
-- `GET /system/ai`：返回当前 AI Provider、模型和 fallback 状态，不返回 Key。
-- `GET /system/status`：管理员查看 API、DB、Redis、AI、种子数据、演示账号和脚本入口。
-
-AI 任务与流式接口：
-
-- `POST /scenarios/generate/jobs`：创建异步情景题生成任务，立即返回 `job`。
-- `GET /ai/jobs/{id}`：查询任务状态；完成后返回脱敏后的 `question`。
-- `GET /ai/jobs/{id}/events`：以 SSE 返回任务进度事件。
-- `POST /scenarios/sessions/{sid}/messages`：请求头 `Accept: text/event-stream` 时返回 `delta` 与 `finish` 事件；普通请求仍返回 JSON。
-
-## 验证步骤
-
-1. 启动依赖服务和 API，确认 `http://localhost:8080/healthz` 返回健康状态。
-2. 启动前端，打开 `http://localhost:5173`，分别使用学员、讲师、管理员演示账号登录。
-3. 按“比赛演示流程”完成系统状态、学习仪表盘、排查工坊、面试舱、案例工坊双审和脱敏题查看。
-4. 运行后端、前端和 E2E 自动化命令。
-   - 后端可额外执行 `go test ./internal/ai ./internal/httpapi ./internal/store`，确认情景题生成模型约束、任务状态模型回填与存储迁移均通过。
-5. 最后运行演示验收脚本，确认主流程仍能连续完成。
-6. 面试语音链路专项验证：
-   - 以 `demo/demo123` 登录，进入面试舱创建一次面试。
-   - 在回答区上传 `mp3`、`wav` 或 `webm` 音频，确认页面提示“上传语音资源”后生成转写草稿。
-   - 点击“确认转写文本”，提交语音回答，跳转到面试报告页。
-   - 在报告页确认出现“资产链路”摘要，包含资源名、体积、SHA256 摘要，并可直接播放语音证据。
-   - 另开一个终端执行 `Get-ChildItem backend\\data\\assets -Recurse` 或查看 `ASSET_STORAGE_DIR` 指向目录，确认存在对应音频文件。
-   - 如需接口级验证，使用已登录 token 请求 `GET /api/v1/assets/{asset_id}` 与 `GET /api/v1/assets/{asset_id}?content=1`，确认元数据和原始音频内容均可返回。
-
-通过标准：
-
-- 三类账号均可登录并访问对应页面。
-- 核心流程不白屏，不显示原始 JSON，不泄露管理员权限错误。
-- 自动化命令和演示验收脚本通过。
-
-## 验证命令
-
-演示验收：
-
-```powershell
-.\scripts\demo-acceptance.ps1
-```
-
-前端：
-
-```powershell
-cd frontend
-npm run lint
-npm run build
-npm run e2e
-```
-
-后端：
-
-```powershell
-cd backend
-go test ./...
-```
-
-当前环境如果没有安装 Go，可以用 Docker 的 Go 镜像执行测试；需要保证 Docker 能访问镜像仓库：
-
-```powershell
-docker run --rm -v "${PWD}:/src" -w /src golang:1.22-alpine go test ./...
-```
-
-PostgreSQL 集成测试默认跳过；如果需要运行，设置：
-
-```powershell
-$env:POSTGRES_TEST_URL="postgres://teaching:teaching@localhost:5432/teaching_mvp?sslmode=disable"
-cd backend
-go test ./internal/store
 ```
