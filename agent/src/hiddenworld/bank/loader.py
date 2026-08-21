@@ -12,7 +12,13 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..contracts import CONTRACT_VERSION, HiddenWorld, PublicScenario
+from ..contracts import (
+    CONTRACT_VERSION,
+    HiddenWorld,
+    PublicScenario,
+    answer_version_for_model,
+    validate_scenario_contract,
+)
 from .validation import ValidationError, validate_question
 
 # 四道固定题的稳定 ID。通过四次**独立的单题生成调用**创建，
@@ -90,6 +96,28 @@ def load_fixed_question(question_id: str, *, validate: bool = True) -> FixedQues
         )
         if not report.ok:
             raise ValidationError(report)
+
+    # 三层题库校验只保证图和教学路径可执行；它不保证唯一答案快照
+    # 与 RootCause/DiagnosticRelations/评分标准一致。ScenarioContract 门禁
+    # 不受 validate=False 影响：调用方可以跳过昂贵的规模/可达性检查，
+    # 但不能跳过唯一答案和版本绑定检查。
+    try:
+        validate_scenario_contract(question.hidden_world)
+    except ValueError as exc:
+        raise ValueError(f"固定题 {question_id} 的 ScenarioContract 校验失败：{exc}") from exc
+
+    expected_answer_version = answer_version_for_model(question.model_version)
+    canonical_answer = question.hidden_world.canonical_answer
+    if expected_answer_version is None:
+        raise ValueError(
+            f"固定题 {question_id} 的 model_version {question.model_version!r} 没有答案版本映射"
+        )
+    if canonical_answer is None or canonical_answer.answer_version != expected_answer_version:
+        actual_answer_version = None if canonical_answer is None else canonical_answer.answer_version
+        raise ValueError(
+            f"固定题 {question_id} 的 answer_version {actual_answer_version!r} 与 "
+            f"model_version {question.model_version!r} 不一致，期望 {expected_answer_version!r}"
+        )
 
     return question
 

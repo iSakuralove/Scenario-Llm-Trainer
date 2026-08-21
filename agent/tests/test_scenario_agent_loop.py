@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 
 import pytest
 
@@ -9,8 +11,10 @@ from hiddenworld.agents.scenario_agent import (
     create_scenario_agent,
     create_scenario_agent_runner,
 )
+from hiddenworld.action_resolver import resolve_user_requested_actions
 from hiddenworld.contracts import (
     ActionCatalogEntry,
+    AgentSemanticDecision,
     AgentBudgetView,
     AgentContext,
     AgentToolResult,
@@ -31,7 +35,7 @@ from hiddenworld.scenario_runtime import (
     VirtualObservationExecutor,
     project_agent_context,
 )
-from hiddenworld.scenario_runtime.turn_runtime import SingleAgentRuntime
+from hiddenworld.scenario_runtime.turn_runtime import SingleAgentRuntime, _analysis_from_single_agent
 
 
 def _context(public_scenario: PublicScenario) -> AgentContext:
@@ -385,6 +389,139 @@ def test_project_agent_context_keeps_order_log_alias_for_legacy_session_snapshot
     assert [item.action_ref for item in context.authorized_actions] == [action]
 
 
+def test_project_agent_context_authorizes_mysql_slow_query_log_request(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    request = AgentTurnRequest(
+        request_id="mysql-slow-query-context",
+        session_id="session-1",
+        state_revision=1,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world.model_copy(
+            deep=True,
+            update={
+                "virtual_tools": [
+                    VirtualTool(
+                        tool_id="tool.database.slow_query",
+                        kind="database",
+                        target="MySQL 慢查询日志",
+                        aliases=["数据库日志", "MySQL慢查询日志"],
+                        query_patterns=["SHOW ENGINE INNODB STATUS"],
+                        redacted_parameters=["time_range"],
+                        simulated_output="订单库观察",
+                        observation_action="inspect:database.slow_query",
+                        evidence_ids=[],
+                    )
+                ],
+            },
+        ),
+        learner_state=learner_state,
+        user_message="MySQL慢查询日志",
+    )
+
+    context = project_agent_context(request)
+
+    assert [item.action_ref for item in context.authorized_actions] == ["inspect:database.slow_query"]
+
+
+def test_fixed_vip_bank_mysql_slow_query_action_round_trips_to_declared_observation() -> None:
+    path = Path(__file__).parents[1] / "src" / "hiddenworld" / "bank" / "fixed" / "hw-network-vip-001.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    request = AgentTurnRequest(
+        request_id="fixed-bank-mysql-slow-query",
+        session_id="session-1",
+        state_revision=1,
+        public_scenario=payload["public_scenario"],
+        hidden_world=payload["hidden_world"],
+        learner_state={"collected_evidence": [], "ruled_out_hypotheses": [], "actions_taken": []},
+        user_message="MySQL慢查询日志",
+    )
+
+    context = project_agent_context(request)
+
+    assert [item.action_ref for item in context.authorized_actions] == ["inspect:database.slow_query"]
+
+
+def test_fixed_vip_bank_natural_language_route_diff_request_resolves_unique_action() -> None:
+    path = Path(__file__).parents[1] / "src" / "hiddenworld" / "bank" / "fixed" / "hw-network-vip-001.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    items = [VirtualTool.model_validate(item) for item in payload["hidden_world"]["virtual_tools"]]
+
+    assert resolve_user_requested_actions(
+        "那看一下网关切换前后的配置差异。",
+        items,
+        action_attr="observation_action",
+    ) == ["inspect:config.route_diff"]
+
+
+def test_database_status_question_does_not_resolve_as_observation_request() -> None:
+    path = Path(__file__).parents[1] / "src" / "hiddenworld" / "bank" / "fixed" / "hw-network-vip-001.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    items = [VirtualTool.model_validate(item) for item in payload["hidden_world"]["virtual_tools"]]
+
+    assert resolve_user_requested_actions(
+        "数据库有显示什么异常？",
+        items,
+        action_attr="observation_action",
+    ) == []
+
+
+def test_project_agent_context_does_not_turn_database_status_question_into_observation_request(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    request = AgentTurnRequest(
+        request_id="database-status-question-context",
+        session_id="session-1",
+        state_revision=1,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="数据库有显示什么异常？",
+    )
+
+    context = project_agent_context(request)
+
+    assert context.authorized_actions == []
+
+
+def test_single_agent_uses_structured_semantic_decision_instead_of_keyword_reconstruction(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    request = AgentTurnRequest(
+        request_id="semantic-decision-1",
+        session_id="session-1",
+        state_revision=1,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="我认为是数据库问题，但先解释上一句",
+    )
+    output = FinalReplyOutput(
+        kind="final_reply",
+        reply="这里的连接是指请求到数据库之间的连接。",
+        semantic=AgentSemanticDecision(
+            intent="clarification",
+            clarification_target="上一句的连接两端",
+            made_claim=True,
+            contains_answer_attempt=False,
+            confidence=0.93,
+        ),
+    )
+
+    analysis = _analysis_from_single_agent(request, output, [], [])
+
+    assert analysis.intent == "clarification"
+    assert analysis.clarification_target == "上一句的连接两端"
+    assert analysis.contains_answer_attempt is False
+    assert analysis.confidence == 0.93
+
+
 @pytest.mark.asyncio
 async def test_projected_context_and_virtual_executor_complete_authorized_observation(
     hidden_world,
@@ -480,7 +617,8 @@ async def test_single_agent_runtime_executes_tool_then_uses_second_model_round(
     result = await runtime.run_turn(request)
 
     assert runner.calls == 2
-    assert result.reply.startswith("CPU 观察")
+    # 回复归一化禁止把工具结果扩展成明确的下一步/排除范围说明。
+    assert result.reply == "已完成这项公开观察。"
     assert any(item.kind == "observation_result" for item in result.public_trace)
 
 

@@ -37,6 +37,25 @@ func TestClientTurnSendsVersionedRequestAndDecodesTypedResult(t *testing.T) {
 			RequestID:        request.RequestID,
 			ExpectedRevision: request.StateRevision,
 			Reply:            "先检查慢查询。",
+			TurnAssessment: &TurnAssessment{
+				Intent:             "probe_plan",
+				ClaimType:          "none",
+				StudentAffect:      "engaged",
+				ProgressAssessment: "partial",
+				Actions:            []string{"inspect:logs.slow_query"},
+				Confidence:         0.95,
+			},
+			TeachingDecision: &TeachingDecision{
+				TeachingState: "normal_diagnosis",
+				Strategy:      "observe",
+				ReplyPolicy:   "neutral_summary",
+			},
+			GuidanceState: GuidanceState{
+				TeachingState:      "normal_diagnosis",
+				ProgressAssessment: "partial",
+				Navigation:         []TeachingDimensionRef{},
+			},
+			TurnControl: TurnControl{AllowedActionIDs: []string{"inspect:logs.slow_query"}},
 			TurnAnalysis: TurnAnalysis{
 				Actions:               []string{"inspect:logs.slow_query"},
 				HypothesisID:          "",
@@ -424,6 +443,25 @@ func validTurnResult(requestID string, revision int) TurnResult {
 		RequestID:        requestID,
 		ExpectedRevision: revision,
 		Reply:            "继续检查。",
+		TurnAssessment: &TurnAssessment{
+			Intent:             "probe_plan",
+			ClaimType:          "none",
+			StudentAffect:      "engaged",
+			ProgressAssessment: "partial",
+			Actions:            []string{},
+			Confidence:         0.9,
+		},
+		TeachingDecision: &TeachingDecision{
+			TeachingState: "normal_diagnosis",
+			Strategy:      "acknowledge",
+			ReplyPolicy:   "acknowledgement",
+		},
+		GuidanceState: GuidanceState{
+			TeachingState:      "normal_diagnosis",
+			ProgressAssessment: "partial",
+			Navigation:         []TeachingDimensionRef{},
+		},
+		TurnControl: TurnControl{AllowedActionIDs: []string{}},
 		TurnAnalysis: TurnAnalysis{
 			Actions:          []string{},
 			EstablishedFacts: []string{},

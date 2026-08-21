@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from hiddenworld.bank import (
@@ -20,7 +22,12 @@ from hiddenworld.bank.validation import (
     MIN_HYPOTHESES,
     MIN_SUFFICIENT_SETS,
 )
-from hiddenworld.contracts import CONTRACT_VERSION, Observation
+from hiddenworld.contracts import (
+    ANSWER_VERSION,
+    CONTRACT_VERSION,
+    Observation,
+    answer_version_for_model,
+)
 
 FIRST_FIXED_ID = "hw-db-index-001"
 
@@ -45,7 +52,62 @@ def test_all_fixed_questions_load_and_validate() -> None:
         assert question.status == "active"
         assert question.version == 1
         assert question.model_version == CONTRACT_VERSION
+        assert question.hidden_world.canonical_answer is not None
+        assert question.hidden_world.canonical_answer.answer_version == ANSWER_VERSION
+        assert answer_version_for_model(question.model_version) == ANSWER_VERSION
         assert question.scenario_type in {"troubleshooting", "performance"}
+
+
+def test_loader_runs_scenario_contract_validator(monkeypatch: pytest.MonkeyPatch) -> None:
+    """固定题加载不能只跑旧的三层题库校验。"""
+    import hiddenworld.bank.loader as loader
+
+    calls: list[str] = []
+    original = loader.validate_scenario_contract
+
+    def spy(world):
+        calls.append(world.root_cause.id)
+        return original(world)
+
+    monkeypatch.setattr(loader, "validate_scenario_contract", spy)
+    load_fixed_question(FIRST_FIXED_ID)
+
+    assert calls == ["RC_INDEX_DROPPED"]
+
+
+def test_loader_rejects_canonical_answer_drift(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """旧三层校验通过也不能绕过 CanonicalAnswer 引用门禁。"""
+    import hiddenworld.bank.loader as loader
+
+    source = loader._BANK_DIR / f"{FIRST_FIXED_ID}.json"
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    payload["hidden_world"]["canonical_answer"]["required_evidence_ids"] = ["E_NOT_FOUND"]
+    (tmp_path / source.name).write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+    monkeypatch.setattr(loader, "_BANK_DIR", tmp_path)
+
+    with pytest.raises(ValueError, match="ScenarioContract.*missing evidence"):
+        loader.load_fixed_question(FIRST_FIXED_ID)
+
+
+def test_loader_rejects_model_answer_version_mismatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    import hiddenworld.bank.loader as loader
+
+    source = loader._BANK_DIR / f"{FIRST_FIXED_ID}.json"
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    payload["hidden_world"]["canonical_answer"]["answer_version"] = "hiddenworld.v999"
+    (tmp_path / source.name).write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+    monkeypatch.setattr(loader, "_BANK_DIR", tmp_path)
+
+    with pytest.raises(ValueError, match="answer_version.*不一致"):
+        loader.load_fixed_question(FIRST_FIXED_ID)
 
 
 def test_first_fixed_question_meets_bank_scale() -> None:

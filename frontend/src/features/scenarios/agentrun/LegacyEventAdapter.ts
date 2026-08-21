@@ -133,11 +133,22 @@ function applyV2Event(
       model.lastSignal = 'tool'
       break
     case 'tool_result':
-      model.toolResults.push(v2.payload.tool_result)
+      if (v2.payload.tool_result.content?.content_type === 'clue') {
+        // clue_published 是主动线索的唯一正式事件来源；兼容某些过渡响应把
+        // clue 内容挂在 tool_result 上时，只补入尚不存在的 clue，避免同轮双卡片。
+        const clueId = v2.payload.tool_result.call_id || v2.payload.tool_result.tool_id
+        if (!model.clues.some((item) => item.clueId === clueId)) {
+          model.clues.push({ clueId, content: v2.payload.tool_result.content })
+        }
+      } else {
+        model.toolResults.push(v2.payload.tool_result)
+      }
       model.lastSignal = 'tool'
       break
     case 'clue_published':
-      model.clues.push({ clueId: v2.payload.clue.clue_id, content: v2.payload.clue.content })
+      if (!model.clues.some((item) => item.clueId === v2.payload.clue.clue_id)) {
+        model.clues.push({ clueId: v2.payload.clue.clue_id, content: v2.payload.clue.content })
+      }
       model.lastSignal = 'clue'
       break
     case 'turn_completed':
@@ -250,7 +261,6 @@ function applyLegacyCompareAnswerEvent(
 function legacyComparisonMarkdown(comparison: ScenarioPublicAnswerComparison): string {
   const parts = [`答案对比：${supportStatusLabel(comparison.support_status)}`]
   if (comparison.user_points.length > 0) parts.push(`你的要点：${comparison.user_points.join('；')}`)
-  if (comparison.next_action) parts.push(comparison.next_action)
   return parts.join('；')
 }
 
@@ -298,7 +308,7 @@ export function dedupeRunEvents(events: ScenarioRunEventAny[]): ScenarioRunEvent
   return [...byKey.values()].sort((left, right) => left.sequence - right.sequence)
 }
 
-/** 线索释放时间线：v1 observation_result 与 v2 tool_result 汇聚到同一来源。 */
+/** 左侧线索时间线只展示主动发布的 clue，不承载对话中的 observation。 */
 export interface ObservationRelease {
   action: string
   result: string
@@ -309,16 +319,19 @@ export interface ObservationRelease {
 export function collectObservationReleases(events: ScenarioRunEventAny[]): ObservationRelease[] {
   const seen = new Set<string>()
   const releases: ObservationRelease[] = []
-  const model = buildAgentRunViewModel(events)
-  for (const item of model.toolResults) {
-    if (!item.content || item.content.content_type !== 'observation') continue
-    const action = item.tool_id
-    const result = item.content.markdown_ready
-    if (!action || !result) continue
+  for (const event of dedupeRunEvents(events)) {
+    if (!isScenarioRunEventV2(event) || event.kind !== 'clue_published') continue
+    const clue = event.payload.clue
+    const action = `clue:${clue.clue_id}`
+    const result = clue.content.markdown_ready
+    if (!result) continue
     const key = `${action}::${result}`
     if (seen.has(key)) continue
     seen.add(key)
-    releases.push({ action, result, is_negative: Boolean(item.content.meta?.is_negative), key })
+    releases.push({ action, result, is_negative: false, key })
   }
   return releases
 }
+
+/** 新命名供调用方使用；保留旧导出名兼容 v1/V2 既有调用。 */
+export const collectProactiveClues = collectObservationReleases

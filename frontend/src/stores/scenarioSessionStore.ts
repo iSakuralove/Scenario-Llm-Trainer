@@ -131,7 +131,12 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
       question: optimistic?.question ?? null,
       session: optimistic?.session ?? null,
       activeRun: pendingRun
-        ? { requestId: pendingRun.requestId, userContent: pendingRun.userContent, events: pendingRun.events }
+        ? {
+            requestId: pendingRun.requestId,
+            userContent: pendingRun.userContent,
+            events: pendingRun.events,
+            structuredAction: pendingRun.structuredAction,
+          }
         : null,
       isSending: Boolean(pendingRun),
       isLoading: true,
@@ -150,7 +155,12 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
         messages: detail.messages ?? [],
         activeRun: committedPendingRun || stalePendingRun || !pendingRun
           ? null
-          : { requestId: pendingRun.requestId, userContent: pendingRun.userContent, events: pendingRun.events },
+          : {
+              requestId: pendingRun.requestId,
+              userContent: pendingRun.userContent,
+              events: pendingRun.events,
+              structuredAction: pendingRun.structuredAction,
+            },
         isSending: Boolean(pendingRun && !committedPendingRun && !stalePendingRun),
         completedRuns: Object.fromEntries(
           (detail.messages ?? [])

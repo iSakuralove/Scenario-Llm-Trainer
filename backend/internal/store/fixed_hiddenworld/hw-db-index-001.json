@@ -36,6 +36,16 @@
         "把索引校验加进发布前的检查清单，避免重建表时再次漏掉"
       ]
     },
+    "canonical_answer": {
+      "canonical_conclusion": "orders 表结构变更遗漏 idx_user_created 联合索引，导致订单列表查询退化为全表扫描。",
+      "root_cause_id": "RC_INDEX_DROPPED",
+      "required_evidence_ids": ["E_SLOW_SQL", "E_EXPLAIN_FULLSCAN"],
+      "required_causal_relations": ["REL_DDL_TO_INDEX_MISSING", "REL_INDEX_MISSING_TO_FULLSCAN"],
+      "accepted_equivalents": ["发布漏掉 idx_user_created 索引，使订单查询走全表扫描。"],
+      "solution_requirements": ["重建 idx_user_created 联合索引", "把索引校验加进发布前的检查清单，避免重建表时再次漏掉"],
+      "answer_version": "hiddenworld.v2"
+    },
+    "diagnostic_relations": ["REL_DDL_TO_INDEX_MISSING", "REL_INDEX_MISSING_TO_FULLSCAN"],
     "hypotheses": [
       { "hypothesis_id": "H_INDEX", "label": "索引问题" },
       { "hypothesis_id": "H_CPU_BOUND", "label": "数据库资源被打满" },
@@ -185,7 +195,8 @@
     ],
     "solution_rubric": {
       "required_actions": [
-        "为 orders 表重建 idx_user_created (user_id, created_at) 联合索引"
+        "重建 idx_user_created 联合索引",
+        "把索引校验加进发布前的检查清单，避免重建表时再次漏掉"
       ],
       "verification_steps": [
         "重建后重新 EXPLAIN，确认 key 命中 idx_user_created 且 rows 大幅下降",

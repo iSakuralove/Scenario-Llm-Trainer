@@ -36,6 +36,16 @@
         "为多租户缓存增加键隔离测试"
       ]
     },
+    "canonical_answer": {
+      "canonical_conclusion": "缓存键遗漏 tenant_id，导致不同租户共享商品列表缓存项并出现串数据。",
+      "root_cause_id": "RC_CACHE_KEY_TENANT",
+      "required_evidence_ids": ["E_CACHE_MISMATCH", "E_KEY_MISSING_TENANT"],
+      "required_causal_relations": ["REL_CACHE_KEY_MISSING_TENANT", "REL_CACHE_KEY_TO_WRONG_RESULT"],
+      "accepted_equivalents": ["商品列表缓存 key 没有 tenant_id，跨租户命中同一缓存项。"],
+      "solution_requirements": ["把 tenant_id 纳入缓存键并清理旧键", "为多租户缓存增加键隔离测试"],
+      "answer_version": "hiddenworld.v2"
+    },
+    "diagnostic_relations": ["REL_CACHE_KEY_MISSING_TENANT", "REL_CACHE_KEY_TO_WRONG_RESULT"],
     "hypotheses": [
       { "hypothesis_id": "H_CACHE_KEY", "label": "缓存键缺少租户维度" },
       { "hypothesis_id": "H_DB_DATA", "label": "数据库数据被写错" },
@@ -63,7 +73,7 @@
       { "action": "inspect:config.serialization", "result": "序列化字段顺序和租户字段解析正常，问题出现在缓存命中前的键隔离。", "is_negative": true, "yields_evidence": [], "rules_out": ["H_SERIALIZE"], "unmet_prerequisite_result": "" }
     ],
     "solution_rubric": {
-      "required_actions": ["把 tenant_id 纳入缓存键并清理旧键"],
+      "required_actions": ["把 tenant_id 纳入缓存键并清理旧键", "为多租户缓存增加键隔离测试"],
       "verification_steps": ["用两个租户相同筛选条件验证 key 不同", "确认缓存命中结果租户一致", "观察串数据告警归零"],
       "rollback_notes": ["发布键模板修复前先禁用商品列表缓存", "旧键需要按版本前缀批量清理"]
     },

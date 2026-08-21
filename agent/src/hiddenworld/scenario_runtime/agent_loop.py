@@ -7,7 +7,13 @@ from dataclasses import dataclass
 from collections.abc import Awaitable, Callable
 from typing import Protocol
 
-from hiddenworld.contracts import AgentContext, AgentModelOutput, AgentToolResult, FinalReplyOutput, ToolCall
+from hiddenworld.contracts import (
+    AgentContext,
+    AgentModelOutput,
+    AgentToolResult,
+    FinalReplyOutput,
+    ToolCall,
+)
 
 from .batch_scheduler import BatchScheduler, _fingerprint
 
@@ -78,7 +84,8 @@ class AgentLoop:
                 events.append(AgentLoopEvent("final_reply", output))
                 return output, events
 
-            events.append(AgentLoopEvent("understanding", output.public_summary))
+            # 保留完整的安全语义投影供 Runtime 归约；不包含隐藏答案或 CoT。
+            events.append(AgentLoopEvent("understanding", output))
             plan = self.scheduler.plan(
                 output.calls,
                 action_catalog=current.action_catalog,
@@ -110,9 +117,22 @@ class AgentLoop:
                     )
                     for call in plan.deferred
                 )
+            guidance_state = current.guidance_state
+            if output.teaching_decision is not None:
+                guidance_state = guidance_state.model_copy(
+                    update={
+                        "teaching_state": output.teaching_decision.teaching_state,
+                        "current_focus": output.teaching_decision.guidance_direction,
+                    }
+                )
+            if output.turn_assessment is not None:
+                guidance_state = guidance_state.model_copy(
+                    update={"progress_assessment": output.turn_assessment.progress_assessment}
+                )
             current = current.model_copy(
                 update={
                     "tool_results": [*current.tool_results, *results],
+                    "guidance_state": guidance_state,
                     "budget": current.budget.model_copy(
                         update={
                             "remaining_model_rounds": self.max_model_rounds - round_index - 1,

@@ -319,7 +319,17 @@ test('v2 run events render task list, quick actions and argument-free tool resul
     v2(7, 'tool_result', { tool_result: { call_id: 'obs:inspect:metrics.gateway', tool_id: 'inspect:metrics.gateway', tool_kind: 'metrics', result_status: 'succeeded', duration_ms: 9, content: { content_type: 'observation', markdown_ready: '网关活跃连接数处于正常区间。', display_variant: 'tool_return', meta: { tool_kind: 'metrics', is_negative: true } } } }),
     v2(8, 'task_upserted', { task: { task_id: 'task-metrics', state: 'completed' } }),
     v2(9, 'assistant_delta', { phase: 'replying', markdown_ready_delta: reply }),
-    v2(10, 'turn_completed', { next_actions: [{ action_id: 'inspect:config.route_diff', catalog_version: 'catalog-v2', tool_kind: 'config', title: '查看网关路由配置' }] }),
+    // 兼容旧会话曾把所有标题落成“可选检查”：展示层必须按 action_id
+    // 恢复具体对象名，不能让一组 QuickAction 退化成同一个占位词。
+    v2(10, 'turn_completed', {
+      next_actions: [
+        { action_id: 'inspect:logs.callback_timeout', catalog_version: 'catalog-v2', tool_kind: 'logs', title: '可选检查' },
+        { action_id: 'inspect:change.gateway_release', catalog_version: 'catalog-v2', tool_kind: 'config', title: '可选检查' },
+        { action_id: 'inspect:config.route_diff', catalog_version: 'catalog-v2', tool_kind: 'config', title: '可选检查' },
+        { action_id: 'inspect:database.order_write', catalog_version: 'catalog-v2', tool_kind: 'database', title: '可选检查' },
+        { action_id: 'inspect:database.slow_query', catalog_version: 'catalog-v2', tool_kind: 'database', title: '可选检查' },
+      ],
+    }),
   ]
   let quickActionBody: Record<string, unknown> | null = null
   await setupScenarioEntry(page, sessionId)
@@ -358,7 +368,18 @@ test('v2 run events render task list, quick actions and argument-free tool resul
   await expect(run).toContainText('10:00-10:20 网关 504 数量明显上升。')
   await expect(run).toContainText('网关活跃连接数处于正常区间。')
   // QuickActions：turn_completed 下发结构化动作。
-  const quickAction = page.getByTestId('agent-run-quick-actions').getByRole('button', { name: '查看网关路由配置' })
+  const quickActions = page.getByTestId('agent-run-quick-actions')
+  for (const label of [
+    '回调访问日志',
+    '网关 VIP 发布记录',
+    '网关 VIP 后端池与路由差异',
+    '订单库回调写入日志',
+    'MySQL 慢查询日志',
+  ]) {
+    await expect(quickActions.getByRole('button', { name: label })).toBeVisible()
+  }
+  await expect(quickActions).not.toContainText('可选检查')
+  const quickAction = quickActions.getByRole('button', { name: '网关 VIP 后端池与路由差异' })
   await expect(quickAction).toBeVisible()
   await quickAction.click()
   // QuickAction 产生新一轮 run：断言落在最新一条上。

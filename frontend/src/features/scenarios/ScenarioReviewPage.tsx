@@ -4,6 +4,7 @@ import { ArrowLeft, CheckCircle2, ClipboardList, FileSearch, MessageSquareText, 
 import { api } from '../../api/client'
 import { HeaderBlock, Loading, Metric, PrintButton } from '../../components/common'
 import { useToken } from '../../lib/auth'
+import { resolveQuickActionUserLabel } from './agentrun'
 import './ScenarioSessionPage.css'
 
 export function ScenarioReviewPage() {
@@ -138,7 +139,10 @@ export function ScenarioReviewPage() {
           <div className="review-thread">
             {(review.messages ?? []).map((message) => (
               <div className="review-turn" key={message.id}>
-                <strong>Q{message.turn_number}: {message.user_content}</strong>
+                <strong>
+                  Q{message.turn_number}:{' '}
+                  {resolveQuickActionUserLabel(message.user_content, { events: message.response_meta.run_events ?? [] })}
+                </strong>
                 <span>{message.assistant_content}</span>
               </div>
             ))}

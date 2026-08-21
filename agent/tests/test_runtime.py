@@ -1,12 +1,13 @@
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 from pydantic_ai.models.test import TestModel
 
 from hiddenworld.agents.interpreter import create_interpreter_agent
 from hiddenworld.agents.mentor import create_mentor_agent
-from hiddenworld.contracts import AgentTurnRequest, Observation, TurnAnalysis, VirtualTool
+from hiddenworld.contracts import AgentTurnRequest, MentorAction, Observation, TurnAnalysis, VirtualTool
 from hiddenworld.runtime import (
     HiddenWorldRuntime,
     TurnDeadlineExceeded,
@@ -91,7 +92,7 @@ def test_runtime_matches_explicit_order_log_alias_to_declared_virtual_tool(
     assert result.actions == [action]
 
 
-def test_runtime_does_not_keep_model_guidance_after_public_observation(
+def test_runtime_keeps_model_guidance_after_public_observation(
     hidden_world,
     learner_state,
     public_scenario,
@@ -119,9 +120,8 @@ def test_runtime_does_not_keep_model_guidance_after_public_observation(
 
     normalized = _normalize_mentor_reply(request, analysis, observations, reply)
 
-    assert "问题已经比较清晰" not in normalized
-    assert "建议下一步" not in normalized
-    assert normalized == f"本轮公开观察：{observations[0].result}"
+    assert "问题已经比较清晰" in normalized
+    assert "建议下一步检查网关 VIP 的发布记录" in normalized
 
 
 @pytest.mark.asyncio
@@ -656,4 +656,82 @@ async def test_public_reasoning_summary_comes_from_the_model_not_a_constant(
 
     assert summaries[0] == ["你想先看日志。"]
     assert summaries[1] == ["你想改看发布记录。"]
+
+
+@pytest.mark.asyncio
+async def test_legacy_reply_deltas_are_emitted_only_after_guard(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    class StreamingLegacyRuntime(HiddenWorldRuntime):
+        async def _run_mentor(self, _deps, *, on_reply_delta):
+            await on_reply_delta("部分")
+            await on_reply_delta("回复")
+            return SimpleNamespace(
+                output=MentorAction(
+                    rationale="测试",
+                    reply="部分回复",
+                    requested_releases=[],
+                    confirms_hypothesis=False,
+                    expected_effort="quick",
+                )
+            )
+
+    request = AgentTurnRequest(
+        request_id="request-legacy-buffered-reply",
+        session_id="session-1",
+        state_revision=3,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="先看看 CPU",
+    )
+    events: list[tuple[str, str]] = []
+
+    async def on_trace(event) -> None:
+        events.append(("trace", event.kind))
+
+    async def on_delta(piece: str) -> None:
+        events.append(("delta", piece))
+
+    result = await StreamingLegacyRuntime(
+        interpreter=_stuck_interpreter(is_stuck=False),
+        mentor=object(),
+    ).run_turn(request, on_public_trace=on_trace, on_reply_delta=on_delta)
+
+    guard_index = next(index for index, item in enumerate(events) if item == ("trace", "guard_passed"))
+    delta_indexes = [index for index, item in enumerate(events) if item[0] == "delta"]
+    assert delta_indexes
+    assert min(delta_indexes) > guard_index
+    assert result.reply == "部分回复"
+
+
+@pytest.mark.asyncio
+async def test_legacy_mentor_fallback_builds_a_typed_action(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    class FailingMentor:
+        async def run(self, *_args, **_kwargs):
+            raise RuntimeError("mentor unavailable")
+
+    request = AgentTurnRequest(
+        request_id="request-legacy-fallback",
+        session_id="session-1",
+        state_revision=3,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="先看看 CPU",
+    )
+
+    result = await HiddenWorldRuntime(
+        interpreter=_stuck_interpreter(is_stuck=False),
+        mentor=FailingMentor(),
+    ).run_turn(request)
+
+    assert result.reply
+    assert "mentor_fallback" in result.internal_audit.reason_codes
 

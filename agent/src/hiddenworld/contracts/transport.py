@@ -15,6 +15,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from .answer import InternalAnswerComparison
+from .assessment import GuidanceState, TeachingDecision, TurnAssessment, TurnControl
 from .authorization import StructuredUserAction
 from .events import PublicTraceEvent
 from .learner import LearnerState, Turn
@@ -138,6 +139,10 @@ class AgentTurnResult(BaseModel):
         ),
     )
     turn_analysis: TurnAnalysis
+    turn_assessment: TurnAssessment | None = None
+    teaching_decision: TeachingDecision | None = None
+    guidance_state: GuidanceState = Field(default_factory=GuidanceState)
+    turn_control: TurnControl = Field(default_factory=TurnControl)
     proposals: list[Proposal] = Field(default_factory=list)
     public_trace: list[PublicTraceEvent] = Field(default_factory=list)
     internal_verification: VerificationResult

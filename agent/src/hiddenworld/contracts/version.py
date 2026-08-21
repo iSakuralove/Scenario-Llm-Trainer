@@ -12,6 +12,23 @@ from typing import Final, Literal
 # 版本不匹配时整轮拒绝，不做字段级兼容猜测——猜错的代价是状态和对话脱节。
 CONTRACT_VERSION: Final[str] = "hiddenworld.v1"
 
+# CanonicalAnswer 有独立的持久化版本。它不能只检查“非空”：题库外层的
+# model_version 与答案快照必须通过显式映射绑定，避免加载了旧答案结构却把
+# 整道题当成当前契约继续运行。
+ANSWER_VERSION: Final[str] = "hiddenworld.v2"
+
+# 当前支持的题目模型与答案快照版本关系。新增题目模型时必须显式加入，
+# 不允许 loader 对未知版本做猜测或静默兼容。
+ANSWER_VERSION_BY_MODEL_VERSION: Final[dict[str, str]] = {
+    CONTRACT_VERSION: ANSWER_VERSION,
+}
+
+
+def answer_version_for_model(model_version: str) -> str | None:
+    """返回题目模型对应的 CanonicalAnswer 版本；未知模型返回 None。"""
+
+    return ANSWER_VERSION_BY_MODEL_VERSION.get(model_version)
+
 # 证据节点的七个维度。沿用 Go 侧 diagnosticFocus() 的划分：
 # 那套划分本身是合理的，出问题的是用关键词去匹配它（审查报告 H1）。
 # 这里只迁移分类法，不迁移匹配方式——归类由出题时确定，不在运行时猜。

@@ -12,6 +12,7 @@ from typing import Any
 
 from pydantic_ai import messages as pai_messages
 
+from hiddenworld.action_resolver import legacy_action_aliases, resolve_declared_items
 from hiddenworld.agents.tools import CompareAnswerRuntime
 from hiddenworld.contracts import (
     AgentTurnRequest,
@@ -23,6 +24,7 @@ from hiddenworld.contracts import (
     InterpreterDeps,
     LearnerState,
     LearnerStateView,
+    MentorAction,
     MentorDeps,
     Observation,
     Proposal,
@@ -32,8 +34,8 @@ from hiddenworld.contracts import (
     PublicTraceEvent,
     ToolEventPayload,
     TurnAnalysis,
-    VerificationResult,
     UserActionAuthorization,
+    VerificationResult,
     validate_scenario_contract,
 )
 from hiddenworld.kernel import (
@@ -331,9 +333,21 @@ class HiddenWorldRuntime:
             ),
         )
         mentor_fallback = False
+        # ``pydantic-ai`` 的流式 partial output 会在最终 output validator 之前
+        # 触发回调。旧双节点链路不能把这段尚未通过 Guard 的预览直接发给浏览器，
+        # 否则模型被重试或 fallback 时会留下未获批准的半句回复。
+        buffered_reply_deltas: list[str] = []
+
+        async def buffer_reply_delta(piece: str) -> None:
+            if piece:
+                buffered_reply_deltas.append(piece)
+
         try:
             mentor_result = await run_with_network_retries(
-                lambda: self._run_mentor(mentor_deps, on_reply_delta=on_reply_delta)
+                lambda: self._run_mentor(
+                    mentor_deps,
+                    on_reply_delta=buffer_reply_delta if on_reply_delta is not None else None,
+                )
             )
             mentor_action = mentor_result.output
         except Exception:
@@ -353,16 +367,45 @@ class HiddenWorldRuntime:
         mentor_action = mentor_action.model_copy(
             update={"reply": _normalize_mentor_reply(request, analysis, observations, mentor_action.reply)},
         )
-        if mentor_fallback:
-            # 规范化后的文本仍通过 Guard，避免兜底逻辑成为安全校验旁路。
+        try:
+            # 模型输出通常已经在 Mentor output validator 中过 Guard；规范化会
+            # 改写公开正文，所以这里无论正常还是 fallback 都再走一次最终 Guard。
             mentor_action = Guard().validate(
                 mentor_action,
                 constraints=constraints,
                 context=mentor_deps.guard_only,
             )
+        except ValueError:
+            if not mentor_fallback:
+                mentor_fallback = True
+                logger.exception("mentor reply failed final guard; using public-context fallback")
+                mentor_action = _fallback_mentor_action(
+                    request=request,
+                    analysis=analysis,
+                    observations=observations,
+                    constraints=constraints,
+                    guard_context=mentor_deps.guard_only,
+                )
+                mentor_action = Guard().validate(
+                    mentor_action,
+                    constraints=constraints,
+                    context=mentor_deps.guard_only,
+                )
+            else:
+                raise
         final_trace = _public_trace_after_mentor(start_sequence=len(public_trace) + 1)
         public_trace.extend(final_trace)
         await _emit_public_trace(on_public_trace, final_trace, sequencer)
+
+        if on_reply_delta is not None:
+            buffered_reply = "".join(buffered_reply_deltas)
+            if buffered_reply == mentor_action.reply and buffered_reply:
+                for piece in buffered_reply_deltas:
+                    await on_reply_delta(piece)
+            else:
+                # Guard/规范化或重试改变了正文时，丢弃全部 partial output，
+                # 只发最终获批的公开回复一次。
+                await on_reply_delta(mentor_action.reply)
 
         return AgentTurnResult(
             request_id=request.request_id,
@@ -526,7 +569,7 @@ def _analysis_for_structured_action(request: AgentTurnRequest) -> TurnAnalysis:
         if tool.observation_action == action_id:
             target = tool.target
             break
-    summary = f"你选择查看{target}。" if target else "你发起了一次快捷检查。"
+    summary = f"你选择查看{target}。" if target else "已收到该项公开检查。"
     return TurnAnalysis(
         public_summary=summary,
         intent="investigate",
@@ -637,15 +680,15 @@ def _resolve_declared_virtual_tool(request: AgentTurnRequest, analysis):
     if not text:
         return analysis
 
-    candidates = []
-    for tool in tools:
-        signals = [
-            item.strip().lower()
-            for item in [*tool.aliases, *tool.query_patterns, *_legacy_virtual_tool_aliases(tool)]
-            if item.strip()
-        ]
-        if any(signal in text for signal in signals):
-            candidates.append(tool)
+    candidates = [
+        tool
+        for tool in tools
+        if tool.observation_action in resolve_declared_items(
+            request.user_message,
+            [tool.model_copy(update={"aliases": [*tool.aliases, *_legacy_virtual_tool_aliases(tool)]})],
+            action_attr="observation_action",
+        )
+    ]
 
     # 对 SELECT/SHOW/EXPLAIN 等只读语句，优先按题目声明的 query_patterns 匹配；
     # 没有匹配时不执行、不猜测，继续走 unsupported 分支。
@@ -657,7 +700,11 @@ def _resolve_declared_virtual_tool(request: AgentTurnRequest, analysis):
         candidates = [
             tool
             for tool in tools
-            if any(pattern.lower() in text for pattern in tool.query_patterns if pattern.strip())
+            if tool.observation_action in resolve_declared_items(
+                request.user_message,
+                [tool],
+                action_attr="observation_action",
+            )
         ]
 
     if (readonly or external_command) and not candidates:
@@ -692,14 +739,7 @@ def _legacy_virtual_tool_aliases(tool) -> tuple[str, ...]:
     同时不把任意包含“日志/数据库”的消息放行。
     """
 
-    compatibility_aliases = {
-        "inspect:database.order_write": (
-            "订单库日志",
-            "订单库写入日志",
-            "看订单库日志",
-        ),
-    }
-    return compatibility_aliases.get(tool.observation_action, ())
+    return legacy_action_aliases(tool.observation_action)
 
 
 def _simulation_tool_labels(request: AgentTurnRequest) -> list[str]:
@@ -708,7 +748,12 @@ def _simulation_tool_labels(request: AgentTurnRequest) -> list[str]:
     return [item.action for item in request.hidden_world.observations]
 
 
-def _normalize_mentor_reply(request: AgentTurnRequest, analysis, observations: list[Observation], reply: str) -> str:
+def _normalize_mentor_reply(
+    request: AgentTurnRequest,
+    analysis,
+    observations: list[Observation],
+    reply: str,
+) -> str:
     """兜住模型偶发的现实环境措辞和求助答非所问。"""
 
     text = (reply or "").strip()
@@ -726,20 +771,6 @@ def _normalize_mentor_reply(request: AgentTurnRequest, analysis, observations: l
         if observations:
             return _public_observation_summary(observations)
         return "这是题目自带的模拟文本环境，直接在输入框描述要查的对象即可；系统会返回当前题目允许的虚拟线索。"
-    # 工具结果已经由 Runtime 和 QuickActions 展示；模型不能借这轮观察
-    # 替学生判断根因、规划下一步或指定要查的下一项。提示词是软约束，
-    # 这里再做一次确定性收口，避免偶发的“建议下一步检查……”穿透到页面。
-    guidance_markers = (
-        "问题已经比较清晰",
-        "建议下一步",
-        "下一步检查",
-        "下一步可以",
-        "应该检查",
-        "应当检查",
-        "需要检查",
-    )
-    if observations and any(marker in text for marker in guidance_markers):
-        return _public_observation_summary(observations)
     return text or "可以继续用自然语言描述想查的对象，或输入只读 SQL、日志查询和配置查询语句；系统只会在本题虚拟数据上模拟。"
 
 

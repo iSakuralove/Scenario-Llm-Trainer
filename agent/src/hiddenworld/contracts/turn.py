@@ -11,7 +11,7 @@ JSON Schema，所以共同基线只能是"模型吐 JSON + Pydantic 校验"。�
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .version import StudentAffect
 
@@ -117,4 +117,57 @@ class AnswerAttempt(BaseModel):
     session_id: str
     turn_id: str
     revision: int
-    text: str = Field(description="学生的答案原文，取自 TurnAnalysis.answer_attempt_text")
+    # 这是服务端从 AgentTurnRequest.user_message 复制的原文。
+    # 旧 v1 调用方没有这个字段时仍可反序列化；V2 Runtime 必须通过
+    # ``from_user_message`` 创建，或在 CompareAnswerRuntime 中提供 user_message
+    # 进行逐字绑定。模型输出的 answer_attempt_text 不再是权威来源。
+    text: str = Field(description="学生本轮 user_message 的原文")
+    source_user_message: str = Field(
+        default="",
+        exclude=True,
+        repr=False,
+        description="服务端绑定的原始 user_message；不进入公开序列化",
+    )
+
+    @model_validator(mode="after")
+    def _source_must_match_text(self) -> "AnswerAttempt":
+        if self.source_user_message and self.source_user_message != self.text:
+            raise ValueError("source_user_message must exactly match text")
+        return self
+
+    @classmethod
+    def from_user_message(
+        cls,
+        *,
+        answer_attempt_id: str,
+        session_id: str,
+        turn_id: str,
+        revision: int,
+        user_message: str,
+    ) -> "AnswerAttempt":
+        """由服务端把本轮原始消息绑定为答案尝试。
+
+        ``TurnAnalysis.answer_attempt_text`` 只是一项模型分析结果，不能作为
+        比较输入。该工厂是 Runtime 应使用的唯一便捷构造入口；保留直接构造
+        仅用于旧 v1 trace 的读取兼容。
+        """
+
+        if not isinstance(user_message, str) or not user_message:
+            raise ValueError("user_message must be a non-empty string")
+        return cls(
+            answer_attempt_id=answer_attempt_id,
+            session_id=session_id,
+            turn_id=turn_id,
+            revision=revision,
+            text=user_message,
+            source_user_message=user_message,
+        )
+
+    def matches_user_message(self, user_message: str) -> bool:
+        """判断尝试是否逐字绑定指定原始消息。"""
+
+        if not isinstance(user_message, str) or not user_message:
+            return False
+        if self.text != user_message:
+            return False
+        return not self.source_user_message or self.source_user_message == user_message

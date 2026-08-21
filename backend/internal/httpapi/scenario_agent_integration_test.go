@@ -42,6 +42,25 @@ func TestScenarioMessageCommitsApprovedAgentTurnAndKeepsPrivateAuditPrivate(t *t
 			RequestID:        request.RequestID,
 			ExpectedRevision: request.StateRevision,
 			Reply:            reply,
+			TurnAssessment: &agentclient.TurnAssessment{
+				Intent:             "probe_plan",
+				ClaimType:          "none",
+				StudentAffect:      "engaged",
+				ProgressAssessment: "partial",
+				Actions:            []string{action},
+				Confidence:         0.95,
+			},
+			TeachingDecision: &agentclient.TeachingDecision{
+				TeachingState: "normal_diagnosis",
+				Strategy:      "observe",
+				ReplyPolicy:   "neutral_summary",
+			},
+			GuidanceState: agentclient.GuidanceState{
+				TeachingState:      "normal_diagnosis",
+				ProgressAssessment: "partial",
+				Navigation:         []agentclient.TeachingDimensionRef{},
+			},
+			TurnControl: agentclient.TurnControl{AllowedActionIDs: []string{action}},
 			TurnAnalysis: agentclient.TurnAnalysis{
 				Actions:          []string{action},
 				EstablishedFacts: []string{},
@@ -724,6 +743,25 @@ func noProgressTurnResult(request agentclient.TurnRequest, reply string) agentcl
 		RequestID:        request.RequestID,
 		ExpectedRevision: request.StateRevision,
 		Reply:            reply,
+		TurnAssessment: &agentclient.TurnAssessment{
+			Intent:             "investigate",
+			ClaimType:          "none",
+			StudentAffect:      "engaged",
+			ProgressAssessment: "no_progress",
+			Actions:            []string{},
+			Confidence:         0.9,
+		},
+		TeachingDecision: &agentclient.TeachingDecision{
+			TeachingState: "normal_diagnosis",
+			Strategy:      "acknowledge",
+			ReplyPolicy:   "acknowledgement",
+		},
+		GuidanceState: agentclient.GuidanceState{
+			TeachingState:      "normal_diagnosis",
+			ProgressAssessment: "no_progress",
+			Navigation:         []agentclient.TeachingDimensionRef{},
+		},
+		TurnControl: agentclient.TurnControl{AllowedActionIDs: []string{}},
 		TurnAnalysis: agentclient.TurnAnalysis{
 			Actions:          []string{},
 			EstablishedFacts: []string{},
@@ -870,9 +908,9 @@ func TestScenarioV2RunEventsCarrySchemaRevisionAndStableSequence(t *testing.T) {
 func TestScenarioPublicObservationMarkdownStripsImplementationPrefix(t *testing.T) {
 	cases := map[string]string{
 		"模拟回调访问日志（10:00-10:20）：10:05 后 zone-b 出现超时。": "回调访问日志（10:00-10:20）：10:05 后 zone-b 出现超时。",
-		"  模拟订单库写入日志：出现慢插入  ":                      "订单库写入日志：出现慢插入",
-		"服务 Pod 资源平稳。":                                "服务 Pod 资源平稳。",
-		"模拟数据里的模拟只剥离开头一次":                          "数据里的模拟只剥离开头一次",
+		"  模拟订单库写入日志：出现慢插入  ":                        "订单库写入日志：出现慢插入",
+		"服务 Pod 资源平稳。":                               "服务 Pod 资源平稳。",
+		"模拟数据里的模拟只剥离开头一次":                            "数据里的模拟只剥离开头一次",
 	}
 	for input, expected := range cases {
 		if got := scenarioPublicObservationMarkdown(input); got != expected {

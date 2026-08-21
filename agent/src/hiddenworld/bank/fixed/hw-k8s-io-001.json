@@ -36,6 +36,16 @@
         "把磁盘使用率和 eviction threshold 纳入任务监控"
       ]
     },
+    "canonical_answer": {
+      "canonical_conclusion": "v3.5 镜像把压缩中间文件和日志写入同一 emptyDir，临时盘达到 eviction threshold，导致批处理 Pod 被驱逐。",
+      "root_cause_id": "RC_K8S_EMPTYDIR_IO",
+      "required_evidence_ids": ["E_EVICTION_EVENTS", "E_EMPTYDIR_USAGE"],
+      "required_causal_relations": ["REL_VOLUME_TO_EMPTYDIR_PRESSURE", "REL_EMPTYDIR_PRESSURE_TO_EVICTION"],
+      "accepted_equivalents": ["新镜像共用 emptyDir 造成临时盘压力，触发 Pod eviction。"],
+      "solution_requirements": ["为中间文件配置独立并有容量上限的临时存储", "把磁盘使用率和 eviction threshold 纳入任务监控"],
+      "answer_version": "hiddenworld.v2"
+    },
+    "diagnostic_relations": ["REL_VOLUME_TO_EMPTYDIR_PRESSURE", "REL_EMPTYDIR_PRESSURE_TO_EVICTION"],
     "hypotheses": [
       { "hypothesis_id": "H_EMPTYDIR_IO", "label": "emptyDir 临时盘写满" },
       { "hypothesis_id": "H_MEMORY", "label": "容器内存限制不足" },
@@ -63,7 +73,7 @@
       { "action": "inspect:image.startup", "result": "容器启动脚本成功完成，重启发生在任务写中间文件阶段。", "is_negative": true, "yields_evidence": [], "rules_out": ["H_IMAGE"], "unmet_prerequisite_result": "" }
     ],
     "solution_rubric": {
-      "required_actions": ["为中间文件配置独立临时存储并设置容量上限"],
+      "required_actions": ["为中间文件配置独立并有容量上限的临时存储", "把磁盘使用率和 eviction threshold 纳入任务监控"],
       "verification_steps": ["压测批处理时确认临时盘低于 eviction threshold", "观察 Pod 不再被驱逐", "监控中间文件和日志目录的使用量"],
       "rollback_notes": ["先回滚 v3.5 volume 配置", "保留节点事件和 Pod 终止原因用于复盘"]
     },

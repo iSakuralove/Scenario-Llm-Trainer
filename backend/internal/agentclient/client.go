@@ -50,14 +50,20 @@ type Config struct {
 	FailureThreshold int
 	OpenDuration     time.Duration
 	HTTPClient       *http.Client
+	// AllowLegacyStructuredResponse 是显式的迁移开关。正式 Agent V2
+	// 响应必须包含 turn_assessment、teaching_decision、guidance_state 和
+	// turn_control；只有调用方明确打开此项时，客户端才接受旧的扁平响应。
+	// 默认值必须保持严格，避免上游悄悄退回旧主链。
+	AllowLegacyStructuredResponse bool
 }
 
 type Client struct {
-	baseURL          string
-	httpClient       *http.Client
-	timeout          time.Duration
-	failureThreshold int
-	openDuration     time.Duration
+	baseURL                       string
+	httpClient                    *http.Client
+	timeout                       time.Duration
+	failureThreshold              int
+	openDuration                  time.Duration
+	allowLegacyStructuredResponse bool
 
 	mu           sync.Mutex
 	failures     int
@@ -88,11 +94,12 @@ func New(config Config) *Client {
 		openDuration = 30 * time.Second
 	}
 	return &Client{
-		baseURL:          strings.TrimRight(strings.TrimSpace(config.BaseURL), "/"),
-		httpClient:       client,
-		timeout:          timeout,
-		failureThreshold: threshold,
-		openDuration:     openDuration,
+		baseURL:                       strings.TrimRight(strings.TrimSpace(config.BaseURL), "/"),
+		httpClient:                    client,
+		timeout:                       timeout,
+		failureThreshold:              threshold,
+		openDuration:                  openDuration,
+		allowLegacyStructuredResponse: config.AllowLegacyStructuredResponse,
 	}
 }
 
@@ -160,7 +167,7 @@ func (c *Client) Turn(ctx context.Context, request TurnRequest) (TurnResult, err
 		c.recordFailure()
 		return TurnResult{}, fmt.Errorf("decode hiddenworld agent response: response exceeds %d bytes", maxResponseBytes)
 	}
-	if err := validateRequiredResultFields(payload); err != nil {
+	if err := validateRequiredResultFields(payload, c.allowLegacyStructuredResponse); err != nil {
 		c.recordFailure()
 		return TurnResult{}, fmt.Errorf("decode hiddenworld agent response: %w", err)
 	}
@@ -175,17 +182,9 @@ func (c *Client) Turn(ctx context.Context, request TurnRequest) (TurnResult, err
 		c.recordFailure()
 		return TurnResult{}, fmt.Errorf("decode hiddenworld agent response: %w", err)
 	}
-	if result.ContractVersion != ContractVersion {
+	if err := validateTurnResult(request, result, c.allowLegacyStructuredResponse); err != nil {
 		c.recordFailure()
-		return TurnResult{}, ContractVersionError{Received: result.ContractVersion}
-	}
-	if result.RequestID != request.RequestID {
-		c.recordFailure()
-		return TurnResult{}, fmt.Errorf("agent response request_id mismatch")
-	}
-	if result.ExpectedRevision != request.StateRevision {
-		c.recordFailure()
-		return TurnResult{}, fmt.Errorf("agent response revision mismatch")
+		return TurnResult{}, err
 	}
 	c.recordSuccess()
 	return result, nil
@@ -345,7 +344,7 @@ func (c *Client) TurnStream(ctx context.Context, request TurnRequest, callbacks 
 		c.recordFailure()
 		return TurnResult{}, errors.New("agent stream ended without result event")
 	}
-	if err := validateTurnResult(request, result); err != nil {
+	if err := validateTurnResult(request, result, c.allowLegacyStructuredResponse); err != nil {
 		c.recordFailure()
 		return TurnResult{}, err
 	}
@@ -370,7 +369,7 @@ func normalizeTurnRequest(request TurnRequest) TurnRequest {
 	return request
 }
 
-func validateTurnResult(request TurnRequest, result TurnResult) error {
+func validateTurnResult(request TurnRequest, result TurnResult, allowLegacyStructuredResponse bool) error {
 	if result.ContractVersion != ContractVersion {
 		return ContractVersionError{Received: result.ContractVersion}
 	}
@@ -379,6 +378,14 @@ func validateTurnResult(request TurnRequest, result TurnResult) error {
 	}
 	if result.ExpectedRevision != request.StateRevision {
 		return errors.New("agent response revision mismatch")
+	}
+	if !allowLegacyStructuredResponse {
+		if result.TurnAssessment == nil {
+			return errors.New("agent response missing required turn_assessment")
+		}
+		if result.TeachingDecision == nil {
+			return errors.New("agent response missing required teaching_decision")
+		}
 	}
 	return nil
 }
@@ -402,7 +409,7 @@ func normalizeLearnerState(state LearnerState) LearnerState {
 	return state
 }
 
-func validateRequiredResultFields(payload []byte) error {
+func validateRequiredResultFields(payload []byte, allowLegacyStructuredResponse bool) error {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &fields); err != nil {
 		return err
@@ -417,6 +424,14 @@ func validateRequiredResultFields(payload []byte) error {
 		"public_trace",
 		"internal_verification",
 		"internal_audit",
+	}
+	if !allowLegacyStructuredResponse {
+		required = append(required,
+			"turn_assessment",
+			"teaching_decision",
+			"guidance_state",
+			"turn_control",
+		)
 	}
 	for _, name := range required {
 		value, ok := fields[name]

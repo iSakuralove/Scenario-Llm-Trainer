@@ -14,7 +14,6 @@ from pydantic_ai import models
 
 from hiddenworld.agents.interpreter import create_interpreter_agent
 from hiddenworld.agents.mentor import create_mentor_agent
-from hiddenworld.agents.scenario_agent import create_scenario_agent_runner
 from hiddenworld.agents.models import (
     ModelConfigurationError,
     build_deepseek_model,
@@ -23,6 +22,7 @@ from hiddenworld.agents.models import (
     build_routed_model,
     build_xuan_model,
 )
+from hiddenworld.agents.scenario_agent import create_scenario_agent_runner
 from hiddenworld.contracts import AgentTurnRequest, AgentTurnResult, ContractVersionMismatch
 from hiddenworld.runtime import HiddenWorldRuntime, TurnDeadlineExceeded
 from hiddenworld.scenario_runtime import SingleAgentRuntime
@@ -146,16 +146,26 @@ def _runtime_from_env() -> HiddenWorldRuntime | SingleAgentRuntime:
     if os.getenv("HIDDENWORLD_ALLOW_MODEL_REQUESTS", "0") != "1":
         raise ModelConfigurationError("real model requests are disabled")
     models.ALLOW_MODEL_REQUESTS = True
-    unified_provider = os.getenv("HIDDENWORLD_AGENT_PROVIDER", "").strip()
-    if unified_provider:
-        # 统一入口切换到真正的单 Agent 主链：一个模型节点负责工具规划和最终回复，
-        # Runtime 本地执行确定性工具、状态归约和 Guard，不再额外调用 Interpreter/Mentor。
-        model = _model_for_provider_value(unified_provider, role="AGENT")
-        return SingleAgentRuntime(create_scenario_agent_runner(model))
-    return HiddenWorldRuntime(
-        interpreter=create_interpreter_agent(_model_for_provider("HIDDENWORLD_INTERPRETER_PROVIDER")),
-        mentor=create_mentor_agent(_model_for_provider("HIDDENWORLD_MENTOR_PROVIDER")),
-    )
+    # 单 ScenarioAgent 是生产默认入口。旧的 Interpreter+Mentor 双节点只在
+    # 明确设置 runtime mode=legacy 时启用，避免部署遗漏一个新 provider 环境变量
+    # 就静默退回已经冻结的旧主链。
+    runtime_mode = os.getenv("HIDDENWORLD_RUNTIME_MODE", "single_agent").strip().lower()
+    if runtime_mode in {"legacy", "dual", "interpreter_mentor", "v1"}:
+        return HiddenWorldRuntime(
+            interpreter=create_interpreter_agent(_model_for_provider("HIDDENWORLD_INTERPRETER_PROVIDER")),
+            mentor=create_mentor_agent(_model_for_provider("HIDDENWORLD_MENTOR_PROVIDER")),
+        )
+    if runtime_mode not in {"single_agent", "single", "scenario_agent", "agent"}:
+        raise ModelConfigurationError(
+            "unsupported runtime mode configured: "
+            f"{runtime_mode}; expected single_agent or explicit legacy"
+        )
+
+    provider = os.getenv("HIDDENWORLD_AGENT_PROVIDER", "glm").strip() or "glm"
+    # 一个模型节点负责理解、工具规划和最终回复；Runtime 本地执行确定性工具、
+    # 状态归约和 Guard，不再额外调用 Interpreter/Mentor。
+    model = _model_for_provider_value(provider, role="AGENT")
+    return SingleAgentRuntime(create_scenario_agent_runner(model))
 
 
 def _model_for_provider(env_name: str):

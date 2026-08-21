@@ -36,6 +36,16 @@
         "把路由目标数量和可用区覆盖加入发布前检查"
       ]
     },
+    "canonical_answer": {
+      "canonical_conclusion": "10:05 网关发布遗漏 zone-b 的 VIP 后端目标，部分请求被转发到不存在的后端并发生连接超时和重试。",
+      "root_cause_id": "RC_NETWORK_VIP_ROUTE",
+      "required_evidence_ids": ["E_CALLBACK_TIMEOUT", "E_VIP_ROUTE"],
+      "required_causal_relations": ["REL_GATEWAY_RELEASE_TO_ROUTE_OMISSION", "REL_ROUTE_OMISSION_TO_TIMEOUT"],
+      "accepted_equivalents": ["网关发布漏掉 zone-b 后端，导致 VIP 流量命中无健康实例并超时。"],
+      "solution_requirements": ["修正 VIP 后端路由并恢复缺失的可用区后端", "把路由目标数量和可用区覆盖加入发布前检查"],
+      "answer_version": "hiddenworld.v2"
+    },
+    "diagnostic_relations": ["REL_GATEWAY_RELEASE_TO_ROUTE_OMISSION", "REL_ROUTE_OMISSION_TO_TIMEOUT"],
     "hypotheses": [
       { "hypothesis_id": "H_VIP_ROUTE", "label": "VIP 后端路由错误" },
       { "hypothesis_id": "H_DNS", "label": "DNS 解析异常" },
@@ -61,16 +71,18 @@
       { "action": "inspect:metrics.service", "result": "服务 Pod 资源平稳，没有 CPU、内存或重启异常。", "is_negative": true, "yields_evidence": ["E_CPU_NORMAL"], "rules_out": ["H_CPU"], "unmet_prerequisite_result": "" },
       { "action": "inspect:dependency.firewall", "result": "安全组规则没有在该时间窗口发生变更，其他接口链路也未出现连接拒绝。", "is_negative": true, "yields_evidence": [], "rules_out": ["H_FIREWALL"], "unmet_prerequisite_result": "" },
       { "action": "inspect:dependency.payment_provider", "result": "支付平台成功率和其他商户接口均正常，异常只出现在本方 VIP 入口。", "is_negative": true, "yields_evidence": [], "rules_out": ["H_PAYMENT_PROVIDER"], "unmet_prerequisite_result": "" }
-      ,{ "action": "inspect:database.order_write", "result": "模拟订单库写入日志（10:00-10:20）：INSERT order_callback 的提交成功率 99.98%，返回码 200；未见锁等待、连接池耗尽或写入超时。少量 401 只出现在网关入口日志，数据库没有对应失败写入。", "is_negative": true, "yields_evidence": [], "rules_out": [], "unmet_prerequisite_result": "请说明要查询订单写入日志或给出只读 SQL。" }
+       ,{ "action": "inspect:database.order_write", "result": "订单库写入日志（10:00-10:20）：INSERT order_callback 的提交成功率 99.98%，返回码 200；未见锁等待、连接池耗尽或写入超时。少量 401 只出现在网关入口日志，数据库没有对应失败写入。", "is_negative": true, "yields_evidence": [], "rules_out": [], "unmet_prerequisite_result": "请说明要查询订单写入日志或给出只读 SQL。" }
+       ,{ "action": "inspect:database.slow_query", "result": "MySQL 慢查询日志（10:00-10:20）：未发现与本次回调超时同时升高的慢查询；查询耗时和记录数没有异常峰值。", "is_negative": true, "yields_evidence": [], "rules_out": [], "unmet_prerequisite_result": "请说明要查询 MySQL 慢查询日志或给出只读查询。" }
     ],
     "virtual_tools": [
       { "tool_id": "tool.logs.callback", "kind": "logs", "target": "回调访问日志", "aliases": ["看回调日志", "回调服务日志", "网关日志", "访问日志", "看日志"], "query_patterns": ["status=401", "connect timeout", "upstream=callback", "SELECT * FROM callback_access_log"], "redacted_parameters": ["time_range", "upstream"], "simulated_output": "返回 200、401、connect timeout、upstream 和 retry 字段的回调访问日志。", "observation_action": "inspect:logs.callback_timeout", "evidence_ids": ["E_CALLBACK_TIMEOUT"] },
       { "tool_id": "tool.change.gateway", "kind": "config", "target": "网关 VIP 发布记录", "aliases": ["看网关配置", "网关发布", "看发布记录"], "query_patterns": ["SELECT * FROM gateway_release", "release gateway"], "redacted_parameters": ["time_range", "release_id"], "simulated_output": "返回 10:05 网关发布修改 VIP 后端池的模拟记录。", "observation_action": "inspect:change.gateway_release", "evidence_ids": ["E_GATEWAY_CHANGE"] },
       { "tool_id": "tool.config.route", "kind": "config", "target": "网关 VIP 后端池与路由差异", "aliases": ["后端池定义", "VIP 后端池", "路由配置", "看路由差异"], "query_patterns": ["SELECT backend_pool", "route diff", "vip backend"], "redacted_parameters": ["release_id", "route"], "simulated_output": "返回网关变更前后的 VIP 路由差异模拟结果。", "observation_action": "inspect:config.route_diff", "evidence_ids": ["E_ROUTE_DIFF"] },
-      { "tool_id": "tool.database.orders", "kind": "database", "target": "订单库回调写入日志", "aliases": ["数据库日志", "订单库日志", "订单库写入日志", "看订单库日志", "看数据库", "订单写入", "数据库写入"], "query_patterns": ["SELECT * FROM order_write_log", "SELECT count(*) FROM order_callback", "SHOW ENGINE INNODB STATUS"], "redacted_parameters": ["time_range", "table"], "simulated_output": "返回订单写入成功率、返回码、锁等待和连接池状态的模拟记录。", "observation_action": "inspect:database.order_write", "evidence_ids": [] }
+       { "tool_id": "tool.database.orders", "kind": "database", "target": "订单库回调写入日志", "aliases": ["数据库日志", "订单库日志", "订单库写入日志", "看订单库日志", "看数据库", "订单写入", "数据库写入"], "query_patterns": ["SELECT * FROM order_write_log", "SELECT count(*) FROM order_callback", "SHOW ENGINE INNODB STATUS"], "redacted_parameters": ["time_range", "table"], "simulated_output": "返回订单写入成功率、返回码、锁等待和连接池状态的模拟记录。", "observation_action": "inspect:database.order_write", "evidence_ids": [] },
+       { "tool_id": "tool.database.slow_query", "kind": "database", "target": "MySQL 慢查询日志", "aliases": ["MySQL慢查询日志", "慢查询日志", "MySQL 慢日志", "看慢查询"], "query_patterns": ["SELECT * FROM mysql.slow_log", "SELECT * FROM slow_query_log", "slow query"], "redacted_parameters": ["time_range", "table"], "simulated_output": "返回 MySQL 慢查询日志的公开结果。", "observation_action": "inspect:database.slow_query", "evidence_ids": [] }
     ],
     "solution_rubric": {
-      "required_actions": ["修正 VIP 后端路由并恢复 zone-b 目标"],
+      "required_actions": ["修正 VIP 后端路由并恢复缺失的可用区后端", "把路由目标数量和可用区覆盖加入发布前检查"],
       "verification_steps": ["确认所有可用区后端均健康", "观察回调超时率和重试率回落", "检查发布前路由覆盖校验"],
       "rollback_notes": ["先回滚网关路由配置，再在低峰期补发修正版本", "保留变更前后路由清单用于审计"]
     },

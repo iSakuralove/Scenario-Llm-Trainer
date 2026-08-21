@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from .answer import CanonicalAnswer, InternalAnswerComparison, PublicAnswerComparison, SupportStatus
+from .assessment import GuidanceState, TeachingDecision, TeachingState, TurnAssessment, TurnControl
 from .agent_context import (
     ActionCatalogEntry,
     AgentBudgetView,
@@ -18,7 +19,14 @@ from .agent_context import (
 from .authorization import AuthorizedActionRef, StructuredUserAction, UserActionAuthorization
 from .debug_trace import DebugTraceEvent
 from .dimensions import TeachingDimensionCategory, TeachingDimensionRef
-from .model_output import AgentModelOutput, AgentOutputEnvelope, FinalReplyOutput, ToolCall, ToolCallsOutput
+from .model_output import (
+    AgentModelOutput,
+    AgentOutputEnvelope,
+    AgentSemanticDecision,
+    FinalReplyOutput,
+    ToolCall,
+    ToolCallsOutput,
+)
 from .validator import ScenarioContractValidationError, ScenarioContractValidator, validate_scenario_contract
 from .deps import GuardContext, InterpreterDeps, MentorDeps
 from .events import (
@@ -51,12 +59,15 @@ from .turn import (
     TurnAnalysis,
 )
 from .version import (
+    ANSWER_VERSION,
+    ANSWER_VERSION_BY_MODEL_VERSION,
     CONTRACT_VERSION,
     AllowedDirection,
     EvidenceCategory,
     HypothesisRelation,
     MustNotConstraint,
     StudentAffect,
+    answer_version_for_model,
     direction_for_category,
 )
 from .world import (
@@ -139,6 +150,9 @@ FORBIDDEN_PUBLIC_FIELDS = frozenset(
 
 __all__ = [
     "CONTRACT_VERSION",
+    "ANSWER_VERSION",
+    "ANSWER_VERSION_BY_MODEL_VERSION",
+    "answer_version_for_model",
     "FORBIDDEN_PUBLIC_FIELDS",
     "HYPOTHESIS_OTHER",
     "LOW_CONFIDENCE_THRESHOLD",
@@ -148,6 +162,8 @@ __all__ = [
     "AgentTurnResult",
     "AgentModelOutput",
     "AgentOutputEnvelope",
+    "AgentSemanticDecision",
+    "GuidanceState",
     "ActionCatalogEntry",
     "AgentBudgetView",
     "AgentContext",
@@ -197,12 +213,16 @@ __all__ = [
     "StudentAffect",
     "SupportStatus",
     "TeachingConstraints",
+    "TeachingDecision",
+    "TeachingState",
     "TeachingDimensionCategory",
     "TeachingDimensionRef",
     "ToolCall",
     "ToolCallsOutput",
     "ToolEventPayload",
     "Turn",
+    "TurnAssessment",
+    "TurnControl",
     "TurnAnalysis",
     "VerificationResult",
     "UserActionAuthorization",

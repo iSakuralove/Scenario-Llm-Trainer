@@ -82,15 +82,68 @@ type Budget struct {
 }
 
 type TurnResult struct {
-	ContractVersion      string             `json:"contract_version"`
-	RequestID            string             `json:"request_id"`
-	ExpectedRevision     int                `json:"expected_revision"`
-	Reply                string             `json:"reply"`
-	TurnAnalysis         TurnAnalysis       `json:"turn_analysis"`
+	ContractVersion  string       `json:"contract_version"`
+	RequestID        string       `json:"request_id"`
+	ExpectedRevision int          `json:"expected_revision"`
+	Reply            string       `json:"reply"`
+	TurnAnalysis     TurnAnalysis `json:"turn_analysis"`
+	// TurnAssessment/TeachingDecision 是 Python Agent 的结构化语义输出。
+	// 它们只用于校验与展示，不能替代 Go 持有的状态归约与提议审批。
+	TurnAssessment       *TurnAssessment    `json:"turn_assessment"`
+	TeachingDecision     *TeachingDecision  `json:"teaching_decision"`
+	GuidanceState        GuidanceState      `json:"guidance_state"`
+	TurnControl          TurnControl        `json:"turn_control"`
 	Proposals            []Proposal         `json:"proposals"`
 	PublicTrace          []PublicTraceEvent `json:"public_trace"`
 	InternalVerification VerificationResult `json:"internal_verification"`
 	InternalAudit        AuditTrace         `json:"internal_audit"`
+}
+
+type TurnAssessment struct {
+	Intent                string   `json:"intent"`
+	UserGoal              string   `json:"user_goal"`
+	RequestedAction       string   `json:"requested_action"`
+	RequestedActionRaw    string   `json:"requested_action_raw"`
+	ClarificationTarget   string   `json:"clarification_target"`
+	ActionMatchStatus     string   `json:"action_match_status"`
+	Actions               []string `json:"actions"`
+	HypothesisID          string   `json:"hypothesis_id"`
+	HypothesisRaw         string   `json:"hypothesis_raw"`
+	ClaimType             string   `json:"claim_type"`
+	MadeClaim             bool     `json:"made_claim"`
+	ContainsAnswerAttempt bool     `json:"contains_answer_attempt"`
+	AnswerAttemptText     string   `json:"answer_attempt_text"`
+	EstablishedFacts      []string `json:"established_facts"`
+	ProgressAssessment    string   `json:"progress_assessment"`
+	IsStuck               bool     `json:"is_stuck"`
+	IsOffTopic            bool     `json:"is_off_topic"`
+	IsNoise               bool     `json:"is_noise"`
+	StudentAffect         string   `json:"student_affect"`
+	Confidence            float64  `json:"confidence"`
+}
+
+type TeachingDecision struct {
+	TeachingState         string `json:"teaching_state"`
+	Strategy              string `json:"strategy"`
+	GuidanceDirection     string `json:"guidance_direction"`
+	ReplyPolicy           string `json:"reply_policy"`
+	AllowExplicitNextStep bool   `json:"allow_explicit_next_step"`
+	AllowRuledOutScope    bool   `json:"allow_ruled_out_scope"`
+}
+
+type GuidanceState struct {
+	TeachingState      string                 `json:"teaching_state"`
+	ProgressAssessment string                 `json:"progress_assessment"`
+	Navigation         []TeachingDimensionRef `json:"navigation"`
+	StalledTurns       int                    `json:"stalled_turns"`
+	CurrentFocus       string                 `json:"current_focus"`
+}
+
+type TurnControl struct {
+	Terminal          bool     `json:"terminal"`
+	CompletionAllowed bool     `json:"completion_allowed"`
+	CompletionReady   bool     `json:"completion_ready"`
+	AllowedActionIDs  []string `json:"allowed_action_ids"`
 }
 
 type TurnAnalysis struct {

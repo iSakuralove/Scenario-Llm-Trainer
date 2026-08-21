@@ -38,17 +38,28 @@ class AnswerComparator:
         hypothesis_id: str,
         contradictions: Sequence[str],
     ) -> InternalAnswerComparison:
+        # 以服务端绑定的答案原文作为裁判输入；模型输出的 hypothesis_id
+        # 仅为旧 v1 兼容字段，不能覆盖 CanonicalAnswer 的连接结果。
+        canonical_answer = world.canonical_answer
         relation = RootCauseVerifier().relation(
             world,
             hypothesis_id=hypothesis_id,
             learner_state=learner_state,
+            # v2 有权威答案时忽略模型 id；旧 v1 世界没有该字段时保留
+            # hypothesis-id 兼容行为，避免历史回放改变结果。
+            answer_text=attempt.text if canonical_answer is not None else "",
         )
         anti_guess = AntiGuess().evaluate(
             world,
             collected_evidence=learner_state.collected_evidence,
             relation=relation,
+            canonical_answer=canonical_answer,
         )
-        requirements = list(world.root_cause.solution_requirements)
+        requirements = list(
+            canonical_answer.solution_requirements
+            if canonical_answer is not None
+            else world.root_cause.solution_requirements
+        )
         matched_requirements = [item for item in requirements if item and item in attempt.text]
         solution_coverage = len(matched_requirements) / len(requirements) if requirements else 1.0
 

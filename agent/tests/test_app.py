@@ -194,6 +194,32 @@ def test_unified_agent_provider_uses_single_agent_runtime(monkeypatch) -> None:
     app_module._runtime_from_env.cache_clear()
 
 
+def test_single_agent_runtime_is_default_and_legacy_requires_explicit_mode(monkeypatch) -> None:
+    from pydantic_ai.models.test import TestModel
+
+    from hiddenworld import app as app_module
+
+    monkeypatch.setenv("HIDDENWORLD_ALLOW_MODEL_REQUESTS", "1")
+    monkeypatch.delenv("HIDDENWORLD_RUNTIME_MODE", raising=False)
+    monkeypatch.delenv("HIDDENWORLD_AGENT_PROVIDER", raising=False)
+    monkeypatch.setattr(
+        app_module,
+        "_model_for_provider_value",
+        lambda provider, role="AGENT": TestModel(),
+    )
+    app_module._runtime_from_env.cache_clear()
+    try:
+        runtime = app_module._runtime_from_env()
+        assert isinstance(runtime, SingleAgentRuntime)
+
+        app_module._runtime_from_env.cache_clear()
+        monkeypatch.setenv("HIDDENWORLD_RUNTIME_MODE", "legacy")
+        legacy_runtime = app_module._runtime_from_env()
+        assert isinstance(legacy_runtime, HiddenWorldRuntime)
+    finally:
+        app_module._runtime_from_env.cache_clear()
+
+
 @pytest.mark.asyncio
 async def test_single_agent_runtime_endpoint_returns_legacy_transport_result(
     hidden_world,

@@ -6,6 +6,9 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .assessment import TeachingDecision, TurnAssessment
+from .version import StudentAffect
+
 
 class ToolCall(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -15,12 +18,19 @@ class ToolCall(BaseModel):
     arguments: dict[str, str] = Field(default_factory=dict)
 
 
+class AgentSemanticDecision(TurnAssessment):
+    """旧字段名兼容层，实际契约已经升级为 TurnAssessment。"""
+
+
 class ToolCallsOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["tool_calls"]
     public_summary: str = Field(min_length=1)
     calls: list[ToolCall] = Field(min_length=1)
+    semantic: AgentSemanticDecision | None = None
+    turn_assessment: TurnAssessment | None = None
+    teaching_decision: TeachingDecision | None = None
 
 
 class FinalReplyOutput(BaseModel):
@@ -29,6 +39,9 @@ class FinalReplyOutput(BaseModel):
     kind: Literal["final_reply"]
     public_summary: str | None = None
     reply: str = Field(min_length=1)
+    semantic: AgentSemanticDecision | None = None
+    turn_assessment: TurnAssessment | None = None
+    teaching_decision: TeachingDecision | None = None
 
 
 AgentModelOutput = Annotated[ToolCallsOutput | FinalReplyOutput, Field(discriminator="kind")]
@@ -54,6 +67,30 @@ class AgentOutputEnvelope(BaseModel):
     reply: str | None = None
     public_summary: str | None = None
     calls: list[ToolCall] = Field(default_factory=list)
+    turn_assessment: TurnAssessment | None = None
+    teaching_decision: TeachingDecision | None = None
+    # 保持扁平字段，兼容 DeepSeek/GLM 的共同 JSON 输出能力；
+    # 业务层再收敛成 AgentSemanticDecision，不把 CoT 引入传输契约。
+    intent: str = "chat"
+    user_goal: str = ""
+    requested_action: str = ""
+    requested_action_raw: str = ""
+    clarification_target: str = ""
+    action_match_status: str = "none"
+    actions: list[str] = Field(default_factory=list)
+    hypothesis_id: str = ""
+    hypothesis_raw: str = ""
+    claim_type: str = "none"
+    made_claim: bool = False
+    contains_answer_attempt: bool = False
+    answer_attempt_text: str = ""
+    established_facts: list[str] = Field(default_factory=list)
+    progress_assessment: str = "unknown"
+    is_stuck: bool = False
+    is_off_topic: bool = False
+    is_noise: bool = False
+    student_affect: StudentAffect = "engaged"
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def validate_shape(self) -> "AgentOutputEnvelope":
@@ -65,14 +102,43 @@ class AgentOutputEnvelope(BaseModel):
         return self
 
     def to_contract(self) -> AgentModelOutput:
+        assessment = self.turn_assessment or TurnAssessment(
+            intent=self.intent,
+            user_goal=self.user_goal,
+            requested_action=self.requested_action,
+            requested_action_raw=self.requested_action_raw,
+            clarification_target=self.clarification_target,
+            action_match_status=self.action_match_status,
+            actions=self.actions,
+            hypothesis_id=self.hypothesis_id,
+            hypothesis_raw=self.hypothesis_raw,
+            claim_type=self.claim_type,
+            made_claim=self.made_claim,
+            contains_answer_attempt=self.contains_answer_attempt,
+            answer_attempt_text=self.answer_attempt_text,
+            established_facts=self.established_facts,
+            progress_assessment=self.progress_assessment,
+            is_stuck=self.is_stuck,
+            is_off_topic=self.is_off_topic,
+            is_noise=self.is_noise,
+            student_affect=self.student_affect,
+            confidence=self.confidence,
+        )
+        semantic = AgentSemanticDecision.model_validate(assessment.model_dump())
         if self.kind == "tool_calls":
             return ToolCallsOutput(
                 kind="tool_calls",
                 public_summary=self.public_summary or "",
                 calls=self.calls,
+                semantic=semantic,
+                turn_assessment=assessment,
+                teaching_decision=self.teaching_decision,
             )
         return FinalReplyOutput(
             kind="final_reply",
             public_summary=self.public_summary,
             reply=self.reply or "",
+            semantic=semantic,
+            turn_assessment=assessment,
+            teaching_decision=self.teaching_decision,
         )

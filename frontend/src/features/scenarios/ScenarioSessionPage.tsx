@@ -10,7 +10,7 @@ import { MermaidLoading } from '../../components/common/MermaidLoading'
 import { useToken } from '../../lib/auth'
 import { redactSensitiveText } from '../../lib/redaction'
 import { useScenarioSessionStore } from '../../stores/scenarioSessionStore'
-import { AgentRun, collectObservationReleases } from './agentrun'
+import { AgentRun, collectProactiveClues, resolveQuickActionUserLabel } from './agentrun'
 import type { ObservationRelease } from './agentrun'
 import type { ScenarioAllowedAction } from '../../types/agentRun'
 import './ScenarioSessionPage.css'
@@ -64,7 +64,7 @@ export function ScenarioSessionPage() {
   // Hooks 数量。线索数据本身不依赖 question，可以安全地在条件渲染前聚合。
   const clueReleases = useMemo(() => {
     const runs = messages.flatMap((message) => completedRuns[message.id] ?? message.response_meta.run_events ?? [])
-    return collectObservationReleases([...runs, ...(activeRun?.events ?? [])])
+    return collectProactiveClues([...runs, ...(activeRun?.events ?? [])])
   }, [activeRun?.events, completedRuns, messages])
   const clueKeySignature = clueReleases.map((item) => item.key).join('|')
 
@@ -251,7 +251,7 @@ export function ScenarioSessionPage() {
             <div className="chat-title-line">
               <strong>渐进式排查会话</strong>
             </div>
-            <span>导师只依据已公开观察引导，不展示隐藏答案或原始思维链。</span>
+            <span>仅依据已公开信息回应，不展示隐藏答案或原始思维链。</span>
           </div>
           <button className="ghost-button compact" type="button" onClick={() => void quitSession()} disabled={isQuitting}>
             {isQuitting ? '放弃中' : '放弃会话'}
@@ -262,7 +262,10 @@ export function ScenarioSessionPage() {
             <AgentRun
               key={message.id}
               events={completedRuns[message.id] ?? message.response_meta.run_events ?? []}
-              fallbackUser={message.user_content}
+              fallbackUser={resolveQuickActionUserLabel(
+                message.user_content,
+                { events: completedRuns[message.id] ?? message.response_meta.run_events ?? [] },
+              )}
               fallbackReply={message.assistant_content}
               onQuickAction={message.id === messages[messages.length - 1]?.id ? handleQuickAction : undefined}
               quickActionDisabled={isSending || isQuitting}
@@ -271,7 +274,14 @@ export function ScenarioSessionPage() {
           {activeRun && (
             <AgentRun
               events={activeRun.events}
-              fallbackUser={activeRun.structuredAction?.title ?? activeRun.userContent}
+              fallbackUser={resolveQuickActionUserLabel(
+                activeRun.structuredAction?.title ?? activeRun.userContent,
+                {
+                  actionId: activeRun.structuredAction?.action_id,
+                  toolKind: activeRun.structuredAction?.tool_kind,
+                  events: activeRun.events,
+                },
+              )}
               active={isSending}
               onQuickAction={handleQuickAction}
               quickActionDisabled={isSending || isQuitting}
@@ -387,7 +397,6 @@ function ClueReleaseTimeline({
           <article className={`clue-release-card ${animated.has(clue.key) ? 'is-new' : ''}`} key={clue.key}>
             <div className="clue-release-card-header">
               <strong>{clueLabel(clue.action)}</strong>
-              {clue.is_negative && <span>排除性观察</span>}
             </div>
             <p>{snapshotText(clue.result)}</p>
           </article>
@@ -398,6 +407,7 @@ function ClueReleaseTimeline({
 }
 
 function clueLabel(action: string) {
+  if (action.startsWith('clue:')) return '主动线索'
   const labels: Record<string, string> = {
     'inspect:logs.callback_timeout': '回调访问日志',
     'inspect:config.route_diff': '网关路由配置',

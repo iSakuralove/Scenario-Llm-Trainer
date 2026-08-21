@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 
@@ -49,7 +50,26 @@ func (deterministicScenarioAgentClient) Turn(_ context.Context, request agentcli
 		ContractVersion:  agentclient.ContractVersion,
 		RequestID:        request.RequestID,
 		ExpectedRevision: request.StateRevision,
-		Reply:            "已记录你的排查思路，请继续说明下一步要验证的公开现象。",
+		Reply:            "已记录你的排查思路。",
+		TurnAssessment: &agentclient.TurnAssessment{
+			Intent:             "investigate",
+			ClaimType:          "none",
+			StudentAffect:      "engaged",
+			ProgressAssessment: "no_progress",
+			Actions:            []string{},
+			Confidence:         0.9,
+		},
+		TeachingDecision: &agentclient.TeachingDecision{
+			TeachingState: "normal_diagnosis",
+			Strategy:      "acknowledge",
+			ReplyPolicy:   "acknowledgement",
+		},
+		GuidanceState: agentclient.GuidanceState{
+			TeachingState:      "normal_diagnosis",
+			ProgressAssessment: "no_progress",
+			Navigation:         []agentclient.TeachingDimensionRef{},
+		},
+		TurnControl: agentclient.TurnControl{AllowedActionIDs: []string{}},
 		TurnAnalysis: agentclient.TurnAnalysis{
 			Actions:          []string{},
 			EstablishedFacts: []string{},
@@ -58,7 +78,7 @@ func (deterministicScenarioAgentClient) Turn(_ context.Context, request agentcli
 		},
 		Proposals: []agentclient.Proposal{
 			{Kind: "set_stalled_turns", Value: request.LearnerState.StalledTurns + 1},
-			{Kind: "record_opening", Text: "已记录你的排查思路，请继续说明下一步要验证的公开现象。"},
+			{Kind: "record_opening", Text: "已记录你的排查思路。"},
 		},
 		PublicTrace: []agentclient.PublicTraceEvent{
 			{Sequence: 1, Kind: "reasoning_summary_completed", Status: "completed", Summary: "已完成本轮公开意图识别。"},
@@ -208,6 +228,9 @@ func approveScenarioProposals(
 	if session == nil || world == nil {
 		return domain.ScenarioLearnerState{}, nil, errors.New("hiddenworld session state is unavailable")
 	}
+	if err := validateScenarioStructuredTurn(result, world); err != nil {
+		return domain.ScenarioLearnerState{}, nil, err
+	}
 	state := session.LearnerState.Normalized()
 	hypotheses := make(map[string]bool, len(world.Hypotheses))
 	for _, hypothesis := range world.Hypotheses {
@@ -354,12 +377,308 @@ func approveScenarioProposals(
 	return state.Normalized(), approvals, nil
 }
 
+const legacyStructuredResponseEnv = "SCENARIO_ALLOW_LEGACY_STRUCTURED_RESPONSE"
+
+// validateScenarioStructuredTurn 是 Go 侧的结构化回合边界。结构化字段在
+// 正式主链中是必填的；旧扁平响应只能通过显式环境开关进入兼容路径，不能
+// 因为 Go struct 的零值而被静默当成合法 V2 响应。
+func validateScenarioStructuredTurn(result agentclient.TurnResult, world *domain.HiddenWorld) error {
+	legacy := scenarioLegacyStructuredResponseAllowed()
+	if !legacy {
+		if result.TurnAssessment == nil {
+			return errors.New("turn assessment is required")
+		}
+		if result.TeachingDecision == nil {
+			return errors.New("teaching decision is required")
+		}
+		if result.GuidanceState.Navigation == nil {
+			return errors.New("guidance state navigation is required")
+		}
+		if result.TurnControl.AllowedActionIDs == nil {
+			return errors.New("turn control allowed_action_ids is required")
+		}
+	}
+	if result.TurnAssessment != nil {
+		assessment := result.TurnAssessment
+		if assessment.Confidence < 0 || assessment.Confidence > 1 {
+			return errors.New("turn assessment confidence is invalid")
+		}
+		if !scenarioTurnIntentAllowed(assessment.Intent) || !scenarioClaimTypeAllowed(assessment.ClaimType) ||
+			!scenarioProgressAssessmentAllowed(assessment.ProgressAssessment) ||
+			!scenarioStudentAffectAllowed(assessment.StudentAffect) {
+			return errors.New("turn assessment enum is invalid")
+		}
+		if assessment.Actions == nil || assessment.EstablishedFacts == nil {
+			return errors.New("turn assessment arrays are required")
+		}
+		if err := validateScenarioAssessmentConsistency(*assessment, result.TurnAnalysis); err != nil {
+			return err
+		}
+	}
+	if decision := result.TeachingDecision; decision != nil {
+		if !scenarioTeachingStateAllowed(decision.TeachingState) || !scenarioTeachingStrategyAllowed(decision.Strategy) ||
+			!scenarioReplyPolicyAllowed(decision.ReplyPolicy) {
+			return errors.New("teaching decision enum is invalid")
+		}
+		// 这两个开关在契约中固定为 False；Go 不允许 Agent 打开它们。
+		if decision.AllowExplicitNextStep || decision.AllowRuledOutScope {
+			return errors.New("teaching decision contains forbidden permission")
+		}
+	}
+	if state := result.GuidanceState; state.StalledTurns < 0 {
+		return errors.New("guidance state stalled_turns is invalid")
+	} else if (!legacy && (state.TeachingState == "" || state.ProgressAssessment == "")) ||
+		(state.TeachingState != "" && !scenarioTeachingStateAllowed(state.TeachingState)) ||
+		(state.ProgressAssessment != "" && !scenarioProgressAssessmentAllowed(state.ProgressAssessment)) {
+		return errors.New("guidance state enum is invalid")
+	} else {
+		for _, dimension := range state.Navigation {
+			if strings.TrimSpace(dimension.DimensionID) == "" || !scenarioDimensionCategoryAllowed(dimension.Category) ||
+				!scenarioDimensionStatusAllowed(dimension.Status) || !scenarioHintLevelAllowed(dimension.HintLevel) {
+				return errors.New("guidance state navigation is invalid")
+			}
+		}
+	}
+	if !legacy && result.TurnAssessment != nil && result.TeachingDecision != nil {
+		if result.GuidanceState.TeachingState != result.TeachingDecision.TeachingState {
+			return errors.New("guidance state teaching_state disagrees with teaching decision")
+		}
+		if result.GuidanceState.ProgressAssessment != result.TurnAssessment.ProgressAssessment {
+			return errors.New("guidance state progress_assessment disagrees with turn assessment")
+		}
+	}
+	if err := validateScenarioTurnControl(result, world, legacy); err != nil {
+		return err
+	}
+	for _, actionID := range result.TurnControl.AllowedActionIDs {
+		// ActionCatalog 只允许题目声明的虚拟观察动作。compare_answer
+		// 是 Runtime 内部能力，永远不能进入学生可点击动作目录。
+		if !scenarioActionCatalogContains(world, actionID) {
+			return errors.New("turn control contains an undeclared or internal action")
+		}
+	}
+	return nil
+}
+
+func scenarioLegacyStructuredResponseAllowed() bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(legacyStructuredResponseEnv)))
+	return raw == "1" || raw == "true" || raw == "yes" || raw == "on"
+}
+
+func validateScenarioAssessmentConsistency(assessment agentclient.TurnAssessment, analysis agentclient.TurnAnalysis) error {
+	if !equalScenarioStrings(assessment.Actions, analysis.Actions) ||
+		assessment.HypothesisID != analysis.HypothesisID ||
+		assessment.HypothesisRaw != analysis.HypothesisRaw ||
+		assessment.MadeClaim != analysis.MadeClaim ||
+		assessment.ContainsAnswerAttempt != analysis.ContainsAnswerAttempt ||
+		assessment.AnswerAttemptText != analysis.AnswerAttemptText ||
+		!equalScenarioStrings(assessment.EstablishedFacts, analysis.EstablishedFacts) ||
+		assessment.IsStuck != analysis.IsStuck || assessment.IsNoise != analysis.IsNoise ||
+		assessment.StudentAffect != analysis.StudentAffect ||
+		assessment.Confidence != analysis.Confidence ||
+		assessment.RequestedActionRaw != analysis.RequestedActionRaw ||
+		assessment.ClarificationTarget != analysis.ClarificationTarget ||
+		assessment.ActionMatchStatus != analysis.ActionMatchStatus {
+		return errors.New("turn assessment disagrees with turn analysis")
+	}
+	if assessment.ContainsAnswerAttempt && strings.TrimSpace(assessment.AnswerAttemptText) == "" {
+		return errors.New("answer attempt is marked present but has no text")
+	}
+	if !assessment.ContainsAnswerAttempt && strings.TrimSpace(assessment.AnswerAttemptText) != "" {
+		return errors.New("answer attempt text is present while answer attempt is false")
+	}
+	if assessment.MadeClaim && (assessment.ClaimType == "none" || assessment.ClaimType == "question" || assessment.ClaimType == "meta") {
+		return errors.New("made claim has a non-claim claim_type")
+	}
+	if !assessment.MadeClaim && (assessment.ClaimType == "observation" || assessment.ClaimType == "hypothesis" || assessment.ClaimType == "answer") {
+		return errors.New("claim_type indicates a claim while made_claim is false")
+	}
+	return nil
+}
+
+func validateScenarioTurnControl(result agentclient.TurnResult, world *domain.HiddenWorld, legacy bool) error {
+	control := result.TurnControl
+	if !legacy {
+		// terminal 是会话生命周期状态，只能由 Go 持有的会话状态回注；
+		// Agent 不得在本轮打开它。completion_allowed 与 completion_ready
+		// 则是答案裁判投影，二者故意不等价：没有执行 compare_answer 时，
+		// 即便证据已足，ready 仍为 false。
+		if control.Terminal {
+			return errors.New("agent cannot set terminal")
+		}
+		if control.CompletionAllowed != result.InternalVerification.CompletionAllowed {
+			return errors.New("turn control completion_allowed disagrees with verification")
+		}
+		expectedReady := result.InternalVerification.AnswerComparison != nil && result.InternalVerification.CompletionAllowed
+		if control.CompletionReady != expectedReady {
+			return errors.New("turn control completion_ready disagrees with verification")
+		}
+		if comparison := result.InternalVerification.AnswerComparison; comparison != nil &&
+			comparison.CompletionAllowed != control.CompletionAllowed {
+			return errors.New("turn control completion_allowed disagrees with answer comparison")
+		}
+	}
+	seen := map[string]bool{}
+	for _, actionID := range control.AllowedActionIDs {
+		if strings.EqualFold(strings.TrimSpace(actionID), "compare_answer") {
+			return errors.New("compare_answer is not an allowed action")
+		}
+		if seen[actionID] {
+			return errors.New("turn control contains duplicate action")
+		}
+		seen[actionID] = true
+	}
+	for _, actionID := range result.TurnAnalysis.Actions {
+		if strings.EqualFold(strings.TrimSpace(actionID), "compare_answer") {
+			return errors.New("compare_answer is not a learner action")
+		}
+		if !scenarioActionCatalogContains(world, actionID) {
+			return errors.New("turn analysis contains an undeclared or internal action")
+		}
+	}
+	if result.TurnAssessment != nil {
+		for _, actionID := range result.TurnAssessment.Actions {
+			if strings.EqualFold(strings.TrimSpace(actionID), "compare_answer") {
+				return errors.New("compare_answer is not a learner action")
+			}
+		}
+	}
+	return nil
+}
+
+func scenarioActionCatalogContains(world *domain.HiddenWorld, actionID string) bool {
+	if world == nil || strings.TrimSpace(actionID) == "" {
+		return false
+	}
+	if len(world.VirtualTools) > 0 {
+		for _, tool := range world.VirtualTools {
+			if tool.ObservationAction == actionID {
+				return true
+			}
+		}
+		return false
+	}
+	for _, observation := range world.Observations {
+		if observation.Action == actionID {
+			return true
+		}
+	}
+	return false
+}
+
+func equalScenarioStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func scenarioTurnIntentAllowed(value string) bool {
+	switch value {
+	case "answer", "probe_plan", "hypothesis", "request_hint", "direct_answer_request", "chat", "off_topic", "garbage", "stuck", "contradiction", "meta", "investigate", "clarification", "explanation_request", "answer_attempt", "help_request":
+		return true
+	default:
+		return false
+	}
+}
+
+func scenarioClaimTypeAllowed(value string) bool {
+	switch value {
+	case "none", "observation", "hypothesis", "answer", "question", "meta":
+		return true
+	default:
+		return false
+	}
+}
+
+func scenarioStudentAffectAllowed(value string) bool {
+	switch value {
+	case "engaged", "confused", "frustrated", "disengaged":
+		return true
+	default:
+		return false
+	}
+}
+
+func scenarioProgressAssessmentAllowed(value string) bool {
+	switch value {
+	case "progress", "partial", "no_progress", "unsupported", "contradictory", "leak_risk", "unknown":
+		return true
+	default:
+		return false
+	}
+}
+
+func scenarioTeachingStateAllowed(value string) bool {
+	switch value {
+	case "guided_inquiry", "unsupported_hypothesis", "anti_guess_detected", "premature_conclusion", "conclusion_grilling", "evidence_reconstruction", "normal_diagnosis", "debrief", "casual_chat", "clarification", "off_topic", "garbage":
+		return true
+	default:
+		return false
+	}
+}
+
+func scenarioTeachingStrategyAllowed(value string) bool {
+	switch value {
+	case "observe", "acknowledge", "reflect", "clarify", "debrief", "chat", "recover", "silence":
+		return true
+	default:
+		return false
+	}
+}
+
+func scenarioReplyPolicyAllowed(value string) bool {
+	switch value {
+	case "neutral_summary", "tool_result_only", "acknowledgement", "reflective_question", "casual_reply", "no_reply":
+		return true
+	default:
+		return false
+	}
+}
+
+func scenarioDimensionCategoryAllowed(value string) bool {
+	switch value {
+	case "evidence", "causal", "temporal", "dependency", "capacity", "configuration", "verification", "resource", "data":
+		return true
+	default:
+		return false
+	}
+}
+
+func scenarioDimensionStatusAllowed(value string) bool {
+	return value == "unexplored" || value == "in_progress" || value == "covered"
+}
+
+func scenarioHintLevelAllowed(value string) bool {
+	return value == "none" || value == "light" || value == "direct"
+}
+
 func validateScenarioReply(
 	reply string,
 	world *domain.HiddenWorld,
 	publicScenario *domain.PublicScenario,
 	state domain.ScenarioLearnerState,
 ) error {
+	for _, term := range []string{
+		"下一步",
+		"接下来",
+		"建议检查",
+		"建议查看",
+		"建议核对",
+		"排除范围",
+		"排除性观察",
+		"问题不在",
+		"根因在",
+	} {
+		if strings.Contains(reply, term) {
+			return fmt.Errorf("reply contains forbidden guidance term %q", term)
+		}
+	}
 	if world == nil {
 		return errors.New("hidden world is unavailable")
 	}
@@ -1160,9 +1479,6 @@ func scenarioComparisonMarkdown(comparison *agentclient.PublicAnswerComparison) 
 	parts := []string{"答案对比：" + scenarioSupportStatusLabel(comparison.SupportStatus)}
 	if len(comparison.UserPoints) > 0 {
 		parts = append(parts, "你的要点："+strings.Join(comparison.UserPoints, "；"))
-	}
-	if next := strings.TrimSpace(comparison.NextAction); next != "" {
-		parts = append(parts, next)
 	}
 	return strings.Join(parts, "；")
 }

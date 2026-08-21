@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .version import HypothesisRelation
 
@@ -34,22 +34,56 @@ class CanonicalAnswer(BaseModel):
     solution_requirements: list[str] = Field(default_factory=list)
     answer_version: str
 
-# 公开的支持状态。四选一，且四个取值都只描述"证据够不够"，
-# 没有任何一个能被反推成"猜中了 / 没猜中"。
+# AgentComparison 的抽象状态。它们只描述教学维度，不包含答案原文、精确
+# 缺失点或 completion/terminal。missing_dimensions 同样只能使用这些抽象
+# 维度名，不能动态拷贝 CanonicalAnswer 的具体要求。
+ConclusionStatus = Literal["none", "partial", "supported", "contradictory"]
+EvidenceStatus = Literal["none", "insufficient", "partial", "sufficient"]
+CausalStatus = Literal["missing", "partial", "sufficient"]
+ComparisonDimension = Literal["conclusion", "evidence", "causal_link", "consistency"]
+
+# 旧 v1 事件/调用方仍可能读取这个名字；它不再是 PublicAnswerComparison
+# 的字段，只作为兼容属性和输入适配的中间类型。
 SupportStatus = Literal[
-    "insufficiently_specific",  # 说法太笼统，还没法对照任何观察
-    "needs_more_evidence",  # 方向可以继续，但手上的观察还不足以支撑
-    "has_evidence_conflict",  # 与学生自己已确立的事实存在冲突
-    "evidence_consistent",  # 与已有观察一致，可以继续往下走
+    "insufficiently_specific",
+    "needs_more_evidence",
+    "has_evidence_conflict",
+    "evidence_consistent",
 ]
 
 
-class PublicAnswerComparison(BaseModel):
-    """给 Mentor 和前端看的投影。字段白名单在类型层面固定。
+def _legacy_conclusion_status(status: object) -> ConclusionStatus:
+    """把旧 v1 支持状态收窄为 V2 的抽象结论状态。"""
 
-    注意这里**没有** correct / target / claim_alignment / matched_hypotheses /
-    similarity / missing_points / completion_allowed。不是靠提示词约束不说，
-    是这些字段根本不存在于这个类型里。
+    if status == "has_evidence_conflict":
+        return "contradictory"
+    if status == "evidence_consistent":
+        return "supported"
+    if status == "needs_more_evidence":
+        return "partial"
+    return "none"
+
+
+def _legacy_evidence_status(status: object) -> EvidenceStatus:
+    """把旧 v1 支持状态收窄为 V2 的抽象证据状态。"""
+
+    if status == "evidence_consistent":
+        return "sufficient"
+    if status == "needs_more_evidence":
+        return "partial"
+    if status == "has_evidence_conflict":
+        return "insufficient"
+    return "none"
+
+
+class PublicAnswerComparison(BaseModel):
+    """给 Agent/前端的抽象比较投影。
+
+    V2 只输出五个比较语义字段：``conclusion_status``、``evidence_status``、
+    ``causal_status``、``missing_dimensions``、``contradictions``。``tool``、
+    ``status``、``user_points`` 是现有传输层所需的元数据/用户原话回显，不是
+    判题字段。旧 v1 的 ``support_status`` / ``next_action`` 只在输入适配时
+    接受，永不进入 JSON schema 或序列化结果。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -60,11 +94,48 @@ class PublicAnswerComparison(BaseModel):
         default_factory=list,
         description="从学生自己的表述里抽出的要点。只回显他说过的话。",
     )
-    support_status: SupportStatus
-    next_action: str = Field(
-        default="",
-        description="结构化的下一步建议，只引用已公开事实。不得暗示对错。",
-    )
+    conclusion_status: ConclusionStatus = "none"
+    evidence_status: EvidenceStatus = "none"
+    causal_status: CausalStatus = "missing"
+    missing_dimensions: list[ComparisonDimension] = Field(default_factory=list)
+    contradictions: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _adapt_legacy_v1(cls, value: object) -> object:
+        """只读兼容旧 payload；旧字段不会留在 V2 模型中。"""
+
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        legacy = payload.pop("support_status", None)
+        # next_action 是旧的自然语言引导，不能被带入新投影；即使旧事件有
+        # 它，也只丢弃，不尝试把文案复制到任何新字段。
+        payload.pop("next_action", None)
+        if legacy is not None:
+            payload.setdefault("conclusion_status", _legacy_conclusion_status(legacy))
+            payload.setdefault("evidence_status", _legacy_evidence_status(legacy))
+            payload.setdefault("causal_status", "missing")
+            dimensions = payload.setdefault("missing_dimensions", [])
+            if legacy == "has_evidence_conflict" and "consistency" not in dimensions:
+                dimensions.append("consistency")
+        return payload
+
+    # 这些属性只供尚未迁移的内部 v1 代码读取，均不会出现在 model_fields、
+    # JSON Schema 或 model_dump 中。next_action 永远为空，防止旧文案继续引导。
+    @property
+    def support_status(self) -> SupportStatus:
+        if self.contradictions or self.conclusion_status == "contradictory":
+            return "has_evidence_conflict"
+        if self.evidence_status == "none" or self.conclusion_status == "none":
+            return "insufficiently_specific"
+        if self.evidence_status in {"insufficient", "partial"}:
+            return "needs_more_evidence"
+        return "evidence_consistent"
+
+    @property
+    def next_action(self) -> str:
+        return ""
 
 
 class InternalAnswerComparison(BaseModel):
@@ -97,35 +168,54 @@ class InternalAnswerComparison(BaseModel):
         """
         return PublicAnswerComparison(
             user_points=list(self.user_points),
-            support_status=self._support_status(),
-            next_action=self._next_action(),
+            conclusion_status=self._conclusion_status(),
+            evidence_status=self._evidence_status(),
+            causal_status=self._causal_status(),
+            missing_dimensions=self._missing_dimensions(),
+            contradictions=list(self.contradictions),
         )
 
-    def _support_status(self) -> SupportStatus:
+    def _conclusion_status(self) -> ConclusionStatus:
         # 顺序有意义：冲突优先于覆盖度。学生自己说的两句话打架时，
         # 先把这件事告诉他，比催他去多找一条证据有用得多。
         if self.contradictions:
-            return "has_evidence_conflict"
+            return "contradictory"
         if not self.user_points:
-            return "insufficiently_specific"
+            return "none"
         if self.evidence_coverage >= 1.0:
-            return "evidence_consistent"
+            return "supported"
         if self.evidence_coverage <= 0.0:
-            return "insufficiently_specific"
-        return "needs_more_evidence"
+            return "contradictory"
+        return "partial"
 
-    def _next_action(self) -> str:
+    def _evidence_status(self) -> EvidenceStatus:
         """公开的下一步。措辞对"猜对了"和"猜错了"两种情况**必须一致**。
 
         这是最容易出安全 bug 的地方：只要两条分支的文案有任何可分辨的差异，
         学生就能靠反复提交不同答案来二分搜索标准答案。所以这里只按
         support_status 分支，不读 relation、不读 completion_allowed。
         """
-        status = self._support_status()
-        if status == "has_evidence_conflict":
-            return "先回头核对一下你自己给出的两处说法，它们对不上。"
-        if status == "insufficiently_specific":
-            return "把结论说得更具体一些，指向某个组件或某次变更。"
-        if status == "needs_more_evidence":
-            return "继续补充能支撑这个结论的直接观察。"
-        return "你的说法和已有观察一致，可以继续往下推进。"
+        if self.evidence_coverage <= 0.0:
+            return "none"
+        if self.evidence_coverage >= 1.0:
+            return "sufficient"
+        return "partial"
+
+    def _causal_status(self) -> CausalStatus:
+        if self.solution_coverage >= 1.0 and self.relation == "target":
+            return "sufficient"
+        if self.solution_coverage > 0.0 or self.relation == "target":
+            return "partial"
+        return "missing"
+
+    def _missing_dimensions(self) -> list[ComparisonDimension]:
+        dimensions: list[ComparisonDimension] = []
+        if self._conclusion_status() in {"none", "contradictory"}:
+            dimensions.append("conclusion")
+        if self._evidence_status() != "sufficient":
+            dimensions.append("evidence")
+        if self._causal_status() != "sufficient":
+            dimensions.append("causal_link")
+        if self.contradictions:
+            dimensions.append("consistency")
+        return dimensions
