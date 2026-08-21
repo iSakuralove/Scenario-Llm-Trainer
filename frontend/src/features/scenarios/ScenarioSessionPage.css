@@ -101,6 +101,53 @@
   border-top: 1px solid rgba(255, 255, 255, 0.10);
 }
 
+.scenario-session-page .investigation-state-panel {
+  display: grid;
+  gap: 11px;
+  margin-top: 16px;
+  padding: 14px 0 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.scenario-session-page .investigation-state-heading,
+.scenario-session-page .investigation-state-grid > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.scenario-session-page .investigation-state-heading strong {
+  color: #f6fafe;
+  font-size: 14px;
+}
+
+.scenario-session-page .investigation-state-heading span {
+  color: #8ef0db;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.scenario-session-page .investigation-state-grid {
+  display: grid;
+  gap: 7px;
+  padding: 10px 11px;
+  border: 1px solid rgba(142, 240, 219, 0.16);
+  border-radius: 9px;
+  background: rgba(142, 240, 219, 0.045);
+}
+
+.scenario-session-page .investigation-state-grid span {
+  color: rgba(220, 228, 238, 0.55);
+  font-size: 11px;
+}
+
+.scenario-session-page .investigation-state-grid strong {
+  color: rgba(230, 237, 245, 0.90);
+  font-size: 12px;
+  font-weight: 750;
+}
+
 .scenario-session-page .clue-release-heading,
 .scenario-session-page .clue-release-card-header {
   display: flex;
@@ -157,6 +204,16 @@
   font-size: 12px;
   line-height: 1.6;
   overflow-wrap: anywhere;
+}
+
+.scenario-session-page .clue-release-empty {
+  margin: 0;
+  padding: 10px 11px;
+  border: 1px dashed rgba(142, 240, 219, 0.20);
+  border-radius: 9px;
+  color: rgba(220, 228, 238, 0.58);
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 @keyframes clueReleaseEnter {

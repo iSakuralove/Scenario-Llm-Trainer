@@ -160,6 +160,7 @@ export interface ScenarioSession {
   current_turn: number
   max_turns: number
   revealed_clue_ids?: string[]
+  investigation_state?: ScenarioInvestigationState
   user_answer?: string
   evaluation_result?: ScenarioEvaluation
   score?: ScenarioScore
@@ -167,6 +168,16 @@ export interface ScenarioSession {
   state_revision: number
   started_at: string
   last_active_at: string
+}
+
+/**
+ * 学生界面可见的调查状态切片。
+ * 不包含题目内部 ID、排除项或下一步动作；这些仍由 Runtime 私有持有。
+ */
+export interface ScenarioInvestigationState {
+  current_focus?: string
+  has_current_hypothesis: boolean
+  collected_evidence_count: number
 }
 
 export interface ScenarioMessage {

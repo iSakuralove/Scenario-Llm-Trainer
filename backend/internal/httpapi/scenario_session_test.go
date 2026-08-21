@@ -60,6 +60,47 @@ func TestScenarioSessionDetailReturnsSessionAndMessages(t *testing.T) {
 	}
 }
 
+func TestScenarioSessionDetailReturnsSafeInvestigationState(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()
+	token := loginToken(t, handler, "demo", "demo123")
+	question := dataStore.ListScenarios("database", "", "")[0]
+
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/scenarios/"+question.ID+"/sessions", token, nil)
+	if status != http.StatusOK {
+		t.Fatalf("create session status=%d message=%s", status, env.Message)
+	}
+	var created struct {
+		SessionID string `json:"session_id"`
+	}
+	mustDecodeData(t, env, &created)
+
+	session, ok := dataStore.GetScenarioSession(created.SessionID)
+	if !ok {
+		t.Fatal("missing persisted session")
+	}
+	session.LearnerState.CurrentFocus = "config"
+	session.LearnerState.CurrentHypothesis = "H_INTERNAL_ONLY"
+	session.LearnerState.CollectedEvidence = []string{"E_INTERNAL_ONLY"}
+	dataStore.SaveScenarioSession(session)
+
+	status, env = requestJSON(t, handler, http.MethodGet, "/api/v1/scenarios/sessions/"+created.SessionID, token, nil)
+	if status != http.StatusOK {
+		t.Fatalf("detail status=%d message=%s", status, env.Message)
+	}
+	var payload struct {
+		Session scenarioSessionResponse `json:"session"`
+	}
+	mustDecodeData(t, env, &payload)
+	state := payload.Session.InvestigationState
+	if state.CurrentFocus != "config" || !state.HasCurrentHypothesis || state.CollectedEvidenceCount != 1 {
+		t.Fatalf("unexpected safe investigation state: %+v", state)
+	}
+	if strings.Contains(string(env.Data), "H_INTERNAL_ONLY") || strings.Contains(string(env.Data), "E_INTERNAL_ONLY") {
+		t.Fatalf("session response leaked internal learner-state ids: %s", string(env.Data))
+	}
+}
+
 func TestScenarioSessionDetailRepairsInvalidMermaidSnapshot(t *testing.T) {
 	dataStore := store.NewMemoryStore(auth.HashPassword)
 	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour)).Handler()

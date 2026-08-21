@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"situational-teaching/backend/internal/ai"
 	"situational-teaching/backend/internal/domain"
+	"strings"
 	"time"
 )
 
@@ -89,21 +90,33 @@ func scenarioView(question *domain.ScenarioQuestion, user *domain.User) domain.S
 }
 
 type scenarioSessionResponse struct {
-	ID               string                      `json:"id"`
-	UserID           string                      `json:"user_id"`
-	QuestionID       string                      `json:"question_id"`
-	Status           string                      `json:"status"`
-	CurrentTurn      int                         `json:"current_turn"`
-	MaxTurns         int                         `json:"max_turns"`
-	RevealedClueIDs  []string                    `json:"revealed_clue_ids"`
-	UserAnswer       string                      `json:"user_answer,omitempty"`
-	EvaluationResult *domain.ScenarioEvaluation  `json:"evaluation_result,omitempty"`
-	Score            *domain.ScenarioScore       `json:"score,omitempty"`
-	QuestionSnapshot domain.ScenarioQuestionView `json:"question_snapshot"`
-	StateRevision    int                         `json:"state_revision"`
-	StartedAt        time.Time                   `json:"started_at"`
-	LastActiveAt     time.Time                   `json:"last_active_at"`
-	EndedAt          *time.Time                  `json:"ended_at,omitempty"`
+	ID                 string                      `json:"id"`
+	UserID             string                      `json:"user_id"`
+	QuestionID         string                      `json:"question_id"`
+	Status             string                      `json:"status"`
+	CurrentTurn        int                         `json:"current_turn"`
+	MaxTurns           int                         `json:"max_turns"`
+	RevealedClueIDs    []string                    `json:"revealed_clue_ids"`
+	InvestigationState scenarioInvestigationState  `json:"investigation_state"`
+	UserAnswer         string                      `json:"user_answer,omitempty"`
+	EvaluationResult   *domain.ScenarioEvaluation  `json:"evaluation_result,omitempty"`
+	Score              *domain.ScenarioScore       `json:"score,omitempty"`
+	QuestionSnapshot   domain.ScenarioQuestionView `json:"question_snapshot"`
+	StateRevision      int                         `json:"state_revision"`
+	StartedAt          time.Time                   `json:"started_at"`
+	LastActiveAt       time.Time                   `json:"last_active_at"`
+	EndedAt            *time.Time                  `json:"ended_at,omitempty"`
+}
+
+// scenarioInvestigationState 是给学生界面的安全状态切片。
+//
+// 不把 LearnerState 原样下发：其中包含题目内部 ID 和只供 Runtime 复核的
+// 状态。页面只需要知道当前关注的公开维度、是否已经形成假设，以及已经
+// 形成了多少条证据，不应看到隐藏答案、排除项或具体下一步动作。
+type scenarioInvestigationState struct {
+	CurrentFocus           string `json:"current_focus,omitempty"`
+	HasCurrentHypothesis   bool   `json:"has_current_hypothesis"`
+	CollectedEvidenceCount int    `json:"collected_evidence_count"`
 }
 
 func scenarioSessionView(session *domain.ScenarioSession) scenarioSessionResponse {
@@ -111,13 +124,18 @@ func scenarioSessionView(session *domain.ScenarioSession) scenarioSessionRespons
 		return scenarioSessionResponse{}
 	}
 	return scenarioSessionResponse{
-		ID:               session.ID,
-		UserID:           session.UserID,
-		QuestionID:       session.QuestionID,
-		Status:           session.Status,
-		CurrentTurn:      session.CurrentTurn,
-		MaxTurns:         session.MaxTurns,
-		RevealedClueIDs:  append([]string{}, session.RevealedClueIDs...),
+		ID:              session.ID,
+		UserID:          session.UserID,
+		QuestionID:      session.QuestionID,
+		Status:          session.Status,
+		CurrentTurn:     session.CurrentTurn,
+		MaxTurns:        session.MaxTurns,
+		RevealedClueIDs: append([]string{}, session.RevealedClueIDs...),
+		InvestigationState: scenarioInvestigationState{
+			CurrentFocus:           session.LearnerState.CurrentFocus,
+			HasCurrentHypothesis:   strings.TrimSpace(session.LearnerState.CurrentHypothesis) != "",
+			CollectedEvidenceCount: len(session.LearnerState.CollectedEvidence),
+		},
 		UserAnswer:       session.UserAnswer,
 		EvaluationResult: session.EvaluationResult,
 		Score:            session.Score,

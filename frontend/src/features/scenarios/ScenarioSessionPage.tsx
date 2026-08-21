@@ -148,6 +148,11 @@ export function ScenarioSessionPage() {
     current_turn: 0,
     max_turns: 50,
     revealed_clue_ids: [],
+    investigation_state: {
+      current_focus: '',
+      has_current_hypothesis: false,
+      collected_evidence_count: 0,
+    },
     state_revision: 0,
     status: 'active',
   }
@@ -234,6 +239,11 @@ export function ScenarioSessionPage() {
             <span>状态版本 {activeSession.state_revision}</span>
             <span>已验证观察 {(activeSession.revealed_clue_ids ?? []).length}</span>
           </div>
+          <InvestigationStatePanel
+            state={activeSession.investigation_state}
+            clueCount={clueReleases.length}
+            observedCount={(activeSession.revealed_clue_ids ?? []).length}
+          />
           <ClueReleaseTimeline clues={clueReleases} animatedKeys={animatedClueKeys} snapshotText={snapshotText} />
         </div>
       </aside>
@@ -384,26 +394,81 @@ function ClueReleaseTimeline({
   animatedKeys: string[]
   snapshotText: (value?: string) => string
 }) {
-  if (clues.length === 0) return null
   const animated = new Set(animatedKeys)
   return (
-    <section className="clue-release-panel" aria-label="线索释放">
+    <section className="clue-release-panel" aria-label="重要线索" data-testid="important-clues-panel">
       <div className="clue-release-heading">
-        <strong>线索释放</strong>
-        <span>{clues.length} 条可回顾</span>
+        <strong>重要线索</strong>
+        <span>{clues.length > 0 ? `${clues.length} 条已发现` : '尚未形成'}</span>
       </div>
-      <div className="clue-release-list">
-        {clues.map((clue) => (
-          <article className={`clue-release-card ${animated.has(clue.key) ? 'is-new' : ''}`} key={clue.key}>
-            <div className="clue-release-card-header">
-              <strong>{clueLabel(clue.action)}</strong>
-            </div>
-            <p>{snapshotText(clue.result)}</p>
-          </article>
-        ))}
+      {clues.length > 0 ? (
+        <div className="clue-release-list">
+          {clues.map((clue) => (
+            <article className={`clue-release-card ${animated.has(clue.key) ? 'is-new' : ''}`} key={clue.key}>
+              <div className="clue-release-card-header">
+                <strong>{clueLabel(clue.action)}</strong>
+              </div>
+              <p>{snapshotText(clue.result)}</p>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="clue-release-empty">关键线索会在形成后固定显示在这里。</p>
+      )}
+    </section>
+  )
+}
+
+function InvestigationStatePanel({
+  state,
+  clueCount,
+  observedCount,
+}: {
+  state?: {
+    current_focus?: string
+    has_current_hypothesis: boolean
+    collected_evidence_count: number
+  }
+  clueCount: number
+  observedCount: number
+}) {
+  const focusLabel = scenarioFocusLabel(state?.current_focus)
+  const evidenceCount = Math.max(state?.collected_evidence_count ?? 0, clueCount, observedCount)
+  return (
+    <section className="investigation-state-panel" aria-label="当前调查状态" data-testid="investigation-state-panel">
+      <div className="investigation-state-heading">
+        <strong>当前调查状态</strong>
+        <span>{focusLabel || '尚未形成主线'}</span>
+      </div>
+      <div className="investigation-state-grid">
+        <div>
+          <span>当前关注</span>
+          <strong>{focusLabel || '等待公开证据'}</strong>
+        </div>
+        <div>
+          <span>已形成证据</span>
+          <strong>{evidenceCount} 条</strong>
+        </div>
+        <div>
+          <span>调查假设</span>
+          <strong>{state?.has_current_hypothesis ? '已形成' : '尚未形成'}</strong>
+        </div>
       </div>
     </section>
   )
+}
+
+function scenarioFocusLabel(focus?: string) {
+  const labels: Record<string, string> = {
+    logs: '日志',
+    metrics: '指标',
+    config: '配置',
+    change: '变更',
+    dependency: '依赖',
+    data: '数据',
+    resource: '资源',
+  }
+  return focus ? labels[focus] ?? '' : ''
 }
 
 function clueLabel(action: string) {

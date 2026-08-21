@@ -367,3 +367,30 @@ Python 侧给 `TurnAnalysis` / `AgentTurnResult` 任何一层加字段而 Go 结
 - Python `test_kernel_guard.py` 覆盖重试/继续话术和无观察状态。
 - Go `scenario_agent_guard_test.go` 与 Python 使用同一组边界词。
 - 浏览器验收确认失败动作没有“已记录观察”、没有明确下一步，且回合仍正常提交。
+
+## Scenario 9: 学生侧调查状态必须是安全公开切片
+
+### 1. Scope / Trigger
+修改 `scenarioSessionView`、`ScenarioSession` 前端类型或排查工坊左侧状态/线索区。
+
+### 2. Contracts
+学生会话响应中的 `investigation_state` 只允许包含：
+
+- `current_focus`：Go 已校验的公开维度（`logs|metrics|config|change|dependency|data|resource`）；
+- `has_current_hypothesis`：是否已经形成当前假设的布尔值；
+- `collected_evidence_count`：已归约证据数量，不返回证据 ID 或原文。
+
+不得把 `LearnerState` 原样序列化到浏览器。题目内部假设 ID、排除项、答案锚点、下一步动作和
+Runtime 教学枚举仍由 Go/Python 私有持有；学生侧只展示调查状态和已经公开的线索事件。
+
+### 3. UI Boundary
+
+- “当前调查状态”与“重要线索”必须在题目快照区域常驻；没有线索时也保留空状态；
+- 重要线索只来自已公开的 `clue_published` 事件，并按 `clue_id + markdown_ready` 去重；
+- 回复正文不得因为新增状态面板而出现“下一步”“排除范围”或内部状态词。
+
+### 4. Validation
+
+- Go 会话详情测试断言状态切片存在，且内部假设/证据 ID 不出现在响应 JSON；
+- 前端真实浏览器确认新会话同时看到状态面板和空的常驻线索区，工具回合后公开计数与页面状态一致；
+- 现有原始思维链测试流仍走独立 `reasoning_raw_delta`，不进入会话历史或调查状态切片。

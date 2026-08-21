@@ -22,6 +22,8 @@ test('scenario workspace supports hiding global navigation and resizing work are
   const contextPane = page.getByTestId('session-context-pane')
   const contextHandle = page.getByTestId('session-context-resizer')
   await expect(contextPane.getByTestId('scenario-difficulty-badge')).toHaveText('难度 L2')
+  await expect(contextPane.getByTestId('investigation-state-panel')).toContainText('当前调查状态')
+  await expect(contextPane.getByTestId('important-clues-panel')).toContainText('重要线索')
   await expect(page.getByRole('button', { name: '隐藏题目快照' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '显示题目快照' })).toHaveCount(0)
   const contextBefore = await contextPane.boundingBox()
