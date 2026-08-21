@@ -73,7 +73,12 @@ class StateReducer:
             max_releases=budget,
         )
         projected = (
-            EvidenceEngine().advance(prior, analysis=analysis, observations=observations)
+            EvidenceEngine().advance(
+                prior,
+                analysis=analysis,
+                observations=observations,
+                valid_hypothesis_ids=world.hypothesis_ids(),
+            )
             if advance_state
             else prior.model_copy(deep=True)
         )

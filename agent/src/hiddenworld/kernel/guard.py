@@ -28,6 +28,10 @@ _EXPLICIT_GUIDANCE_MARKERS = (
     "建议从",
     "可以从",
     "可从",
+    "可以看看",
+    "可看看",
+    "看看前面",
+    "查看前面",
     "可以先",
     "先从",
     "入手",
@@ -40,6 +44,10 @@ _EXPLICIT_GUIDANCE_MARKERS = (
     "继续排查",
     "进一步排查",
     "继续排除",
+    "稍后再试",
+    "可以稍后",
+    "继续梳理",
+    "继续分析",
     "排除范围",
     "排除性观察",
 )
@@ -51,6 +59,30 @@ _EXPLICIT_CONCLUSION_MARKERS = (
     "问题来自",
     "已经定位",
     "可以确定",
+)
+_INTERNAL_GUIDANCE_MARKERS = (
+    "引导关注",
+    "建议关注",
+    "请关注",
+    "已确认用户意图",
+    "已识别用户意图",
+    "确认用户意图",
+)
+_OBSERVATION_RECORDING_MARKERS = (
+    "已记录观察",
+    "已记录你的观察",
+    "记录了观察",
+    "观察已记录",
+)
+_POSITIVE_ACTION_RECORD_RE = re.compile(
+    r"(?:已|已经|好的[，, ]*)[^。！？!?；;]{0,24}"
+    r"(?:记录|记下|保存|确认|收到)[^。！？!?；;]{0,24}"
+    r"(?:意图|请求|动作|观察|检查|查询)"
+)
+_POSITIVE_OBSERVATION_ACK_RE = re.compile(
+    r"(?:已|已经|好的[，, ]*)[^。！？!?；;]{0,24}"
+    r"(?:得到|拿到|完成|返回|查到)[^。！？!?；;]{0,24}"
+    r"(?:观察|结果|指标|日志|数据)"
 )
 _IMPLICIT_CONCLUSION_RE = re.compile(
     r"(?:可能|大概率|更可能|提示|说明)[^。！？!?；;]{0,24}(?:不在|出现在|来自|位于)"
@@ -118,6 +150,22 @@ class Guard:
                     "不可用证据必须按题目模拟数据边界表达，不能暴露内部工具或权限实现。",
                 )
         reply = action.reply.strip()
+        if any(marker in reply for marker in (*_INTERNAL_GUIDANCE_MARKERS, *_OBSERVATION_RECORDING_MARKERS)):
+            raise GuardViolation(
+                "reply_internal_framing",
+                "回复不能暴露内部引导状态或把观察写成系统记录动作，请由模型重新生成。",
+            )
+        # 当 Runtime 已确定本轮没有形成公开观察时，不能把动作、意图或
+        # 查询结果写成“已记录/已完成”。这不是依赖某一句固定文案，而是
+        # 对公开事实状态与回复中的正向行为声明做一致性校验。
+        if context.required_reply_mode == "no_observation" and (
+            _POSITIVE_ACTION_RECORD_RE.search(reply) is not None
+            or _POSITIVE_OBSERVATION_ACK_RE.search(reply) is not None
+        ):
+            raise GuardViolation(
+                "reply_claims_observation_without_result",
+                "本轮没有形成公开观察，回复不能声称已记录动作、已完成检查或已得到结果。",
+            )
         if (
             any(marker in reply for marker in (*_EXPLICIT_GUIDANCE_MARKERS, *_EXPLICIT_CONCLUSION_MARKERS))
             or _IMPLICIT_CONCLUSION_RE.search(reply) is not None

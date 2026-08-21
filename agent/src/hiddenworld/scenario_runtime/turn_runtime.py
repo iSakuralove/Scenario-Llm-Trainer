@@ -7,6 +7,7 @@ Runtime 持有，模型只看到 AgentContext。
 
 from __future__ import annotations
 
+from dataclasses import replace
 from time import perf_counter
 from typing import Any
 
@@ -14,6 +15,7 @@ from hiddenworld.agents.scenario_agent import PydanticScenarioAgentRunner
 from hiddenworld.contracts import (
     AgentTurnRequest,
     AgentToolResult,
+    EvidenceRequest,
     EvidenceRequestView,
     AgentSemanticDecision,
     GuidanceState,
@@ -22,6 +24,7 @@ from hiddenworld.contracts import (
     AnswerAttempt,
     AuditTrace,
     GuardContext,
+    HYPOTHESIS_OTHER,
     MentorAction,
     FinalReplyOutput,
     PublicAnswerComparison,
@@ -71,6 +74,7 @@ class SingleAgentRuntime:
         on_turn_analysis=None,
         on_public_trace=None,
         on_reply_delta=None,
+        on_reasoning_delta=None,
     ) -> AgentTurnResult:
         request.require_contract_version()
         if request.hidden_world.canonical_answer is not None:
@@ -85,13 +89,22 @@ class SingleAgentRuntime:
                     on_turn_analysis=on_turn_analysis,
                     on_public_trace=on_public_trace,
                     on_reply_delta=on_reply_delta,
+                    on_reasoning_delta=on_reasoning_delta,
                 ),
                 timeout=timeout_seconds,
             )
         except TimeoutError as exc:
             raise TurnDeadlineExceeded("turn deadline exceeded") from exc
 
-    async def _run_turn(self, request: AgentTurnRequest, *, on_turn_analysis, on_public_trace, on_reply_delta):
+    async def _run_turn(
+        self,
+        request: AgentTurnRequest,
+        *,
+        on_turn_analysis,
+        on_public_trace,
+        on_reply_delta,
+        on_reasoning_delta,
+    ):
         started = perf_counter()
         context = project_agent_context(request)
         authorization_context = context
@@ -122,13 +135,26 @@ class SingleAgentRuntime:
             model_context = context.model_copy(
                 update={
                     "tool_results": [quick_result],
+                    "evidence_request": (
+                        EvidenceRequestView(
+                            requested_text=request.structured_user_action.normalized_scope,
+                            availability="PREREQUISITE_UNMET",
+                        )
+                        if quick_result.error_code == "unmet_prerequisite"
+                        else context.evidence_request
+                    ),
                     # 动作已经执行完，禁止模型再次规划同一个观察。
                     "authorized_actions": [],
                 }
             )
             run_stream = getattr(runner, "run_stream", None)
-            if on_reply_delta is not None and callable(run_stream):
-                final_output = await run_stream(model_context, on_reply_delta=buffer_reply_delta)
+            if (on_reply_delta is not None or on_reasoning_delta is not None) and callable(run_stream):
+                stream_kwargs = {}
+                if on_reply_delta is not None:
+                    stream_kwargs["on_reply_delta"] = buffer_reply_delta
+                if on_reasoning_delta is not None:
+                    stream_kwargs["on_reasoning_delta"] = on_reasoning_delta
+                final_output = await run_stream(model_context, **stream_kwargs)
             else:
                 final_output = await runner.run(model_context)
             if isinstance(final_output, ToolCallsOutput):
@@ -151,6 +177,7 @@ class SingleAgentRuntime:
                 max_model_rounds=11,
                 max_tool_calls=10,
                 on_reply_delta=buffer_reply_delta if on_reply_delta is not None else None,
+                on_reasoning_delta=on_reasoning_delta,
             )
             try:
                 final_output, events = await loop.run(context)
@@ -170,8 +197,6 @@ class SingleAgentRuntime:
             successful_actions,
             assessment=assessment,
         )
-        if on_turn_analysis is not None:
-            await on_turn_analysis(analysis)
 
         authorizations = _authorizations_from_context(request, authorization_context)
         is_clarification = analysis.intent in {"clarification", "explanation_request"}
@@ -293,6 +318,34 @@ class SingleAgentRuntime:
         turn_control = reduction.turn_control
         evidence_request = _evidence_request_for_analysis(analysis)
 
+        guard_context = GuardContext(
+            forbidden_entities=_forbidden_entities(request, projected_state),
+            completion_allowed=verification.completion_allowed,
+            may_release=reduction.approved_releases,
+            evidence_request=_evidence_request_after_tool_results(
+                analysis,
+                events,
+                request=request,
+                fallback=evidence_request,
+            ),
+            public_observation_texts=[item.result for item in observations],
+        )
+        analysis = analysis.model_copy(
+            update={
+                "public_summary": _sanitize_public_summary(
+                    analysis.public_summary,
+                    constraints=constraints,
+                    context=guard_context,
+                )
+            }
+        )
+        effective_analysis = effective_analysis.model_copy(
+            update={"public_summary": analysis.public_summary}
+        )
+        guard_context = replace(
+            guard_context,
+            required_reply_mode=_required_reply_mode(events, observations),
+        )
         public_trace = _public_trace_before_mentor(
             public_summary=analysis.public_summary,
             observations=observations,
@@ -301,16 +354,12 @@ class SingleAgentRuntime:
             answer_public=answer_public,
             compare_answer_ms=0,
         )
-        await _emit_trace(on_public_trace, public_trace)
-
-        guard_context = GuardContext(
-            forbidden_entities=_forbidden_entities(request, projected_state),
-            completion_allowed=verification.completion_allowed,
-            may_release=reduction.approved_releases,
-            evidence_request=evidence_request,
-            public_observation_texts=[item.result for item in observations],
+        action = _mentor_action_from_reply(
+            final_output.reply,
+            teaching_decision,
+            reply_mode=getattr(final_output, "reply_mode", "acknowledgement"),
+            required_reply_mode=guard_context.required_reply_mode,
         )
-        action = _mentor_action_from_reply(final_output.reply, teaching_decision)
         try:
             action = Guard().validate(action, constraints=constraints, context=guard_context)
         except ValueError as exc:
@@ -321,7 +370,7 @@ class SingleAgentRuntime:
                     context,
                     events,
                     feedback=getattr(last_error, "code", "reply_guard_rejected"),
-                    evidence_request=evidence_request,
+                    evidence_request=guard_context.evidence_request,
                 )
                 retry_output = await _retry_final_reply(
                     runner,
@@ -330,7 +379,12 @@ class SingleAgentRuntime:
                 )
                 if retry_output is None:
                     break
-                action = _mentor_action_from_reply(retry_output.reply, teaching_decision)
+                action = _mentor_action_from_reply(
+                    retry_output.reply,
+                    teaching_decision,
+                    reply_mode=getattr(retry_output, "reply_mode", "acknowledgement"),
+                    required_reply_mode=guard_context.required_reply_mode,
+                )
                 try:
                     action = Guard().validate(action, constraints=constraints, context=guard_context)
                     accepted = True
@@ -345,6 +399,13 @@ class SingleAgentRuntime:
                 raise TurnDeadlineExceeded(
                     "agent did not produce a reply accepted by the public boundary"
                 ) from last_error
+        # 只有最终正文通过 Guard 后才把本轮结构化理解交给流式消费方；
+        # 它包含模型生成的 public_summary，不能在失败/重生成前提前外发。
+        if on_turn_analysis is not None:
+            await on_turn_analysis(analysis)
+        # 公开理解摘要和观察必须等最终回复通过 Guard 后再发送。模型流式输出
+        # 只是私有候选，Guard 拒绝或重生成时不能让旧摘要残留在学生界面。
+        await _emit_trace(on_public_trace, public_trace)
         final_trace = _public_trace_after_mentor(start_sequence=len(public_trace) + 1)
         public_trace.extend(final_trace)
         await _emit_trace(on_public_trace, final_trace)
@@ -409,14 +470,63 @@ def _assessment_from_single_agent(request, final_output, events, successful_acti
     if semantic is None:
         # 兼容旧模型/测试替身时只依据 Runtime 已执行的动作降级，
         # 不重新解析用户中文，不猜答案、卡住或教学状态。
+        structured_scope = ""
+        if request.structured_user_action is not None:
+            structured_scope = (
+                request.structured_user_action.normalized_scope.strip()
+                or request.structured_user_action.action_id.strip()
+            )
         return TurnAssessment(
             intent="investigate" if successful_actions or request.structured_user_action is not None else "chat",
+            requested_action=structured_scope,
+            requested_action_raw=structured_scope,
             action_match_status="matched" if successful_actions else "none",
             actions=list(dict.fromkeys(successful_actions)),
             progress_assessment="progress" if successful_actions else "unknown",
             confidence=0.0,
         )
-    return TurnAssessment.model_validate(semantic.model_dump())
+    assessment = TurnAssessment.model_validate(semantic.model_dump())
+    assessment = _normalize_hypothesis_for_world(request, assessment)
+    if request.structured_user_action is not None:
+        # QuickAction 是后端签发的用户动作，模型不能把它改判成 chat，
+        # 也不能覆盖已经签发的动作范围；是否产出观察仍以工具状态为准。
+        structured_scope = (
+            request.structured_user_action.normalized_scope.strip()
+            or request.structured_user_action.action_id.strip()
+        )
+        return assessment.model_copy(
+            update={
+                "intent": "investigate",
+                "requested_action": structured_scope,
+                "requested_action_raw": structured_scope,
+                "action_match_status": "matched",
+                "actions": list(dict.fromkeys(successful_actions)),
+                "progress_assessment": "progress" if successful_actions else "no_progress",
+                "is_stuck": False,
+                "is_noise": False,
+                "made_claim": False,
+                "claim_type": "none",
+                "confidence": max(assessment.confidence, 0.95),
+            }
+        )
+    return assessment
+
+
+def _normalize_hypothesis_for_world(request, assessment: TurnAssessment) -> TurnAssessment:
+    """把模型自造的假设 ID 收束为空，避免污染权威状态。
+
+    模型仍可通过 ``hypothesis_raw`` 表达学生提出的自由假设；但只有题目声明
+    的 ID 才能进入 LearnerState。题目若要表达“其它”方向，应由模型显式输出
+    合法的 ``H_OTHER``；对任意自造 ID 不擅自替换成一个真实候选，避免一轮本可
+    继续的观察被整轮拒绝，也避免把错误解析伪装成学生已经选了“其他”。
+    """
+
+    hypothesis_id = assessment.hypothesis_id.strip()
+    if not hypothesis_id or hypothesis_id == HYPOTHESIS_OTHER:
+        return assessment
+    if hypothesis_id in request.hidden_world.hypothesis_ids():
+        return assessment
+    return assessment.model_copy(update={"hypothesis_id": ""})
 
 
 def _analysis_from_single_agent(
@@ -493,11 +603,14 @@ def _teaching_decision_from_agent(
                 break
     if decision is not None:
         # 结构化模型已经表达策略；权限字段仍由 Runtime 强制关闭。
+        update = {
+            "allow_explicit_next_step": False,
+            "allow_ruled_out_scope": False,
+        }
+        if assessment.intent in {"investigate", "inspect"}:
+            update["reply_policy"] = "tool_result_only" if has_observations else "acknowledgement"
         return decision.model_copy(
-            update={
-                "allow_explicit_next_step": False,
-                "allow_ruled_out_scope": False,
-            }
+            update=update,
         )
 
     if has_observations:
@@ -538,16 +651,53 @@ def _normalize_single_agent_reply(
     return " ".join((reply or "").split())
 
 
-def _mentor_action_from_reply(reply: str, decision: TeachingDecision) -> MentorAction:
+def _mentor_action_from_reply(
+    reply: str,
+    decision: TeachingDecision,
+    *,
+    reply_mode: str | None = None,
+    required_reply_mode: str | None = None,
+) -> MentorAction:
     """把 Agent 的自然语言正文装入安全动作；不生成新的用户可见文案。"""
 
     return MentorAction(
         rationale="single_agent_runtime",
         reply=_normalize_single_agent_reply(reply, decision),
+        # 行为模式由 Runtime 的工具事实优先决定；模型字段只保留作审计，
+        # 防止 provider 因枚举缺省把失败动作误标成普通确认。
+        reply_mode=required_reply_mode or reply_mode or "acknowledgement",
         requested_releases=[],
         confirms_hypothesis=False,
         expected_effort="moderate",
     )
+
+
+def _required_reply_mode(events, observations) -> str | None:
+    """由 Runtime 事实确定本轮正文模式，不接受模型自行放宽。"""
+
+    if any(
+        item.kind == "tool_result"
+        and getattr(item.payload, "error_code", "") == "unmet_prerequisite"
+        for item in events
+    ):
+        return "no_observation"
+    if observations:
+        return "observation"
+    return None
+
+
+def _sanitize_public_summary(summary: str, *, constraints, context: GuardContext) -> str:
+    """理解摘要也走公开边界；拒绝时直接丢弃，不生成替代话术。"""
+
+    candidate = _mentor_action_from_reply(
+        summary,
+        TeachingDecision(reply_policy="acknowledgement"),
+    )
+    try:
+        Guard().validate(candidate, constraints=constraints, context=context)
+    except ValueError:
+        return ""
+    return candidate.reply
 
 
 def _reply_retry_context(context, events, *, feedback: str, evidence_request=None):
@@ -574,6 +724,36 @@ def _reply_retry_context(context, events, *, feedback: str, evidence_request=Non
         },
         deep=True,
     )
+
+
+def _evidence_request_after_tool_results(
+    analysis: TurnAnalysis,
+    events,
+    *,
+    request: AgentTurnRequest,
+    fallback: EvidenceRequest | None,
+) -> EvidenceRequest | None:
+    """把前置条件失败投影为不可用证据，阻止模型把失败当成观察完成。
+
+    ``VirtualObservationExecutor`` 用结构化 error_code 表达前置条件未满足；
+    这里把它接入 Guard 的证据边界，而不是从失败文本猜测含义。
+    """
+
+    if not any(
+        item.kind == "tool_result"
+        and getattr(item.payload, "error_code", "") == "unmet_prerequisite"
+        for item in events
+    ):
+        return fallback
+    requested = (
+        analysis.requested_action_raw.strip()
+        or (
+            request.structured_user_action.normalized_scope.strip()
+            if request.structured_user_action is not None
+            else ""
+        )
+    )
+    return EvidenceRequest(requested_text=requested, availability="PREREQUISITE_UNMET")
 
 
 async def _retry_final_reply(runner, context, *, feedback: str):

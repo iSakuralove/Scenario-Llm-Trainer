@@ -46,17 +46,29 @@ type scenarioAgentStreamingClient interface {
 type deterministicScenarioAgentClient struct{}
 
 func (deterministicScenarioAgentClient) Turn(_ context.Context, request agentclient.TurnRequest) (agentclient.TurnResult, error) {
+	// 该客户端只供 NewServerForTests 使用，生产入口永远走 Python Agent。
+	// 测试替身不得植入一段会被误搬到生产的固定回复，直接回显本轮输入/公开题面
+	// 仅用于让 HTTP 契约测试继续拥有非空正文。
+	safeScenario := sanitizePublicScenario(request.PublicScenario)
+	reply := strings.TrimSpace(safeScenario.Description)
+	if reply == "" {
+		reply = strings.TrimSpace(safeScenario.Title)
+	}
+	if reply == "" {
+		return agentclient.TurnResult{}, errors.New("test scenario agent has no public reply source")
+	}
 	return agentclient.TurnResult{
 		ContractVersion:  agentclient.ContractVersion,
 		RequestID:        request.RequestID,
 		ExpectedRevision: request.StateRevision,
-		Reply:            "已记录你的排查思路。",
+		Reply:            reply,
 		TurnAssessment: &agentclient.TurnAssessment{
 			Intent:             "investigate",
 			ClaimType:          "none",
 			StudentAffect:      "engaged",
 			ProgressAssessment: "no_progress",
 			Actions:            []string{},
+			EstablishedFacts:   []string{},
 			Confidence:         0.9,
 		},
 		TeachingDecision: &agentclient.TeachingDecision{
@@ -78,7 +90,7 @@ func (deterministicScenarioAgentClient) Turn(_ context.Context, request agentcli
 		},
 		Proposals: []agentclient.Proposal{
 			{Kind: "set_stalled_turns", Value: request.LearnerState.StalledTurns + 1},
-			{Kind: "record_opening", Text: "已记录你的排查思路。"},
+			{Kind: "record_opening", Text: mentorOpening(reply)},
 		},
 		PublicTrace: []agentclient.PublicTraceEvent{
 			{Sequence: 1, Kind: "reasoning_summary_completed", Status: "completed", Summary: "已完成本轮公开意图识别。"},
@@ -479,7 +491,17 @@ func validateScenarioAssessmentConsistency(assessment agentclient.TurnAssessment
 		assessment.RequestedActionRaw != analysis.RequestedActionRaw ||
 		assessment.ClarificationTarget != analysis.ClarificationTarget ||
 		assessment.ActionMatchStatus != analysis.ActionMatchStatus {
-		return errors.New("turn assessment disagrees with turn analysis")
+		return fmt.Errorf(
+			"turn assessment disagrees with turn analysis: assessment={actions=%v hypothesis_id=%q hypothesis_raw=%q made_claim=%t answer=%t answer_text=%q facts=%v stuck=%t noise=%t affect=%q confidence=%g requested=%q clarification=%q match=%q} analysis={actions=%v hypothesis_id=%q hypothesis_raw=%q made_claim=%t answer=%t answer_text=%q facts=%v stuck=%t noise=%t affect=%q confidence=%g requested=%q clarification=%q match=%q}",
+			assessment.Actions, assessment.HypothesisID, assessment.HypothesisRaw, assessment.MadeClaim,
+			assessment.ContainsAnswerAttempt, assessment.AnswerAttemptText, assessment.EstablishedFacts,
+			assessment.IsStuck, assessment.IsNoise, assessment.StudentAffect, assessment.Confidence,
+			assessment.RequestedActionRaw, assessment.ClarificationTarget, assessment.ActionMatchStatus,
+			analysis.Actions, analysis.HypothesisID, analysis.HypothesisRaw, analysis.MadeClaim,
+			analysis.ContainsAnswerAttempt, analysis.AnswerAttemptText, analysis.EstablishedFacts,
+			analysis.IsStuck, analysis.IsNoise, analysis.StudentAffect, analysis.Confidence,
+			analysis.RequestedActionRaw, analysis.ClarificationTarget, analysis.ActionMatchStatus,
+		)
 	}
 	if assessment.ContainsAnswerAttempt && strings.TrimSpace(assessment.AnswerAttemptText) == "" {
 		return errors.New("answer attempt is marked present but has no text")
@@ -670,6 +692,10 @@ func validateScenarioReply(
 		"建议检查",
 		"建议查看",
 		"建议核对",
+		"稍后再试",
+		"可以稍后",
+		"继续梳理",
+		"继续分析",
 		"排除范围",
 		"排除性观察",
 		"问题不在",

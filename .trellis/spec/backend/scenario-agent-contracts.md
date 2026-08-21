@@ -315,3 +315,55 @@ Python 侧给 `TurnAnalysis` / `AgentTurnResult` 任何一层加字段而 Go 结
 学生：看一下数据库日志
 系统：在题目虚拟数据上模拟订单写入日志，并把状态码、连接池和超时字段放入线索卡。
 ```
+
+---
+
+## Scenario 7: 模型假设 ID 必须受题目集合约束
+
+### 1. Scope / Trigger
+修改 `EvidenceEngine`、`StateReducer`、单 Agent `TurnAssessment` 归约，或新增/修改
+`set_current_hypothesis` 提议校验。
+
+### 2. Contracts
+- `hypothesis_id` 是模型候选，不是权威状态；只有当前题目 `HiddenWorld.hypotheses`
+  声明的 ID 才能写入 `LearnerState.current_hypothesis`。
+- Python Runtime 必须把题目声明的 ID 集合传给 `EvidenceEngine`；集合外的模型字符串
+  只能被收束为空，不得生成 `set_current_hypothesis`。
+- `H_OTHER` 只有在题目确实声明该 ID 时才是合法候选；不能把任意模型错误 ID 静默伪装成
+  学生选择了“其他”。
+- Go 仍保留 `invalid_hypothesis` 拒绝闸门；Python 的 fail-closed 只是避免把可继续的
+  回合送进必然失败的提议，不是替代 Go 复核。
+
+### 3. Validation & Error Matrix
+| 条件 | 结果 |
+|---|---|
+| 模型输出题目外 ID | 丢弃该状态变更，保留本轮其它公开事实 |
+| 模型输出合法题目 ID | 可生成 `set_current_hypothesis`，由 Go 再复核 |
+| 模型输出 `H_OTHER` 且题目未声明 | 丢弃该状态变更 |
+| Go 收到未声明 `set_current_hypothesis` | `proposal_rejected/invalid_hypothesis`，不写状态 |
+
+### 4. Tests Required
+- `agent/tests/test_kernel_evidence.py`：集合外 ID 不进入状态。
+- `agent/tests/test_scenario_agent_loop.py`：单 Agent 不产生集合外假设提议。
+- 真实浏览器：请求工具动作时不能因模型自造假设 ID 造成整轮 `proposal_rejected`。
+
+---
+
+## Scenario 8: 未形成观察时禁止重试/继续排查话术
+
+### 1. Scope / Trigger
+修改 Python `Guard` 或 Go `validateScenarioReply` 的公开回复边界，尤其是未满足前置条件、
+工具失败、无数据返回等路径。
+
+### 2. Contracts
+- `required_reply_mode=no_observation` 时，回复只能承认本轮没有形成可用观察，并可提出
+  不指向具体动作的反思性问题。
+- “稍后再试”“可以稍后”“继续梳理”“继续分析”等重试/继续排查变体与“下一步”“接下来”
+  同属明确路径话术，Python 与 Go 必须同步拒绝并触发模型重生成。
+- 禁止“已记录观察”“已完成检查”等把失败工具包装成事实；不得把内部工具目录、权限或
+  前置条件实现暴露给学生。
+
+### 3. Tests Required
+- Python `test_kernel_guard.py` 覆盖重试/继续话术和无观察状态。
+- Go `scenario_agent_guard_test.go` 与 Python 使用同一组边界词。
+- 浏览器验收确认失败动作没有“已记录观察”、没有明确下一步，且回合仍正常提交。

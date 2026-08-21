@@ -17,11 +17,14 @@ func TestScenarioReplyGuardUsesEnglishBoundariesAndBlocksActualEntity(t *testing
 
 	for _, safe := range []string{
 		"Please explain the available observations.",
-		"先根据公开现象继续排查，不急着确认结论。",
+		"这条观察还没有形成结论，可以先停下来想想它说明了什么。",
 	} {
 		if err := validateScenarioReply(safe, world, nil, state); err != nil {
 			t.Fatalf("safe reply was rejected: %q: %v", safe, err)
 		}
+	}
+	if err := validateScenarioReply("这次没有形成可用观察，你可以稍后再试，或者继续梳理公开信息。", world, nil, state); err == nil {
+		t.Fatal("retry/continue guidance was not rejected")
 	}
 	for _, leaked := range []string{
 		"检查 ai 的配置。",

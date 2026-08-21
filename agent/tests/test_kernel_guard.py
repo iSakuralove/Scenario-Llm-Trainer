@@ -37,6 +37,15 @@ def test_guard_rejects_exact_forbidden_entity_without_echoing_it(teaching_constr
         )
 
     assert caught.value.code == "entity_leak"
+
+
+def test_guard_rejects_retry_or_continue_guidance(teaching_constraints) -> None:
+    action = mentor_action("这次没有形成可用观察，你可以稍后再试，或者继续梳理公开信息。")
+
+    with pytest.raises(GuardViolation) as caught:
+        Guard().validate(action, constraints=teaching_constraints, context=GuardContext())
+
+    assert caught.value.code == "reply_policy_violation"
     assert "idx_user_created" not in str(caught.value)
 
 
@@ -65,6 +74,32 @@ def test_guard_rejects_implicit_next_direction(teaching_constraints) -> None:
         )
 
     assert caught.value.code == "reply_policy_violation"
+
+
+def test_guard_rejects_positive_action_ack_when_no_observation_was_formed(teaching_constraints) -> None:
+    action = mentor_action("好的，已经记录你想查看数据库锁等待的意图。")
+
+    with pytest.raises(GuardViolation) as caught:
+        Guard().validate(
+            action,
+            constraints=teaching_constraints,
+            context=GuardContext(required_reply_mode="no_observation"),
+        )
+
+    assert caught.value.code == "reply_claims_observation_without_result"
+
+
+def test_guard_rejects_success_claim_for_failed_observation(teaching_constraints) -> None:
+    action = mentor_action("已经得到这项指标，可以继续判断了。")
+
+    with pytest.raises(GuardViolation) as caught:
+        Guard().validate(
+            action,
+            constraints=teaching_constraints,
+            context=GuardContext(required_reply_mode="no_observation"),
+        )
+
+    assert caught.value.code == "reply_claims_observation_without_result"
 
 
 def test_guard_rejects_release_outside_approved_subset(teaching_constraints) -> None:

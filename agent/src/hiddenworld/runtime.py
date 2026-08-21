@@ -97,6 +97,7 @@ class HiddenWorldRuntime:
         on_turn_analysis: TurnAnalysisCallback | None = None,
         on_public_trace: PublicTraceCallback | None = None,
         on_reply_delta: ReplyDeltaCallback | None = None,
+        on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> AgentTurnResult:
         request.require_contract_version()
         # 旧 v1 题目仍允许读取；一旦带有 V2 独立答案字段，加载时执行强校验。
@@ -110,6 +111,7 @@ class HiddenWorldRuntime:
                     on_turn_analysis=on_turn_analysis,
                     on_public_trace=on_public_trace,
                     on_reply_delta=on_reply_delta,
+                    on_reasoning_delta=on_reasoning_delta,
                 ),
                 timeout=timeout_seconds,
             )
@@ -123,6 +125,7 @@ class HiddenWorldRuntime:
         on_turn_analysis: TurnAnalysisCallback | None,
         on_public_trace: PublicTraceCallback | None,
         on_reply_delta: ReplyDeltaCallback | None,
+        on_reasoning_delta: Callable[[str], Awaitable[None]] | None,
     ) -> AgentTurnResult:
         interpreter_started = perf_counter()
         interpreter_ms = 0
@@ -234,6 +237,7 @@ class HiddenWorldRuntime:
                 request.learner_state,
                 analysis=effective_analysis,
                 observations=observations,
+                valid_hypothesis_ids=request.hidden_world.hypothesis_ids(),
             )
         )
         if stall_release:
@@ -487,23 +491,32 @@ class HiddenWorldRuntime:
             )
 
         extractor = StreamingFieldExtractor("reply")
-        async with self.mentor.iter(
-            "请基于本轮公开上下文生成导师回复。",
-            deps=deps,
-        ) as run:
-            async for node in run:
-                if self._is_model_node(node):
-                    async with node.stream(run.ctx) as stream:
-                        async for event in stream:
-                            if not isinstance(event, pai_messages.PartDeltaEvent):
-                                continue
-                            delta = event.delta
-                            if not isinstance(delta, pai_messages.TextPartDelta):
-                                continue
-                            piece = extractor.feed(delta.content_delta)
-                            if piece:
-                                await on_reply_delta(piece)
-            return run.result
+        try:
+            async with self.mentor.iter(
+                "请基于本轮公开上下文生成导师回复。",
+                deps=deps,
+            ) as run:
+                async for node in run:
+                    if self._is_model_node(node):
+                        async with node.stream(run.ctx) as stream:
+                            async for event in stream:
+                                if not isinstance(event, pai_messages.PartDeltaEvent):
+                                    continue
+                                delta = event.delta
+                                if not isinstance(delta, pai_messages.TextPartDelta):
+                                    continue
+                                piece = extractor.feed(delta.content_delta)
+                                if piece:
+                                    await on_reply_delta(piece)
+                return run.result
+        except Exception:
+            # 某些 OpenAI 兼容端点或测试模型不提供可验证的结构化增量，
+            # 流式读取失败时只回退一次非流式终值；正文仍留在 Runtime 私有缓冲，
+            # 不把半截候选直接发给学生。
+            return await self.mentor.run(
+                "请基于本轮公开上下文生成导师回复。",
+                deps=deps,
+            )
 
 
 def _observe_actions(

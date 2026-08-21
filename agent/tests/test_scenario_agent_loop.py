@@ -522,6 +522,76 @@ def test_single_agent_uses_structured_semantic_decision_instead_of_keyword_recon
     assert analysis.confidence == 0.93
 
 
+def test_single_agent_normalizes_undeclared_hypothesis_id(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    request = AgentTurnRequest(
+        request_id="invalid-hypothesis-normalization",
+        session_id="session-1",
+        state_revision=1,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="我怀疑是一个题目没有列出的组件问题",
+    )
+    output = FinalReplyOutput(
+        kind="final_reply",
+        reply="先把这条观察和已知现象分开。",
+        semantic=AgentSemanticDecision(
+            intent="hypothesis",
+            hypothesis_id="H_MODEL_INVENTED",
+            hypothesis_raw="一个题目没有列出的组件问题",
+            claim_type="hypothesis",
+            made_claim=True,
+            confidence=0.9,
+        ),
+    )
+
+    analysis = _analysis_from_single_agent(request, output, [], [])
+
+    assert analysis.hypothesis_id == ""
+    assert analysis.hypothesis_raw == "一个题目没有列出的组件问题"
+
+
+@pytest.mark.asyncio
+async def test_single_agent_does_not_emit_undeclared_hypothesis_proposal(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    class InvalidHypothesisRunner:
+        async def run(self, context):
+            return FinalReplyOutput(
+                kind="final_reply",
+                reply="我听到你提出了一个额外的假设。",
+                semantic=AgentSemanticDecision(
+                    intent="hypothesis",
+                    hypothesis_id="H_MODEL_INVENTED",
+                    hypothesis_raw="一个题目没有列出的组件问题",
+                    claim_type="hypothesis",
+                    made_claim=True,
+                    confidence=0.9,
+                ),
+            )
+
+    request = AgentTurnRequest(
+        request_id="invalid-hypothesis-proposal",
+        session_id="session-1",
+        state_revision=1,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="我怀疑是一个题目没有列出的组件问题",
+    )
+
+    result = await SingleAgentRuntime(InvalidHypothesisRunner()).run_turn(request)
+
+    assert result.turn_analysis.hypothesis_id == ""
+    assert all(item.kind != "set_current_hypothesis" for item in result.proposals)
+
+
 @pytest.mark.asyncio
 async def test_projected_context_and_virtual_executor_complete_authorized_observation(
     hidden_world,
@@ -701,4 +771,7 @@ async def test_quick_action_executes_locally_before_one_final_agent_call(
     assert runner.calls == 1
     assert len(runner.seen_tool_results) == 1
     assert runner.seen_tool_results[0].status == "succeeded"
+    assert result.turn_assessment is not None
+    assert result.turn_assessment.requested_action == action
+    assert result.turn_assessment.requested_action_raw == action
     assert any(item.kind == "observation_result" for item in result.public_trace)

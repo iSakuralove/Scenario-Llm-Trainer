@@ -88,3 +88,22 @@ def test_low_confidence_analysis_cannot_write_action_or_hypothesis(learner_state
     assert updated.established_facts == []
     assert updated.effective_turns == 0
     assert updated.stalled_turns == 1
+
+
+def test_undeclared_hypothesis_cannot_enter_state(learner_state) -> None:
+    analysis = analysis_for(
+        actions=[],
+        hypothesis_id="H_MODEL_INVENTED",
+        made_claim=True,
+    )
+
+    updated = EvidenceEngine().advance(
+        learner_state,
+        analysis=analysis,
+        observations=[],
+        valid_hypothesis_ids={"H_INDEX", "H_CPU_BOUND"},
+    )
+
+    assert updated.current_hypothesis is None
+    assert updated.effective_turns == 0
+    assert updated.stalled_turns == 1
