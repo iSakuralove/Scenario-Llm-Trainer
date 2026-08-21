@@ -97,12 +97,23 @@ HypothesisRelation = Literal[
 # 卡了三轮开始烦躁的学生，面对还在喊"快解锁啦"的 Agent 只会更烦。
 StudentAffect = Literal["engaged", "confused", "frustrated", "disengaged"]
 
+# 由模型声明、由 Runtime 结合工具状态复核的回复行为模式；它不是用户可见文案。
+ReplyMode = Literal[
+    "acknowledgement",
+    "no_observation",
+    "observation",
+    "reflection",
+    "casual",
+    "clarification",
+]
+
 # 学生请求的证据在题目世界中的可用性。它描述的是世界模型状态，
 # 不是回复模板；Mentor 只能据此决定如何诚实表达，不能据此编造数据。
 EvidenceAvailability = Literal[
     "AVAILABLE",
     "DERIVABLE",
     "SIMULATED_ALLOWED",
+    "PREREQUISITE_UNMET",
     "UNAVAILABLE",
 ]
 

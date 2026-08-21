@@ -12,7 +12,8 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.zai import ZaiProvider
 
 DEEPSEEK_MODEL_ID = "deepseek-v4-flash"
-GLM_MODEL_ID = "glm-4.7"
+GLM_MODEL_ID = "glm-5.3"
+GLM_FALLBACK_MODEL_ID = "glm-4.7"
 ZAI_BASE_URL = "https://api.z.ai/api/paas/v4"
 GLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 XUAN_BASE_URL = "https://ai.centos.hk/v1"
@@ -82,9 +83,19 @@ def build_glm_model(*, api_key: str | None = None, model: str | None = None) -> 
     configured_model = (model or os.getenv("GLM_MODEL") or GLM_MODEL_ID).strip()
     if not configured_model:
         raise ModelConfigurationError("GLM_MODEL must not be empty")
-    thinking = (os.getenv("GLM_THINKING", "disabled") or "disabled").strip().lower()
-    if thinking not in {"enabled", "disabled"}:
-        raise ModelConfigurationError("GLM_THINKING must be enabled or disabled")
+    thinking = (os.getenv("GLM_THINKING", "low") or "low").strip().lower()
+    if thinking not in {"enabled", "disabled", "minimal", "low", "medium", "high", "xhigh"}:
+        raise ModelConfigurationError(
+            "GLM_THINKING must be disabled, enabled, minimal, low, medium, high or xhigh"
+        )
+    thinking_setting: bool | str = (
+        False if thinking == "disabled" else True if thinking == "enabled" else thinking
+    )
+    profile = None
+    if configured_model.lower().startswith(("glm-5.2", "glm-5.3")):
+        # pydantic-ai 2.31.1 尚未把 glm-5.3 列入内置 profile；显式声明
+        # Z.AI 的 reasoning_effort 能力，才能把 low 传成低思考度而不是只开关。
+        profile = {"supports_thinking": True, "zai_supports_reasoning_effort": True}
     client = AsyncOpenAI(
         api_key=key,
         base_url=base_url,
@@ -93,7 +104,8 @@ def build_glm_model(*, api_key: str | None = None, model: str | None = None) -> 
     return ZaiModel(
         configured_model,
         provider=ZaiProvider(openai_client=client),
-        settings={"thinking": thinking == "enabled"},
+        profile=profile,
+        settings={"thinking": thinking_setting},
     )
 
 

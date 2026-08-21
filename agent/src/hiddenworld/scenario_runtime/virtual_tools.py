@@ -53,6 +53,26 @@ class VirtualObservationExecutor:
             collected_evidence=self.request.learner_state.collected_evidence,
         )
         self.executed_observations[call.tool_id] = result
+        # 前置条件未满足时，世界只返回了“无法形成观察”的内部状态，不能
+        # 伪装成成功工具结果，也不能让 Runtime 将它投影为新的公开证据。
+        collected = set(self.request.learner_state.collected_evidence)
+        configured = next(
+            item for item in self.request.hidden_world.observations if item.action == call.tool_id
+        )
+        configured_prerequisites = {
+            prerequisite
+            for evidence_id in configured.yields_evidence
+            if (node := self.request.hidden_world.evidence_by_id(evidence_id)) is not None
+            for prerequisite in node.prerequisites
+        }
+        if not configured_prerequisites.issubset(collected):
+            return AgentToolResult(
+                call_id=call.call_id,
+                tool_id=call.tool_id,
+                tool_kind=entry.kind,
+                status="failed",
+                error_code="unmet_prerequisite",
+            )
         return AgentToolResult(
             call_id=call.call_id,
             tool_id=call.tool_id,

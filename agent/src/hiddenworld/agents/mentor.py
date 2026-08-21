@@ -100,6 +100,11 @@ def _render_intent_context(deps: MentorDeps) -> str:
                 "题目世界没有这类可公开观察；诚实说明该模拟数据不包含它，不能编造数值，"
                 "也不要替换成相近指标。不要提内部目录、工具清单、权限或系统实现。"
             )
+        elif request.availability == "PREREQUISITE_UNMET":
+            lines.append(
+                "这次动作没有形成可公开观察，原因是题目世界的前置条件尚未满足；"
+                "不要把它说成题面不存在，也不要声称观察已经记录或已经得到结果。"
+            )
         elif request.availability == "SIMULATED_ALLOWED":
             lines.append("这类观察属于题目允许的模拟数据，只能引用系统实际返回的结果。")
         elif request.availability == "DERIVABLE":

@@ -117,6 +117,7 @@ docs/report-figures/generated/
 .serena\
 docs\
 features\
+验收标准\
 # Binary media and archives are not committed to this source branch
 *.zip
 *.7z

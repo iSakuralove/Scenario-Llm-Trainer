@@ -41,6 +41,15 @@ func (s *sseWriter) runEvent(event domain.ScenarioRunEvent) {
 	s.event("run_event", event)
 }
 
+// debugTrace 只用于显式打开的测试调试流，不属于正式 RunEvent，也不会进入
+// ScenarioMessage.ResponseMeta 或会话历史。生产环境默认不会调用它。
+func (s *sseWriter) debugTrace(kind, text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	s.event("debug_trace", map[string]string{"kind": kind, "text": text})
+}
+
 // 只丢空串，不丢纯空白：真流式下单个空格本身就是一个 token，
 // 按空白过滤会把它吞掉，拼出来的文本就和最终落库内容不一致了。
 func (s *sseWriter) delta(chunk string, displayable bool) {

@@ -14,7 +14,7 @@
 #   api_key: ${MY_KEY}            ← 引用系统环境变量（存在则生效）
 #
 # 官方三家最大输出 token（官方文档口径，省略时自动按域名补默认）：
-#   GLM-4.7          128K（上下文 200K）
+#   GLM-5.3          128K（上下文 200K）
 #   DeepSeek-V4      384K（上下文 1M）
 #   MiniMax-M2.7     128K（通常 16K 已够用，上下文约 205K）
 
@@ -22,7 +22,7 @@ providers:
   - name: glm-official
     base_url: https://open.bigmodel.cn/api/paas/v4
     api_key:
-    model: glm-4.7
+    model: glm-5.3
     max_tokens: 131072
 
   - name: deepseek-official

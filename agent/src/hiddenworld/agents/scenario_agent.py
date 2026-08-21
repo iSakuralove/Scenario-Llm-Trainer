@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -11,6 +12,26 @@ from pydantic_ai.agent import Agent as PydanticAgent
 
 from hiddenworld.contracts import AgentContext, AgentModelOutput, AgentOutputEnvelope
 from hiddenworld.streaming_json import StreamingFieldExtractor
+
+
+# Provider 可能把一段较长的 reasoning/text delta 合并后才交给 PydanticAI。
+# 这里仅重分帧模型已经返回的真实内容，避免下游 SSE 因单个大块看起来像
+# “一次性输出”；不修改内容、不插入任何面向学生的固定文本。
+_STREAM_FRAME_SIZE = 24
+_STREAM_FRAME_DELAY_SECONDS = 0.05
+
+
+async def _emit_stream_frames(
+    callback: Callable[[str], Awaitable[None]] | None,
+    text: str,
+) -> None:
+    if callback is None or not text:
+        return
+    frames = [text[index : index + _STREAM_FRAME_SIZE] for index in range(0, len(text), _STREAM_FRAME_SIZE)]
+    for index, frame in enumerate(frames):
+        await callback(frame)
+        if index < len(frames) - 1:
+            await asyncio.sleep(_STREAM_FRAME_DELAY_SECONDS)
 
 
 SCENARIO_AGENT_INSTRUCTIONS = """
@@ -30,6 +51,8 @@ SCENARIO_AGENT_INSTRUCTIONS = """
 answer_attempt、confidence），teaching_decision 描述教学状态和回复策略（teaching_state、strategy、reply_policy、
 guidance_direction）。旧的扁平语义字段也要保持兼容，但不得用它们替代结构化对象。它们是 Runtime 的安全归约信号，
 不是思维链；不能填写答案原文、标准答案匹配关系或隐藏证据。
+当前轮输入以 AgentContext.current_turn_input 为准：如果 current_user_message 为空，表示学生通过快捷动作发起了检查，
+不是“没有用户行为”；不要在 reasoning 或 reply 中说 user message is empty，也不要把该内部字段名暴露给学生。
 AgentContext.hypothesis_catalog 是一份未标注的候选表，只含 hypothesis_id 与学生可理解的 label，
 不包含哪个候选正确、证据如何支持或隐藏答案。学生明确提出某个候选方向时，使用候选表中的精确
 hypothesis_id；如果是候选表之外的自由方向，且表中存在 H_OTHER，则使用 H_OTHER 并保留 hypothesis_raw；
@@ -55,7 +78,9 @@ failed、rejected、unsupported、timeout 或 already_completed 都不表示本�
 如果工具结果 status=failed 且 error_code=unmet_prerequisite，说明本次动作没有形成公开观察；
 只能承认本次没有得到可用观察，不能说题面没有该证据、不能说观察已记录，也不能替学生指定其它检查。
 如果 AgentContext.reply_feedback 非空，说明上一版回复未通过公开回复边界校验；只重写 reply，
-保留本轮真实语义和教学决策，不解释校验过程，不复述反馈内容。
+保留本轮真实语义和教学决策，不解释校验过程，不复述反馈内容。若反馈指出
+reply_repeats_observation，说明公开观察已经由页面卡片单独展示；新 reply 只能增加解释、
+关联或反思，不能再次改写日志、指标、返回码、成功率、超时或失败细节。
 teaching_decision.allow_explicit_next_step 与 allow_ruled_out_scope 必须始终为 false。不得宣布根因、泄露未公开事实、
 替学生执行未授权工具，或把未查询的具体工具当成已经执行。
 不要输出 reasoning、chain of thought、rationale 或任何额外字段。
@@ -66,7 +91,48 @@ def build_scenario_agent_prompt(context: AgentContext) -> str:
     """以安全上下文构造模型输入，当前用户消息单独保留。"""
 
     payload = context.model_dump(mode="json")
+    turn_input = _current_turn_input(context)
+    # 快捷动作没有自然语言正文时，不把空字符串再次塞进模型 prompt，避免
+    # 模型把“没有正文”误读成“没有用户行为”；动作来源和目标由结构化视图表达。
+    if not context.current_user_message.strip():
+        payload.pop("current_user_message", None)
+    payload["current_turn_input"] = turn_input
     return f"{SCENARIO_AGENT_INSTRUCTIONS}\n\nAgentContext：\n{json.dumps(payload, ensure_ascii=False)}"
+
+
+def _current_turn_input(context: AgentContext) -> dict[str, Any]:
+    """为快捷动作提供结构化的当前轮输入，不改写历史消息或领域状态。"""
+
+    message = context.current_user_message.strip()
+    if message:
+        return {"source": "user_message", "text": message}
+
+    if context.tool_results:
+        result = context.tool_results[-1]
+        catalog_item = next(
+            (item for item in context.action_catalog if item.tool_id == result.tool_id),
+            None,
+        )
+        return {
+            "source": "structured_action",
+            "action_id": result.tool_id,
+            "label": catalog_item.target if catalog_item is not None else result.tool_id,
+            "result_status": result.status,
+        }
+
+    if context.authorized_actions:
+        action = context.authorized_actions[0]
+        catalog_item = next(
+            (item for item in context.action_catalog if item.tool_id == action.action_ref),
+            None,
+        )
+        return {
+            "source": "structured_action",
+            "action_id": action.action_ref,
+            "label": catalog_item.target if catalog_item is not None else action.action_ref,
+        }
+
+    return {"source": "system_turn", "text": ""}
 
 
 def _scenario_agent_instructions(ctx: RunContext[AgentContext]) -> str:
@@ -149,14 +215,12 @@ class PydanticScenarioAgentRunner:
                         delta = event.delta
                         if isinstance(delta, pai_messages.ThinkingPartDelta):
                             piece = delta.content_delta or ""
-                            if piece and on_reasoning_delta is not None:
-                                await on_reasoning_delta(piece)
+                            await _emit_stream_frames(on_reasoning_delta, piece)
                             continue
                         if not isinstance(delta, pai_messages.TextPartDelta) or extractor is None:
                             continue
                         piece = extractor.feed(delta.content_delta)
-                        if piece and on_reply_delta is not None:
-                            await on_reply_delta(piece)
+                        await _emit_stream_frames(on_reply_delta, piece)
             return run.result.output.to_contract()
 
 

@@ -51,6 +51,33 @@ func TestScenarioReplyGuardAllowsNewlyReleasedEvidence(t *testing.T) {
 	}
 }
 
+func TestScenarioReplyGuardRejectsConfirmationAndScopeExclusionFraming(t *testing.T) {
+	world := &domain.HiddenWorld{
+		RootCause: domain.RootCause{ID: "RC_PRIVATE", Component: "orders", Description: "private root marker"},
+	}
+	state := domain.ScenarioLearnerState{}.Normalized()
+	for _, reply := range []string{
+		"刚才已经确认了订单库写入那段没什么异常。",
+		"订单落库这一段看起来是正常的，剩下的链路再看。",
+	} {
+		if err := validateScenarioReply(reply, world, nil, state); err == nil {
+			t.Fatalf("confirmation or scope exclusion framing was not rejected: %q", reply)
+		}
+	}
+}
+
+func TestScenarioReplyGuardRejectsParaphrasedObservationRepetition(t *testing.T) {
+	world := &domain.HiddenWorld{
+		RootCause: domain.RootCause{ID: "RC_PRIVATE", Component: "orders", Description: "private root marker"},
+	}
+	state := domain.ScenarioLearnerState{}.Normalized()
+	observation := "订单库写入日志：提交成功率 99.98%，返回码 200；未见写入超时。"
+	reply := "刚才查到的订单库写入情况基本正常，提交成功率很高，没有看到写入超时。你怎么看这段表现？"
+	if err := validateScenarioReply(reply, world, nil, state, observation); err == nil {
+		t.Fatal("paraphrased public observation was not rejected")
+	}
+}
+
 func TestScenarioReplyGuardAllowsPublicScenarioFactsAndBlocksHiddenNumbers(t *testing.T) {
 	world := &domain.HiddenWorld{
 		RootCause: domain.RootCause{ID: "RC_PRIVATE", Component: "orders", Description: "private root marker"},

@@ -137,7 +137,7 @@ async def test_mentor_agent_returns_typed_validated_action(
     model = TestModel(
         custom_output_text=json.dumps(
             {
-                "reply": "先从你最确定的一条现象开始，说说它排除了什么。",
+                "reply": "你已经说到一条现象了，它在你看来说明了什么？",
                 "rationale": "学生还没有形成可验证的证据链，先降低认知负担。",
                 "requested_releases": [],
                 "confirms_hypothesis": False,
@@ -151,7 +151,7 @@ async def test_mentor_agent_returns_typed_validated_action(
     with agent.override(model=model):
         result = await agent.run("请生成本轮导师回复", deps=deps)
 
-    assert result.output.reply.startswith("先从你最确定")
+    assert result.output.reply.startswith("你已经说到一条现象")
     assert result.output.confirms_hypothesis is False
     assert result.output.expected_effort == "quick"
 

@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"golang.org/x/text/unicode/norm"
 
@@ -27,12 +28,15 @@ const interpreterLowConfidenceThreshold = 0.45
 const scenarioStallUnlockThreshold = 2
 
 var (
-	scenarioIdentifierPattern       = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_.:/-]{2,}`)
-	scenarioNumberPattern           = regexp.MustCompile(`\d+(?:[.,]\d+)*`)
-	scenarioNumberEntityPattern     = regexp.MustCompile(`^\d+(?:[.,]\d+)*$`)
-	scenarioChineseComponentPattern = regexp.MustCompile(`(?:[A-Za-z_][A-Za-z0-9_]{1,15}|[\p{Han}]{1,8})(?:表|服务|接口|主库|从库|索引|字段)`)
-	scenarioHanPattern              = regexp.MustCompile(`\p{Han}`)
-	scenarioWhitespacePattern       = regexp.MustCompile(`\s+`)
+	scenarioIdentifierPattern         = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_.:/-]{2,}`)
+	scenarioNumberPattern             = regexp.MustCompile(`\d+(?:[.,]\d+)*`)
+	scenarioNumberEntityPattern       = regexp.MustCompile(`^\d+(?:[.,]\d+)*$`)
+	scenarioChineseComponentPattern   = regexp.MustCompile(`(?:[A-Za-z_][A-Za-z0-9_]{1,15}|[\p{Han}]{1,8})(?:表|服务|接口|主库|从库|索引|字段)`)
+	scenarioHanPattern                = regexp.MustCompile(`\p{Han}`)
+	scenarioWhitespacePattern         = regexp.MustCompile(`\s+`)
+	scenarioSystemConfirmationPattern = regexp.MustCompile(`(?:已|已经|刚才|目前|我们已经)[^。！？!?；;]{0,18}(?:确认|核实|验证|检查完成|查看完成|查明|定位)[^。！？!?；;]{0,28}`)
+	scenarioScopeExclusionPattern     = regexp.MustCompile(`(?:这一段|这部分|这一层|这一块|订单落库|数据库(?:这一段|层面)?|入口层|服务层|该环节)[^。！？!?；;]{0,18}(?:看起来|基本|整体上)?(?:正常|没什么异常|没有什么异常|没有问题|没有异常|未见异常|无异常|没异常)`)
+	scenarioRemainingScopePattern     = regexp.MustCompile(`(?:剩下的|其余的|其他的|其它的)[^。！？!?；;]{0,12}(?:链路|环节|方向|部分)`)
 )
 
 type scenarioAgentClient interface {
@@ -41,6 +45,12 @@ type scenarioAgentClient interface {
 
 type scenarioAgentStreamingClient interface {
 	TurnStream(context.Context, agentclient.TurnRequest, agentclient.StreamCallbacks) (agentclient.TurnResult, error)
+}
+
+// scenarioRawReasoningStreamEnabled 是测试调试边界；它与 Python 侧同名开关
+// 对齐，默认关闭。该事件不会进入正式 RunEvent 或持久化审计。
+func scenarioRawReasoningStreamEnabled() bool {
+	return strings.TrimSpace(os.Getenv("HIDDENWORLD_TEST_STREAM_RAW_REASONING")) == "1"
 }
 
 type deterministicScenarioAgentClient struct{}
@@ -685,6 +695,7 @@ func validateScenarioReply(
 	world *domain.HiddenWorld,
 	publicScenario *domain.PublicScenario,
 	state domain.ScenarioLearnerState,
+	observationTexts ...string,
 ) error {
 	for _, term := range []string{
 		"下一步",
@@ -704,6 +715,11 @@ func validateScenarioReply(
 		if strings.Contains(reply, term) {
 			return fmt.Errorf("reply contains forbidden guidance term %q", term)
 		}
+	}
+	if scenarioSystemConfirmationPattern.MatchString(reply) ||
+		scenarioScopeExclusionPattern.MatchString(reply) ||
+		scenarioRemainingScopePattern.MatchString(reply) {
+		return errors.New("reply contains internal confirmation or exclusion framing")
 	}
 	if world == nil {
 		return errors.New("hidden world is unavailable")
@@ -735,7 +751,63 @@ func validateScenarioReply(
 			return errors.New("reply contains unreleased entity")
 		}
 	}
+	for _, observation := range observationTexts {
+		if scenarioReplyRepeatsObservation(reply, observation) {
+			return errors.New("reply repeats public observation")
+		}
+	}
 	return nil
+}
+
+func scenarioPublicObservationTexts(traces []agentclient.PublicTraceEvent) []string {
+	texts := make([]string, 0)
+	for _, trace := range traces {
+		if trace.Kind != "observation_result" || trace.Observation == nil {
+			continue
+		}
+		if text := strings.TrimSpace(trace.Observation.Result); text != "" {
+			texts = append(texts, text)
+		}
+	}
+	return texts
+}
+
+func scenarioReplyRepeatsObservation(reply, observation string) bool {
+	replyChars := scenarioReplayChars(reply)
+	observationChars := scenarioReplayChars(observation)
+	if len(replyChars) < 18 || len(observationChars) < 24 {
+		return false
+	}
+	replyShingles := scenarioReplayShingles(replyChars)
+	observationShingles := scenarioReplayShingles(observationChars)
+	shared := 0
+	for shingle := range replyShingles {
+		if observationShingles[shingle] {
+			shared++
+		}
+	}
+	observationCoverage := float64(shared) / float64(len(observationShingles))
+	replyCoverage := float64(shared) / float64(len(replyShingles))
+	return (shared >= 5 && replyCoverage >= 0.18) || (shared >= 10 && observationCoverage >= 0.12)
+}
+
+func scenarioReplayChars(value string) []rune {
+	normalized := strings.ToLower(norm.NFKC.String(value))
+	chars := make([]rune, 0, len([]rune(normalized)))
+	for _, char := range normalized {
+		if unicode.IsLetter(char) || unicode.IsDigit(char) || unicode.In(char, unicode.Han) {
+			chars = append(chars, char)
+		}
+	}
+	return chars
+}
+
+func scenarioReplayShingles(chars []rune) map[string]bool {
+	shingles := make(map[string]bool)
+	for index := 0; index+3 <= len(chars); index++ {
+		shingles[string(chars[index:index+3])] = true
+	}
+	return shingles
 }
 
 func validateScenarioPublicTrace(
@@ -780,6 +852,7 @@ func validateScenarioPublicTrace(
 	hasCompareResult := false
 	shouldCompareAnswer := result.TurnAnalysis.ContainsAnswerAttempt && result.TurnAnalysis.Confidence >= interpreterLowConfidenceThreshold
 	normalizedUserContent := strings.ToLower(norm.NFKC.String(userContent))
+	observationTexts := scenarioPublicObservationTexts(result.PublicTrace)
 
 	for _, trace := range result.PublicTrace {
 		if trace.Sequence <= previousSequence {
@@ -798,7 +871,7 @@ func validateScenarioPublicTrace(
 			return errors.New("Python public trace cannot publish reply text")
 		}
 		if trace.Summary != "" {
-			if err := validateScenarioReply(trace.Summary, world, publicScenario, state); err != nil {
+			if err := validateScenarioReply(trace.Summary, world, publicScenario, state, observationTexts...); err != nil {
 				return fmt.Errorf("public trace summary rejected: %w", err)
 			}
 		}
@@ -806,7 +879,7 @@ func validateScenarioPublicTrace(
 			if !allowedReasoningStages[trace.Reasoning.Stage] || strings.TrimSpace(trace.Reasoning.Text) == "" {
 				return errors.New("public reasoning summary is invalid")
 			}
-			if err := validateScenarioReply(trace.Reasoning.Text, world, publicScenario, state); err != nil {
+			if err := validateScenarioReply(trace.Reasoning.Text, world, publicScenario, state, observationTexts...); err != nil {
 				return fmt.Errorf("public reasoning summary rejected: %w", err)
 			}
 		}

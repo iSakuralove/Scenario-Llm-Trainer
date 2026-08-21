@@ -18,7 +18,7 @@ def test_glm_model_uses_native_zai_model_and_disables_sdk_retries() -> None:
     model = build_glm_model(api_key="test-zai-key")
 
     assert isinstance(model, ZaiModel)
-    assert model.model_name == "glm-4.7"
+    assert model.model_name == "glm-5.3"
     assert model.system == "zai"
     assert model.client.max_retries == 0
 

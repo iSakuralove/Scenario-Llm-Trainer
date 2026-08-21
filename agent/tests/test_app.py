@@ -103,7 +103,7 @@ async def test_turn_stream_endpoint_emits_internal_analysis_public_trace_and_fin
         TestModel(
             custom_output_text=json.dumps(
                 {
-                    "reply": "先从最容易验证的一条公开现象开始。",
+                    "reply": "这条公开现象已经展示出来了，你怎么看它？",
                     "rationale": "学生卡住，先降低本轮负担。",
                     "requested_releases": [],
                     "confirms_hypothesis": False,
@@ -140,7 +140,7 @@ async def test_turn_stream_endpoint_emits_internal_analysis_public_trace_and_fin
     result_line = next(line for line in result_block.splitlines() if line.startswith("data: "))
     result_payload = json.loads(result_line[6:])
     assert result_payload["request_id"] == "request-http-stream"
-    assert result_payload["reply"].startswith("先从最容易")
+    assert result_payload["reply"].startswith("这条公开现象已经展示")
 
 
 @pytest.mark.asyncio
@@ -229,7 +229,16 @@ async def test_single_agent_runtime_endpoint_returns_legacy_transport_result(
     from hiddenworld.agents.scenario_agent import create_scenario_agent_runner
 
     runner = create_scenario_agent_runner(
-        TestModel(custom_output_text=json.dumps({"kind": "final_reply", "reply": "先根据公开现象继续判断。"}))
+        TestModel(
+            custom_output_text=json.dumps(
+                {
+                    "kind": "final_reply",
+                    "reply": "先根据公开现象继续判断。",
+                    "turn_assessment": {},
+                    "teaching_decision": {},
+                }
+            )
+        )
     )
     request = AgentTurnRequest(
         request_id="request-single-agent-http",
@@ -290,3 +299,51 @@ async def test_single_agent_runtime_stream_emits_trace_before_reply_delta(
     names = [block.splitlines()[0].removeprefix("event: ") for block in blocks]
     assert names[-1] == "result"
     assert names.index("public_trace") < names.index("reply_delta") < names.index("result")
+
+
+@pytest.mark.asyncio
+async def test_test_flag_streams_raw_reasoning_delta_without_persisting_it(
+    monkeypatch,
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    class RawReasoningRunner:
+        async def run(self, context):
+            from hiddenworld.contracts import FinalReplyOutput
+
+            return FinalReplyOutput(kind="final_reply", reply="收到这条公开信息。")
+
+        async def run_stream(self, context, *, on_reply_delta=None, on_reasoning_delta=None):
+            from hiddenworld.contracts import FinalReplyOutput
+
+            if on_reasoning_delta is not None:
+                await on_reasoning_delta("测试环境原始思维片段")
+            if on_reply_delta is not None:
+                await on_reply_delta("收到这条公开信息。")
+            return FinalReplyOutput(kind="final_reply", reply="收到这条公开信息。")
+
+    monkeypatch.setenv("HIDDENWORLD_TEST_STREAM_RAW_REASONING", "1")
+    request = AgentTurnRequest(
+        request_id="request-http-raw-reasoning",
+        session_id="session-1",
+        state_revision=6,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="继续判断",
+    )
+    app = create_app(SingleAgentRuntime(RawReasoningRunner()))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/turn/stream", json=request.model_dump(mode="json"))
+
+    assert response.status_code == 200
+    blocks = [item for item in response.text.split("\n\n") if item.strip()]
+    names = [block.splitlines()[0].removeprefix("event: ") for block in blocks]
+    assert "reasoning_raw_delta" in names
+    assert names.index("reasoning_raw_delta") < names.index("result")
+    result_line = next(line for line in blocks[-1].splitlines() if line.startswith("data: "))
+    result_payload = json.loads(result_line[6:])
+    assert "测试环境原始思维片段" not in json.dumps(result_payload, ensure_ascii=False)
+    assert "reasoning_raw_delta" not in result_payload["public_trace"]

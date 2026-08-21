@@ -36,7 +36,7 @@ func TestScenarioMessageCommitsApprovedAgentTurnAndKeepsPrivateAuditPrivate(t *t
 			t.Fatalf("missing HiddenWorld snapshot: %+v", request)
 		}
 		node, action := firstImmediatelyAvailableEvidence(t, request.HiddenWorld)
-		reply := "先把这条公开观察确认清楚，再决定下一步。"
+		reply := "这条公开观察已经展示出来了，你怎么看它？"
 		return agentclient.TurnResult{
 			ContractVersion:  agentclient.ContractVersion,
 			RequestID:        request.RequestID,
@@ -48,6 +48,7 @@ func TestScenarioMessageCommitsApprovedAgentTurnAndKeepsPrivateAuditPrivate(t *t
 				StudentAffect:      "engaged",
 				ProgressAssessment: "partial",
 				Actions:            []string{action},
+				EstablishedFacts:   []string{},
 				Confidence:         0.95,
 			},
 			TeachingDecision: &agentclient.TeachingDecision{
@@ -394,6 +395,7 @@ func stallProposalClient(evidenceID func(domain.HiddenWorld) string) scenarioAge
 		if turn < 3 {
 			return result, nil
 		}
+		result.TurnAssessment.IsStuck = true
 		result.TurnAnalysis.IsStuck = true
 		result.Proposals = append(
 			[]agentclient.Proposal{{Kind: "release_evidence_on_stall", EvidenceID: evidenceID(request.HiddenWorld)}},
@@ -749,6 +751,7 @@ func noProgressTurnResult(request agentclient.TurnRequest, reply string) agentcl
 			StudentAffect:      "engaged",
 			ProgressAssessment: "no_progress",
 			Actions:            []string{},
+			EstablishedFacts:   []string{},
 			Confidence:         0.9,
 		},
 		TeachingDecision: &agentclient.TeachingDecision{

@@ -56,7 +56,7 @@ import type {
   UserRole,
   InterviewSessionDetailResponse,
 } from '../types'
-import type { ScenarioRunEventAny, ScenarioAllowedAction } from '../types/agentRun'
+import type { ScenarioDebugTraceEvent, ScenarioRunEventAny, ScenarioAllowedAction } from '../types/agentRun'
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api/v1'
 const REQUEST_TIMEOUT_MS = 90000
@@ -399,6 +399,7 @@ async function requestScenarioMessageStream(
     structuredUserAction?: ScenarioAllowedAction
   },
   onRunEvent: (event: ScenarioRunEventAny) => void,
+  onDebugTrace?: (event: ScenarioDebugTraceEvent) => void,
   allowAuthRetry = true,
 ): Promise<ScenarioMessageResponse> {
   const controller = new AbortController()
@@ -429,7 +430,7 @@ async function requestScenarioMessageStream(
     })
     if (allowAuthRetry && response.status === 401 && shouldAttemptAuthRefresh(`/scenarios/sessions/${sessionId}/messages`, token)) {
       const session = await refreshAuthSession()
-      return requestScenarioMessageStream(session.access_token, sessionId, payload, onRunEvent, false)
+      return requestScenarioMessageStream(session.access_token, sessionId, payload, onRunEvent, onDebugTrace, false)
     }
     if (!response.ok) {
       throw new Error(await readErrorMessage(response, '流式消息请求失败'))
@@ -460,6 +461,12 @@ async function requestScenarioMessageStream(
             const v2 = event as { payload?: { error_code?: string } }
             const errorCode = v2.payload?.error_code || legacy.error_code || 'turn_failed'
             throw new ScenarioRunFailure(errorCode, legacy.summary || '本轮处理失败')
+          }
+        }
+        if (parsed.event === 'debug_trace') {
+          const trace = parsed.data ? JSON.parse(parsed.data) as ScenarioDebugTraceEvent : null
+          if (trace?.kind === 'reasoning_raw_delta' && typeof trace.text === 'string') {
+            onDebugTrace?.(trace)
           }
         }
         if (parsed.event === 'finish') {

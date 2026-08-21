@@ -12,6 +12,9 @@ import styles from './AgentRun.module.css'
 
 interface AgentRunProps {
   events: ScenarioRunEventAny[]
+  /** 测试调试流：只在显式 debug_trace SSE 开启时存在，不属于正式历史。 */
+  debugReasoning?: string[]
+  debugReasoningElapsed?: number
   fallbackUser?: string
   fallbackReply?: string
   active?: boolean
@@ -21,6 +24,8 @@ interface AgentRunProps {
 
 export function AgentRun({
   events,
+  debugReasoning = [],
+  debugReasoningElapsed,
   fallbackUser = '',
   fallbackReply = '',
   active = false,
@@ -84,7 +89,12 @@ export function AgentRun({
             </div>
           )}
 
-          <ThinkingReasoning items={model.legacyReasoningItems.map((text) => ({ stage: 'composing_reply' as const, text }))} />
+          <ThinkingReasoning
+            items={model.legacyReasoningItems.map((text) => ({ stage: 'composing_reply' as const, text }))}
+            rawChunks={debugReasoning}
+            rawActive={active}
+            rawElapsedSeconds={debugReasoningElapsed}
+          />
 
           {showTaskList && <TaskList tasks={model.tasks} active={isProcessing} />}
 

@@ -91,6 +91,19 @@ _IMPLICIT_GUIDANCE_RE = re.compile(
     r"(?:下一步|接下来|进一步|继续|还有哪些|哪些环节|从哪里|如何|怎么)[^。！？!?；;]{0,24}"
     r"(?:验证|排查|查看|检查|确认|核对|观察|入手)"
 )
+_SYSTEM_CONFIRMATION_RE = re.compile(
+    r"(?:已|已经|刚才|目前|我们已经)[^。！？!?；;]{0,18}"
+    r"(?:确认|核实|验证|检查完成|查看完成|查明|定位)[^。！？!?；;]{0,28}"
+)
+_SCOPE_EXCLUSION_RE = re.compile(
+    r"(?:这一段|这部分|这一层|这一块|订单落库|数据库(?:这一段|层面)?|入口层|服务层|该环节)"
+    r"[^。！？!?；;]{0,18}(?:看起来|基本|整体上)?"
+    r"(?:正常|没什么异常|没有什么异常|没有问题|没有异常|未见异常|无异常|没异常)"
+)
+_REMAINING_SCOPE_RE = re.compile(
+    r"(?:剩下的|其余的|其他的|其它的)[^。！？!?；;]{0,12}"
+    r"(?:链路|环节|方向|部分)"
+)
 
 
 class GuardViolation(ValueError):
@@ -170,6 +183,9 @@ class Guard:
             any(marker in reply for marker in (*_EXPLICIT_GUIDANCE_MARKERS, *_EXPLICIT_CONCLUSION_MARKERS))
             or _IMPLICIT_CONCLUSION_RE.search(reply) is not None
             or _IMPLICIT_GUIDANCE_RE.search(reply) is not None
+            or _SYSTEM_CONFIRMATION_RE.search(reply) is not None
+            or _SCOPE_EXCLUSION_RE.search(reply) is not None
+            or _REMAINING_SCOPE_RE.search(reply) is not None
         ):
             raise GuardViolation(
                 "reply_policy_violation",
@@ -182,7 +198,43 @@ class Guard:
                     "reply_repeats_observation",
                     "回复重复了已公开观察的原文，请由模型改为自然承接。",
                 )
+            if _reply_repeats_observation(reply, observation):
+                raise GuardViolation(
+                    "reply_repeats_observation",
+                    "回复复述了已公开观察的主要内容，请只做自然承接或反思。",
+                )
         return action
+
+
+def _reply_repeats_observation(reply: str, observation: str) -> bool:
+    """检测工具卡片已经展示后，回复是否又密集改写同一事实。
+
+    这不是用关键词决定 Agent 意图，而是对两个已经确定的公开文本做表面
+    重复度闸门。只在观察和回复都足够长、且共享多个连续三字片段时触发，
+    避免阻止一句自然的「这条观察说明什么？」。
+    """
+
+    reply_chars = _replay_chars(reply)
+    observation_chars = _replay_chars(observation)
+    if len(reply_chars) < 18 or len(observation_chars) < 24:
+        return False
+    reply_shingles = {"".join(reply_chars[index : index + 3]) for index in range(len(reply_chars) - 2)}
+    observation_shingles = {
+        "".join(observation_chars[index : index + 3])
+        for index in range(len(observation_chars) - 2)
+    }
+    shared = reply_shingles.intersection(observation_shingles)
+    observation_coverage = len(shared) / max(len(observation_shingles), 1)
+    reply_coverage = len(shared) / max(len(reply_shingles), 1)
+    return (
+        (len(shared) >= 5 and reply_coverage >= 0.18)
+        or (len(shared) >= 10 and observation_coverage >= 0.12)
+    )
+
+
+def _replay_chars(value: str) -> list[str]:
+    normalized = unicodedata.normalize("NFKC", value or "").casefold()
+    return [char for char in normalized if char.isalnum() or "\u3400" <= char <= "\u9fff"]
 
 
 def extract_forbidden_entities(

@@ -202,11 +202,14 @@ class InternalAnswerComparison(BaseModel):
         return "partial"
 
     def _causal_status(self) -> CausalStatus:
-        if self.solution_coverage >= 1.0 and self.relation == "target":
-            return "sufficient"
-        if self.solution_coverage > 0.0 or self.relation == "target":
+        # 只按学生已经拥有的公开证据给出抽象进度，绝不读取 relation、
+        # claim_alignment 或 solution_coverage；否则同一批观察下，猜中与猜错
+        # 会因为答案匹配度不同而得到可区分的因果状态。
+        if self.evidence_coverage <= 0.0:
+            return "missing"
+        if self.evidence_coverage < 1.0:
             return "partial"
-        return "missing"
+        return "sufficient"
 
     def _missing_dimensions(self) -> list[ComparisonDimension]:
         dimensions: list[ComparisonDimension] = []

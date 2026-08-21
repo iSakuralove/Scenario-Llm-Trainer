@@ -71,9 +71,10 @@ type Client struct {
 }
 
 type StreamCallbacks struct {
-	OnTurnAnalysis func(TurnAnalysis) error
-	OnPublicTrace  func(PublicTraceEvent) error
-	OnReplyDelta   func(text string) error
+	OnTurnAnalysis      func(TurnAnalysis) error
+	OnPublicTrace       func(PublicTraceEvent) error
+	OnReplyDelta        func(text string) error
+	OnReasoningRawDelta func(text string) error
 }
 
 func New(config Config) *Client {
@@ -280,6 +281,20 @@ func (c *Client) TurnStream(ctx context.Context, request TurnRequest, callbacks 
 			if callbacks.OnReplyDelta != nil {
 				if err := callbacks.OnReplyDelta(payload.Text); err != nil {
 					return fmt.Errorf("reply_delta callback: %w", err)
+				}
+			}
+		case "reasoning_raw_delta":
+			var payload struct {
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal([]byte(data), &payload); err != nil {
+				return fmt.Errorf("decode reasoning_raw_delta: %w", err)
+			}
+			// 测试专用调试事件：正式 Go 事件流和 TurnResult 不承载它，
+			// 只有显式注册回调的测试/调试入口才会继续向前传递。
+			if callbacks.OnReasoningRawDelta != nil {
+				if err := callbacks.OnReasoningRawDelta(payload.Text); err != nil {
+					return fmt.Errorf("reasoning_raw_delta callback: %w", err)
 				}
 			}
 		case "result":

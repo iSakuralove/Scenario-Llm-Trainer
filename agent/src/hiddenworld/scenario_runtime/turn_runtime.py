@@ -11,7 +11,7 @@ from dataclasses import replace
 from time import perf_counter
 from typing import Any
 
-from hiddenworld.agents.scenario_agent import PydanticScenarioAgentRunner
+from hiddenworld.agents.scenario_agent import PydanticScenarioAgentRunner, _emit_stream_frames
 from hiddenworld.contracts import (
     AgentTurnRequest,
     AgentToolResult,
@@ -412,11 +412,14 @@ class SingleAgentRuntime:
         if on_reply_delta is not None:
             buffered_reply = "".join(buffered_reply_deltas)
             if buffered_reply == action.reply and buffered_reply:
+                # Guard 通过后才公开候选正文，但不能因此把所有分片在同一
+                # 个事件循环 tick 内一次性倾倒给浏览器；对已经通过的真实
+                # 内容重新分帧，保留安全边界并恢复可感知的增量输出。
                 for piece in buffered_reply_deltas:
-                    await on_reply_delta(piece)
+                    await _emit_stream_frames(on_reply_delta, piece)
             else:
                 # Guard/归一化改变了正文时，丢弃不一致的预览，发送最终安全正文一次。
-                await on_reply_delta(action.reply)
+                await _emit_stream_frames(on_reply_delta, action.reply)
 
         return AgentTurnResult(
             request_id=request.request_id,
@@ -736,7 +739,7 @@ def _reply_retry_context(context, events, *, feedback: str, evidence_request=Non
     update = {
         "authorized_actions": [],
         "tool_results": [*context.tool_results, *tool_results],
-        "reply_feedback": f"reply_guard:{feedback}",
+        "reply_feedback": _reply_guard_feedback(feedback),
     }
     if evidence_request is not None:
         update["evidence_request"] = EvidenceRequestView(
@@ -787,8 +790,20 @@ async def _retry_final_reply(runner, context, *, feedback: str):
     retry_context = context
     if not retry_context.reply_feedback:
         retry_context = retry_context.model_copy(
-            update={"reply_feedback": f"reply_guard:{feedback}"},
+            update={"reply_feedback": _reply_guard_feedback(feedback)},
             deep=True,
         )
     output = await runner.run(retry_context)
     return output if isinstance(output, FinalReplyOutput) else None
+
+
+def _reply_guard_feedback(feedback: str) -> str:
+    """把边界失败转成模型可执行的重写约束，不生成任何固定用户文案。"""
+
+    if feedback == "reply_repeats_observation":
+        return (
+            "reply_guard:reply_repeats_observation; "
+            "公开观察已经由独立卡片展示；只写新的教学承接、关联或反思，"
+            "不要重述日志、指标、返回码、成功率、超时或失败细节。"
+        )
+    return f"reply_guard:{feedback}"

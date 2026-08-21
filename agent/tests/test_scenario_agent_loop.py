@@ -260,7 +260,7 @@ def test_agent_context_prompt_keeps_current_message_and_excludes_hidden_fields(p
 
 
 def test_structured_action_model_prompt_is_non_empty_without_fabricating_user_message(public_scenario) -> None:
-    from hiddenworld.agents.scenario_agent import _model_prompt
+    from hiddenworld.agents.scenario_agent import _model_prompt, build_scenario_agent_prompt
 
     context = _context(public_scenario).model_copy(
         update={
@@ -277,6 +277,26 @@ def test_structured_action_model_prompt_is_non_empty_without_fabricating_user_me
 
     assert _model_prompt(context)
     assert context.current_user_message == ""
+    prompt = build_scenario_agent_prompt(context)
+    assert '"current_turn_input"' in prompt
+    assert '"source": "structured_action"' in prompt
+    assert '"current_user_message": ""' not in prompt
+
+
+@pytest.mark.asyncio
+async def test_provider_delta_is_reframed_without_changing_content() -> None:
+    from hiddenworld.agents.scenario_agent import _emit_stream_frames
+
+    emitted: list[str] = []
+
+    async def collect(piece: str) -> None:
+        emitted.append(piece)
+
+    source = "一段由模型真实返回的长文本，用于验证传输层不会把整段内容一次性倾倒。"
+    await _emit_stream_frames(collect, source)
+
+    assert len(emitted) > 1
+    assert "".join(emitted) == source
 
 
 def test_agent_context_rejects_hidden_world_fields(public_scenario) -> None:

@@ -30,7 +30,7 @@ def test_answer_comparator_keeps_target_and_missing_evidence_internal(hidden_wor
     assert comparison.solution_coverage == 0.5
 
     public = comparison.to_public().model_dump()
-    assert public["support_status"] == "needs_more_evidence"
+    assert comparison.to_public().support_status == "needs_more_evidence"
     for forbidden in ("relation", "completion_allowed", "missing_evidence", "claim_alignment"):
         assert forbidden not in public
 

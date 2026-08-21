@@ -48,6 +48,7 @@ class AgentLoop:
         max_model_rounds: int = 11,
         max_tool_calls: int = 10,
         on_reply_delta: Callable[[str], Awaitable[None]] | None = None,
+        on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         if max_model_rounds < 1 or max_tool_calls < 0:
             raise ValueError("invalid agent loop budget")
@@ -57,6 +58,7 @@ class AgentLoop:
         self.max_model_rounds = max_model_rounds
         self.max_tool_calls = max_tool_calls
         self.on_reply_delta = on_reply_delta
+        self.on_reasoning_delta = on_reasoning_delta
 
     async def run(self, context: AgentContext) -> tuple[FinalReplyOutput, list[AgentLoopEvent]]:
         events: list[AgentLoopEvent] = []
@@ -76,8 +78,13 @@ class AgentLoop:
                 }
             )
             run_stream = getattr(self.agent, "run_stream", None)
-            if self.on_reply_delta is not None and callable(run_stream):
-                output = await run_stream(current, on_reply_delta=self.on_reply_delta)
+            if (self.on_reply_delta is not None or self.on_reasoning_delta is not None) and callable(run_stream):
+                stream_kwargs = {}
+                if self.on_reply_delta is not None:
+                    stream_kwargs["on_reply_delta"] = self.on_reply_delta
+                if self.on_reasoning_delta is not None:
+                    stream_kwargs["on_reasoning_delta"] = self.on_reasoning_delta
+                output = await run_stream(current, **stream_kwargs)
             else:
                 output = await self.agent.run(current)
             if isinstance(output, FinalReplyOutput):

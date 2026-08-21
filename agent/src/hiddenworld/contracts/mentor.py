@@ -9,6 +9,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .version import ReplyMode
+
 # 取代"每轮只问一个问题"。
 #
 # 初版把问题个数写成硬约束（8 处 + 3 条验收标准），是最典型的按部就班。
@@ -42,6 +44,10 @@ class MentorAction(BaseModel):
         ),
     )
     reply: str = Field(description="给学生看的正文。这是全系统唯一会被学生读到的自然语言。")
+    reply_mode: ReplyMode | None = Field(
+        default=None,
+        description="这段正文的行为模式；必须与本轮工具状态一致，不能把失败动作写成已得到观察。",
+    )
     requested_releases: list[str] = Field(
         description="你希望本轮释放的 evidence id。必须是 may_release 的子集，越权会被拒绝并要求重写。",
     )

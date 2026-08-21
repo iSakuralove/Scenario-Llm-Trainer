@@ -95,6 +95,7 @@ def test_mentor_deps_field_boundary() -> None:
         "current_intent",
         "requested_action_raw",
         "action_match_status",
+        "evidence_request",
         "simulation_tools",
         "authorized_actions",
         "released_evidence",
@@ -203,7 +204,16 @@ def test_public_projection_reports_conflict_first() -> None:
 
 def test_public_answer_comparison_has_no_verdict_fields() -> None:
     fields = set(PublicAnswerComparison.model_fields)
-    assert fields == {"tool", "status", "user_points", "support_status", "next_action"}
+    assert fields == {
+        "tool",
+        "status",
+        "user_points",
+        "conclusion_status",
+        "evidence_status",
+        "causal_status",
+        "missing_dimensions",
+        "contradictions",
+    }
 
 
 def test_run_event_roundtrip_preserves_sequence() -> None:

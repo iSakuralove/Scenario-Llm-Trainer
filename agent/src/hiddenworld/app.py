@@ -15,6 +15,8 @@ from pydantic_ai import models
 from hiddenworld.agents.interpreter import create_interpreter_agent
 from hiddenworld.agents.mentor import create_mentor_agent
 from hiddenworld.agents.models import (
+    GLM_FALLBACK_MODEL_ID,
+    GLM_MODEL_ID,
     ModelConfigurationError,
     build_deepseek_model,
     build_glm_model,
@@ -74,14 +76,23 @@ def create_app(runtime: HiddenWorldRuntime | None = None) -> FastAPI:
             async def on_reply_delta(piece: str) -> None:
                 await queue.put(("reply_delta", {"text": piece}))
 
+            async def on_reasoning_delta(piece: str) -> None:
+                # 这是测试专用调试事件：Go 客户端会忽略它，Python 直连测试可以
+                # 观察模型原始 ThinkingPartDelta；它不属于正式 RunEvent，也不会
+                # 写入 AgentTurnResult.public_trace 或会话历史。
+                if _raw_reasoning_stream_enabled() and piece:
+                    await queue.put(("reasoning_raw_delta", {"text": piece}))
+
             async def produce() -> None:
                 try:
-                    result = await active_runtime.run_turn(
-                        request,
-                        on_turn_analysis=on_analysis,
-                        on_public_trace=on_trace,
-                        on_reply_delta=on_reply_delta,
-                    )
+                    run_kwargs = {
+                        "on_turn_analysis": on_analysis,
+                        "on_public_trace": on_trace,
+                        "on_reply_delta": on_reply_delta,
+                    }
+                    if _raw_reasoning_stream_enabled():
+                        run_kwargs["on_reasoning_delta"] = on_reasoning_delta
+                    result = await active_runtime.run_turn(request, **run_kwargs)
                     await queue.put(("result", result.model_dump(mode="json")))
                 except ContractVersionMismatch as exc:
                     await queue.put(("error", _stream_error("contract_version_mismatch", str(exc))))
@@ -135,6 +146,12 @@ def _stream_error(code: str, message: str) -> dict[str, str]:
     return {"code": code, "message": message}
 
 
+def _raw_reasoning_stream_enabled() -> bool:
+    """仅在显式测试开关打开时允许原始思维增量走调试 SSE。"""
+
+    return os.getenv("HIDDENWORLD_TEST_STREAM_RAW_REASONING", "0").strip() == "1"
+
+
 def _encode_sse(name: str, payload: Any) -> str:
     from pydantic_core import to_json
 
@@ -165,7 +182,8 @@ def _runtime_from_env() -> HiddenWorldRuntime | SingleAgentRuntime:
     # 一个模型节点负责理解、工具规划和最终回复；Runtime 本地执行确定性工具、
     # 状态归约和 Guard，不再额外调用 Interpreter/Mentor。
     model = _model_for_provider_value(provider, role="AGENT")
-    return SingleAgentRuntime(create_scenario_agent_runner(model))
+    fallback_model = _fallback_model_for_provider(provider)
+    return SingleAgentRuntime(create_scenario_agent_runner(model, fallback_model=fallback_model))
 
 
 def _model_for_provider(env_name: str):
@@ -191,6 +209,24 @@ def _model_for_provider_value(provider: str, *, role: str = "AGENT"):
         legacy_model = os.getenv(f"LITELLM_{role}_MODEL") or os.getenv("LITELLM_MODEL")
         return build_litellm_model(model=legacy_model)
     raise ModelConfigurationError(f"unsupported provider configured: {provider}")
+
+
+def _fallback_model_for_provider(provider: str):
+    """构造显式 GLM 回退模型；没有凭证时不在启动阶段改变既有错误。"""
+
+    if provider not in {"glm", "zai"}:
+        return None
+    fallback_id = (os.getenv("GLM_FALLBACK_MODEL") or GLM_FALLBACK_MODEL_ID).strip()
+    primary_id = (os.getenv("GLM_AGENT_MODEL") or os.getenv("GLM_MODEL") or GLM_MODEL_ID).strip()
+    if not fallback_id or fallback_id.casefold() == primary_id.casefold():
+        return None
+    if not (os.getenv("ZAI_API_KEY", "").strip() or os.getenv("GLM_API_KEY", "").strip()):
+        return None
+    try:
+        return build_glm_model(model=fallback_id)
+    except ModelConfigurationError:
+        logger.warning("GLM fallback model is not configured; continuing without fallback")
+        return None
 
 
 app = create_app()

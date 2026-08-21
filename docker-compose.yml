@@ -23,6 +23,9 @@ services:
       AGENT_BASE_URL: http://agent:8090
       AGENT_TIMEOUT_SECONDS: ${AGENT_TIMEOUT_SECONDS:-20}
       AGENT_TURN_DEADLINE_MS: ${AGENT_TURN_DEADLINE_MS:-15000}
+      # 仅测试环境开启：将 Python 的原始 reasoning 调试增量通过独立 debug_trace
+      # SSE 转给浏览器；不会进入正式 run_event、会话历史或 Go 审计。
+      HIDDENWORLD_TEST_STREAM_RAW_REASONING: ${HIDDENWORLD_TEST_STREAM_RAW_REASONING:-0}
       SCENARIO_VALIDATION_MODE: ${SCENARIO_VALIDATION_MODE:-strict}
       # Runtime V2 迁移期间，过程事件只做影子校验并丢弃坏事件，不能阻断回复正文；
       # proposal / reply guard 仍由 SCENARIO_VALIDATION_MODE= strict 保护。
@@ -48,13 +51,15 @@ services:
       HIDDENWORLD_ALLOW_MODEL_REQUESTS: ${HIDDENWORLD_ALLOW_MODEL_REQUESTS:-0}
       LLM_ROUTES_FILE: /app/llm_routes.yaml
       HIDDENWORLD_AGENT_PROVIDER: ${HIDDENWORLD_AGENT_PROVIDER:-glm}
+      GLM_MODEL: ${GLM_MODEL:-glm-5.3}
+      GLM_FALLBACK_MODEL: ${GLM_FALLBACK_MODEL:-glm-4.7}
+      GLM_THINKING: ${GLM_THINKING:-low}
+      HIDDENWORLD_TEST_STREAM_RAW_REASONING: ${HIDDENWORLD_TEST_STREAM_RAW_REASONING:-0}
       # 旧 Runtime 兼容入口；单 Agent 迁移完成后删除。
       HIDDENWORLD_INTERPRETER_PROVIDER: ${HIDDENWORLD_INTERPRETER_PROVIDER:-glm}
       HIDDENWORLD_MENTOR_PROVIDER: ${HIDDENWORLD_MENTOR_PROVIDER:-glm}
       GLM_API_KEY: ${GLM_API_KEY:-}
       GLM_BASE_URL: ${GLM_BASE_URL:-}
-      GLM_MODEL: ${GLM_MODEL:-glm-4.7}
-      GLM_THINKING: ${GLM_THINKING:-disabled}
     ports:
       - "8090:8090"
     healthcheck:

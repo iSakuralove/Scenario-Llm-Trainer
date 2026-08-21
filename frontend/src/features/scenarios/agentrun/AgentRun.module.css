@@ -121,6 +121,115 @@
   min-width: 0;
 }
 
+.reasoningStack {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 测试专用 Thinking/Reasoning 投影：参考 Thinking Reasoning 的
+   胶囊标题、渐变边框和可滚动正文，但不改变正式会话的 RunEvent 契约。 */
+.rawReasoningBlock {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(142, 240, 219, 0.22);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 0 0, rgba(142, 240, 219, 0.1), transparent 46%),
+    rgba(12, 25, 32, 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.rawReasoningActive {
+  border-color: rgba(142, 240, 219, 0.42);
+}
+
+.rawReasoningButton {
+  display: flex;
+  width: fit-content;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(220, 228, 238, 0.62);
+  text-align: left;
+  cursor: default;
+}
+
+.rawReasoningClickable {
+  cursor: pointer;
+}
+
+.rawReasoningTitle {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+}
+
+.rawReasoningTitle strong {
+  color: rgba(235, 241, 248, 0.68);
+  font-weight: 500;
+}
+
+.rawReasoningShimmer {
+  color: transparent;
+  background: linear-gradient(
+    90deg,
+    rgba(220, 228, 238, 0.55) 0%,
+    rgba(220, 228, 238, 0.55) 30%,
+    rgba(220, 228, 238, 0.22) 45%,
+    rgba(220, 228, 238, 0.22) 55%,
+    rgba(220, 228, 238, 0.55) 70%,
+    rgba(220, 228, 238, 0.55) 100%
+  );
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: rawReasoningShine 2.25s cubic-bezier(0.25, 0.1, 0.25, 1) infinite;
+}
+
+.rawReasoningPanel {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 220ms ease, opacity 180ms ease;
+}
+
+.rawReasoningPanelOpen {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.rawReasoningText {
+  min-height: 0;
+  max-height: 180px;
+  overflow: hidden;
+  margin-top: 6px;
+  padding: 0 0 4px;
+  color: rgba(220, 228, 238, 0.52);
+  font-size: 13px;
+  line-height: 20px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.rawReasoningPanelOpen .rawReasoningText {
+  overflow-y: auto;
+}
+
+.rawReasoningCursor {
+  display: inline-block;
+  width: 1px;
+  height: 1.08em;
+  margin-left: 2px;
+  vertical-align: -0.12em;
+  background: var(--run-accent);
+  animation: cursorBlink 900ms steps(2, jump-none) infinite;
+}
+
 .disclosureButton,
 .toolButton {
   display: flex;
@@ -454,6 +563,11 @@
   46%, 100% { opacity: 0; }
 }
 
+@keyframes rawReasoningShine {
+  0%, 18% { background-position: 100% 0; }
+  82%, 100% { background-position: 0% 0; }
+}
+
 @media (max-width: 720px) {
   .run {
     padding-inline: 0;
@@ -494,7 +608,13 @@
   }
 
   .disclosureGrid,
+  .rawReasoningPanel,
   .chevronOpen {
     transition: none !important;
+  }
+
+  .rawReasoningCursor,
+  .rawReasoningShimmer {
+    animation: none !important;
   }
 }

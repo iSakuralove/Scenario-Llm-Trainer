@@ -76,6 +76,32 @@ def test_guard_rejects_implicit_next_direction(teaching_constraints) -> None:
     assert caught.value.code == "reply_policy_violation"
 
 
+def test_guard_rejects_confirmation_and_scope_exclusion_framing(teaching_constraints) -> None:
+    replies = [
+        "刚才已经确认了订单库写入那段没什么异常。",
+        "订单落库这一段看起来是正常的，剩下的链路再看。",
+    ]
+
+    for reply in replies:
+        with pytest.raises(GuardViolation) as caught:
+            Guard().validate(mentor_action(reply), constraints=teaching_constraints, context=GuardContext())
+        assert caught.value.code == "reply_policy_violation"
+
+
+def test_guard_rejects_paraphrased_observation_repetition(teaching_constraints) -> None:
+    observation = "订单库写入日志：提交成功率 99.98%，返回码 200；未见写入超时。"
+    reply = "刚才查到的订单库写入情况基本正常，提交成功率很高，没有看到写入超时。你怎么看这段表现？"
+
+    with pytest.raises(GuardViolation) as caught:
+        Guard().validate(
+            mentor_action(reply),
+            constraints=teaching_constraints,
+            context=GuardContext(public_observation_texts=[observation]),
+        )
+
+    assert caught.value.code == "reply_repeats_observation"
+
+
 def test_guard_rejects_positive_action_ack_when_no_observation_was_formed(teaching_constraints) -> None:
     action = mentor_action("好的，已经记录你想查看数据库锁等待的意图。")
 

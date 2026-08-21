@@ -172,6 +172,36 @@ func TestClientTurnStreamForwardsTypedEventsAndReturnsFinalResult(t *testing.T) 
 	}
 }
 
+func TestClientTurnStreamForwardsTestOnlyRawReasoningDelta(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/turn/stream" {
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeAgentSSE(t, w, "reasoning_raw_delta", map[string]string{"text": "先看公开证据"})
+		writeAgentSSE(t, w, "result", validTurnResult("request-raw-reasoning", 2))
+	}))
+	defer server.Close()
+
+	var chunks []string
+	result, err := New(Config{BaseURL: server.URL, Timeout: time.Second}).TurnStream(
+		context.Background(),
+		minimalTurnRequest("request-raw-reasoning", 2, LearnerState{}),
+		StreamCallbacks{
+			OnReasoningRawDelta: func(text string) error {
+				chunks = append(chunks, text)
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RequestID != "request-raw-reasoning" || strings.Join(chunks, "") != "先看公开证据" {
+		t.Fatalf("raw reasoning callback mismatch: result=%+v chunks=%v", result, chunks)
+	}
+}
+
 func TestClientTurnStreamReturnsStructuredErrorEvent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

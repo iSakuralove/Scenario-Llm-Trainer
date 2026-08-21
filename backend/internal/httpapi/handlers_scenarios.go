@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -233,13 +234,20 @@ func (s *Server) handleScenarioSession(w http.ResponseWriter, r *http.Request, u
 			writer.runEvent(event)
 			sentThrough = event.Sequence
 		}
+		var onReasoningRawDelta func(string)
+		if writer != nil && scenarioRawReasoningStreamEnabled() {
+			onReasoningRawDelta = func(text string) {
+				writer.debugTrace("reasoning_raw_delta", text)
+			}
+		}
 		message, session, err := s.processScenarioMessage(r.Context(), user, scenarioMessageInput{
-			SessionID:        sessionID,
-			Content:          userContent,
-			RequestID:        requestID,
-			StateRevision:    req.StateRevision,
-			StructuredAction: structuredAction,
-			OnRunEvent:       onRunEvent,
+			SessionID:           sessionID,
+			Content:             userContent,
+			RequestID:           requestID,
+			StateRevision:       req.StateRevision,
+			StructuredAction:    structuredAction,
+			OnRunEvent:          onRunEvent,
+			OnReasoningRawDelta: onReasoningRawDelta,
 		})
 		if err != nil {
 			status, code, message := scenarioMessageError(err)
@@ -353,12 +361,13 @@ type scenarioStructuredUserAction struct {
 }
 
 type scenarioMessageInput struct {
-	SessionID        string
-	Content          string
-	RequestID        string
-	StateRevision    *int
-	StructuredAction *scenarioStructuredUserAction
-	OnRunEvent       func(domain.ScenarioRunEvent)
+	SessionID           string
+	Content             string
+	RequestID           string
+	StateRevision       *int
+	StructuredAction    *scenarioStructuredUserAction
+	OnRunEvent          func(domain.ScenarioRunEvent)
+	OnReasoningRawDelta func(string)
 }
 
 // scenarioSessionRevision 取会话当前业务状态版本，供 V2 事件外层携带。
@@ -548,6 +557,13 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 				input.OnRunEvent(scenarioAssistantDeltaEvent(input.RequestID, committedRevision, realtimeSeq, "replying", text))
 				return nil
 			},
+			OnReasoningRawDelta: func(text string) error {
+				if !scenarioRawReasoningStreamEnabled() || input.OnReasoningRawDelta == nil {
+					return nil
+				}
+				input.OnReasoningRawDelta(text)
+				return nil
+			},
 		})
 	} else {
 		result, err = s.scenarioAgent.Turn(agentContext, agentRequest)
@@ -569,6 +585,11 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 	}
 	nextState, approvals, err := approveScenarioProposals(session, question.Content.HiddenWorld, result, s.scenarioValidationMode)
 	if err != nil {
+		// 保留具体拒绝分支在服务端，用户侧继续使用稳定的业务错误码；
+		// 这样跨 Python/Go 状态提议不一致时可以直接定位，而不会把内部
+		// 题库字段或校验细节泄露到浏览器。
+		log.Printf("[scenario-validation] validator=proposal request_id=%s session_id=%s violation=%v",
+			input.RequestID, session.ID, err)
 		return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
 			Status:  http.StatusBadGateway,
 			Code:    "proposal_rejected",
@@ -585,7 +606,13 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 	}
 	nextState = scenarioFillCurrentFocus(nextState, question.Content.HiddenWorld)
 	if s.scenarioValidationMode != scenarioValidationOff {
-		if err := validateScenarioReply(result.Reply, question.Content.HiddenWorld, question.Content.PublicScenario, nextState); err != nil {
+		if err := validateScenarioReply(
+			result.Reply,
+			question.Content.HiddenWorld,
+			question.Content.PublicScenario,
+			nextState,
+			scenarioPublicObservationTexts(result.PublicTrace)...,
+		); err != nil {
 			if s.scenarioValidationMode == scenarioValidationLog {
 				s.recordScenarioValidationBypass("reply_guard", input.RequestID, err.Error())
 			} else {

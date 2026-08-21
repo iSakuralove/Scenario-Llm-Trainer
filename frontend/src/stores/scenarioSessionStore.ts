@@ -2,17 +2,20 @@ import { create } from 'zustand'
 import { api, ScenarioRunFailure } from '../api/client'
 import type { ScenarioMessageResponse } from '../api/client'
 import type { ScenarioMessage, ScenarioQuestion, ScenarioSession } from '../types'
-import type { ScenarioAllowedAction, ScenarioRunEventAny } from '../types/agentRun'
+import type { ScenarioAllowedAction, ScenarioDebugTraceEvent, ScenarioRunEventAny } from '../types/agentRun'
 
 interface ScenarioActiveRun {
   requestId: string
   userContent: string
   events: ScenarioRunEventAny[]
+  /** 测试调试流：不进入正式事件或 sessionStorage。 */
+  reasoningChunks: string[]
+  reasoningStartedAt: number
   /** QuickAction 轮：结构化动作本身是用户输入，正文为空。 */
   structuredAction?: ScenarioAllowedAction
 }
 
-interface PersistedScenarioRun extends ScenarioActiveRun {
+interface PersistedScenarioRun extends Omit<ScenarioActiveRun, 'reasoningChunks' | 'reasoningStartedAt'> {
   stateRevision: number
   updatedAt: number
 }
@@ -30,6 +33,8 @@ interface ScenarioSessionState {
   sendError: string
   activeRun: ScenarioActiveRun | null
   completedRuns: Record<string, ScenarioRunEventAny[]>
+  completedDebugReasoning: Record<string, string[]>
+  completedDebugReasoningDuration: Record<string, number>
   _connectRun: (
     token: string,
     sessionId: string,
@@ -56,6 +61,8 @@ function emptyState() {
     sendError: '',
     activeRun: null as ScenarioActiveRun | null,
     completedRuns: {} as Record<string, ScenarioRunEventAny[]>,
+    completedDebugReasoning: {} as Record<string, string[]>,
+    completedDebugReasoningDuration: {} as Record<string, number>,
   }
 }
 
@@ -77,6 +84,19 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
       })
       if (nextRun) persistPendingRun(sessionId, nextRun, stateRevision)
     }
+    const onDebugTrace = (trace: ScenarioDebugTraceEvent) => {
+      if (trace.kind !== 'reasoning_raw_delta' || trace.text === '') return
+      set((state) => {
+        if (state.activeRun?.requestId !== run.requestId) return state
+        return {
+          ...state,
+          activeRun: {
+            ...state.activeRun,
+            reasoningChunks: [...state.activeRun.reasoningChunks, trace.text],
+          },
+        }
+      })
+    }
 
     const basePayload = {
       content: run.userContent,
@@ -90,6 +110,7 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
         sessionId,
         { ...basePayload, afterSequence: latestSequence(run.events) },
         onRunEvent,
+        onDebugTrace,
       )
     } catch (err) {
       if (err instanceof ScenarioRunFailure) throw err
@@ -99,27 +120,46 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
         sessionId,
         { ...basePayload, afterSequence },
         onRunEvent,
+        onDebugTrace,
       )
     }
   },
 
   _applyRunResult: (sessionId, requestId, result) => {
     clearPendingRun(sessionId, requestId)
-    set((state) => ({
-      ...state,
-      session: result.session,
-      messages: state.messages.some((message) => message.id === result.message.id)
-        ? state.messages
-        : [...state.messages, result.message],
-      activeRun: null,
-      isSending: false,
-      completedRuns: {
-        ...state.completedRuns,
-        [result.message.id]: normalizeRunEvents(
-          result.run_events ?? result.message.response_meta.run_events ?? state.activeRun?.events ?? [],
-        ),
-      },
-    }))
+    set((state) => {
+      const debugReasoning = state.activeRun?.reasoningChunks ?? []
+      return {
+        ...state,
+        session: result.session,
+        messages: state.messages.some((message) => message.id === result.message.id)
+          ? state.messages
+          : [...state.messages, result.message],
+        activeRun: null,
+        isSending: false,
+        completedRuns: {
+          ...state.completedRuns,
+          [result.message.id]: normalizeRunEvents(
+            result.run_events ?? result.message.response_meta.run_events ?? state.activeRun?.events ?? [],
+          ),
+        },
+        completedDebugReasoning: {
+          ...state.completedDebugReasoning,
+          ...(debugReasoning.length > 0 ? { [result.message.id]: debugReasoning } : {}),
+        },
+        completedDebugReasoningDuration: {
+          ...state.completedDebugReasoningDuration,
+          ...(debugReasoning.length > 0
+            ? {
+                [result.message.id]: Math.max(
+                  1,
+                  Math.round((Date.now() - (state.activeRun?.reasoningStartedAt ?? Date.now())) / 1000),
+                ),
+              }
+            : {}),
+        },
+      }
+    })
   },
 
   hydrate: async (token, sessionId, optimistic) => {
@@ -135,6 +175,8 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
             requestId: pendingRun.requestId,
             userContent: pendingRun.userContent,
             events: pendingRun.events,
+            reasoningChunks: [],
+            reasoningStartedAt: Date.now(),
             structuredAction: pendingRun.structuredAction,
           }
         : null,
@@ -159,6 +201,8 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
               requestId: pendingRun.requestId,
               userContent: pendingRun.userContent,
               events: pendingRun.events,
+              reasoningChunks: [],
+              reasoningStartedAt: Date.now(),
               structuredAction: pendingRun.structuredAction,
             },
         isSending: Boolean(pendingRun && !committedPendingRun && !stalePendingRun),
@@ -175,7 +219,12 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
         clearPendingRun(sessionId, pendingRun.requestId)
       } else if (pendingRun) {
         try {
-          const result = await get()._connectRun(token, sessionId, pendingRun, pendingRun.stateRevision)
+          const pendingActiveRun: ScenarioActiveRun = {
+            ...pendingRun,
+            reasoningChunks: [],
+            reasoningStartedAt: Date.now(),
+          }
+          const result = await get()._connectRun(token, sessionId, pendingActiveRun, pendingRun.stateRevision)
           get()._applyRunResult(sessionId, pendingRun.requestId, result)
         } catch (err) {
           if (err instanceof ScenarioRunFailure) clearPendingRun(sessionId, pendingRun.requestId)
@@ -204,10 +253,22 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
       ...state,
       isSending: true,
       sendError: '',
-      activeRun: { requestId: createRequestId(), userContent, events: [] },
+      activeRun: {
+        requestId: createRequestId(),
+        userContent,
+        events: [],
+        reasoningChunks: [],
+        reasoningStartedAt: Date.now(),
+      },
     }))
 
-    const activeRun = get().activeRun ?? { requestId: createRequestId(), userContent, events: [] }
+    const activeRun = get().activeRun ?? {
+      requestId: createRequestId(),
+      userContent,
+      events: [],
+      reasoningChunks: [],
+      reasoningStartedAt: Date.now(),
+    }
     const requestId = activeRun.requestId
     const stateRevision = get().session?.state_revision ?? 0
     persistPendingRun(sessionId, activeRun, stateRevision)
@@ -237,6 +298,8 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
         requestId: createRequestId(),
         userContent: '',
         events: [],
+        reasoningChunks: [],
+        reasoningStartedAt: Date.now(),
         structuredAction: action,
       },
     }))
@@ -346,8 +409,10 @@ function persistPendingRun(sessionId: string, run: ScenarioActiveRun, stateRevis
   if (typeof window === 'undefined') return
   try {
     const payload: PersistedScenarioRun = {
-      ...run,
+      requestId: run.requestId,
+      userContent: run.userContent,
       events: normalizeRunEvents(run.events),
+      structuredAction: run.structuredAction,
       stateRevision,
       updatedAt: Date.now(),
     }

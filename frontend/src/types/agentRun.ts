@@ -29,6 +29,13 @@ export interface ScenarioPublicReasoningSummary {
   text: string
 }
 
+// 测试专用调试事件。它不属于 ScenarioRunEvent，不参与 sequence、落库或历史回放；
+// 正式环境不会从 API 收到该事件。
+export interface ScenarioDebugTraceEvent {
+  kind: 'reasoning_raw_delta'
+  text: string
+}
+
 export interface ScenarioPublicObservation {
   action: string
   result: string
