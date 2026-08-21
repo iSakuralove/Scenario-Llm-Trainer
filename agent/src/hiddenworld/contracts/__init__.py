@@ -28,7 +28,7 @@ from .model_output import (
     ToolCallsOutput,
 )
 from .validator import ScenarioContractValidationError, ScenarioContractValidator, validate_scenario_contract
-from .deps import GuardContext, InterpreterDeps, MentorDeps
+from .deps import EvidenceRequest, GuardContext, InterpreterDeps, MentorDeps
 from .events import (
     PublicObservation,
     PublicReasoningSummary,
@@ -67,6 +67,7 @@ from .version import (
     HypothesisRelation,
     MustNotConstraint,
     StudentAffect,
+    EvidenceAvailability,
     answer_version_for_model,
     direction_for_category,
 )
@@ -184,6 +185,7 @@ __all__ = [
     "ExpectedEffort",
     "FinalReplyOutput",
     "GuardContext",
+    "EvidenceRequest",
     "HiddenWorld",
     "Hypothesis",
     "HypothesisRelation",
@@ -211,6 +213,7 @@ __all__ = [
     "RunEventStatus",
     "SolutionRubric",
     "StudentAffect",
+    "EvidenceAvailability",
     "SupportStatus",
     "TeachingConstraints",
     "TeachingDecision",

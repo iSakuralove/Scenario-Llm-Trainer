@@ -20,6 +20,7 @@ from hiddenworld.contracts import (
     AnswerAttempt,
     AuditTrace,
     AuthorizedActionRef,
+    EvidenceRequest,
     GuardContext,
     InterpreterDeps,
     LearnerState,
@@ -322,6 +323,7 @@ class HiddenWorldRuntime:
             current_intent=analysis.intent,
             requested_action_raw=analysis.requested_action_raw,
             action_match_status=analysis.action_match_status,
+            evidence_request=_evidence_request_for_analysis(analysis),
             authorized_actions=[AuthorizedActionRef.from_authorization(item) for item in authorizations],
             simulation_tools=_simulation_tool_labels(request),
             released_evidence=_released_evidence_text(request, projected_state),
@@ -330,6 +332,7 @@ class HiddenWorldRuntime:
                 forbidden_entities=_forbidden_entities(request, projected_state),
                 completion_allowed=verification.completion_allowed,
                 may_release=approved_releases,
+                evidence_request=_evidence_request_for_analysis(analysis),
             ),
         )
         mentor_fallback = False
@@ -754,33 +757,16 @@ def _normalize_mentor_reply(
     observations: list[Observation],
     reply: str,
 ) -> str:
-    """兜住模型偶发的现实环境措辞和求助答非所问。"""
+    """只做空白归一化；不把模型正文替换成固定回复。"""
 
-    text = (reply or "").strip()
-    help_request = analysis.intent == "help_request" or any(
-        phrase in request.user_message for phrase in ("我怎么看", "怎么从日志动手", "不知道怎么看", "怎么查")
-    )
-    if help_request:
-        return "这是题目自带的模拟文本环境，不需要连接真实服务器。你可以直接用自然语言说想查的对象，例如“看回调服务日志”；也可以输入只读 SQL、日志查询或配置查询语句，系统会在本题的虚拟数据上返回线索。"
-    if analysis.action_match_status == "unsupported" and analysis.requested_action_raw:
-        labels = _simulation_tool_labels(request)
-        available = "、".join(labels[:4]) if labels else "日志、配置、指标或依赖"
-        return f"当前题目没有声明“{analysis.requested_action_raw}”对应的模拟查询，不会替换成相近动作。可以改查：{available}。"
-    prohibited = ("去服务器", "登录服务器", "打开配置文件", "到终端", "执行命令", "回来后", "回来看")
-    if any(phrase in text for phrase in prohibited):
-        if observations:
-            return _public_observation_summary(observations)
-        return "这是题目自带的模拟文本环境，直接在输入框描述要查的对象即可；系统会返回当前题目允许的虚拟线索。"
-    return text or "可以继续用自然语言描述想查的对象，或输入只读 SQL、日志查询和配置查询语句；系统只会在本题虚拟数据上模拟。"
+    return (reply or "").strip()
 
 
 def _public_observation_summary(observations: list[Observation]) -> str:
     """只复述本轮已经公开的观察，不替学生给出判断或下一步。"""
 
     results = [item.result.strip() for item in observations if item.result.strip()]
-    if not results:
-        return "本轮公开观察已经返回。"
-    return "本轮公开观察：" + "；".join(results)
+    return "；".join(results)
 
 
 def _fallback_mentor_action(
@@ -793,12 +779,12 @@ def _fallback_mentor_action(
 ) -> MentorAction:
     """模型失败时的最小公开回复；仍需经过同一 Guard，不执行旁路。"""
 
-    if observations:
-        reply = _public_observation_summary(observations)
-    elif analysis.is_stuck:
-        reply = "先不用急着下结论，可以从题面里最容易验证的一条现象开始。"
-    else:
-        reply = "可以继续描述你想核对的对象，系统会在本题允许的虚拟数据上返回公开观察。"
+    reply = (
+        analysis.public_summary.strip()
+        or _public_observation_summary(observations)
+        or request.public_scenario.description.strip()
+        or request.user_message.strip()
+    )
     return MentorAction(
         rationale="deterministic_fallback",
         reply=reply,
@@ -806,6 +792,19 @@ def _fallback_mentor_action(
         confirms_hypothesis=False,
         expected_effort="quick",
     )
+
+
+def _evidence_request_for_analysis(analysis: TurnAnalysis) -> EvidenceRequest | None:
+    requested = analysis.requested_action_raw.strip()
+    if not requested:
+        return None
+    if analysis.action_match_status in {"unsupported", "ambiguous"}:
+        availability = "UNAVAILABLE"
+    elif analysis.actions:
+        availability = "SIMULATED_ALLOWED"
+    else:
+        availability = "DERIVABLE"
+    return EvidenceRequest(requested_text=requested, availability=availability)
 
 
 def _learner_view(request: AgentTurnRequest, state: LearnerState) -> LearnerStateView:

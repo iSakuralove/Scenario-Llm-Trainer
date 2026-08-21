@@ -8,6 +8,7 @@ from pydantic_ai.models.test import TestModel
 from hiddenworld.agents.interpreter import build_interpreter_prompt, create_interpreter_agent
 from hiddenworld.agents.mentor import build_mentor_prompt, create_mentor_agent
 from hiddenworld.contracts import (
+    EvidenceRequest,
     GuardContext,
     InterpreterDeps,
     LearnerStateView,
@@ -92,6 +93,10 @@ def test_mentor_prompt_excludes_guard_only_and_unreleased_content(
             ruled_out_labels=["CPU 打满"],
         ),
         constraints=teaching_constraints,
+        evidence_request=EvidenceRequest(
+            requested_text="TCP retransmission",
+            availability="UNAVAILABLE",
+        ),
         released_evidence=[released.content],
         answer_comparison=PublicAnswerComparison(
             user_points=["我怀疑是索引问题"],
@@ -113,6 +118,8 @@ def test_mentor_prompt_excludes_guard_only_and_unreleased_content(
     assert hidden_world.root_cause.description not in prompt
     assert "forbidden_entities" not in prompt
     assert "guard_only" not in prompt
+    assert "工具目录" not in prompt
+    assert "题目世界没有这类可公开观察" in prompt
 
 
 @pytest.mark.asyncio

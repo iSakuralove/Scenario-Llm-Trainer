@@ -55,6 +55,13 @@ class Guard:
                 "release_not_approved",
                 "回复请求了尚未获批的信息，请只使用本轮允许释放的内容。",
             )
+        if context.evidence_request is not None and context.evidence_request.availability == "UNAVAILABLE":
+            internal_framing = ("工具目录", "工具清单", "系统目录", "系统实现", "权限", "内部工具")
+            if any(marker in action.reply for marker in internal_framing):
+                raise GuardViolation(
+                    "unavailable_evidence_internal_framing",
+                    "不可用证据必须按题目模拟数据边界表达，不能暴露内部工具或权限实现。",
+                )
         return action
 
 

@@ -23,6 +23,7 @@ from .answer import PublicAnswerComparison
 from .authorization import AuthorizedActionRef
 from .learner import LearnerStateView, Turn
 from .teaching import TeachingConstraints
+from .version import EvidenceAvailability
 from .world import Hypothesis, PublicScenario, VirtualTool
 
 
@@ -61,6 +62,15 @@ class GuardContext:
     )
     completion_allowed: bool = False
     may_release: list[str] = field(default_factory=list)
+    evidence_request: EvidenceRequest | None = None
+
+
+@dataclass
+class EvidenceRequest:
+    """当前消息请求的证据及其世界模型可用性。"""
+
+    requested_text: str
+    availability: EvidenceAvailability
 
 
 @dataclass
@@ -82,6 +92,7 @@ class MentorDeps:
     current_intent: str = "investigate"
     requested_action_raw: str = ""
     action_match_status: str = "none"
+    evidence_request: EvidenceRequest | None = None
     authorized_actions: list[AuthorizedActionRef] = field(default_factory=list)
     simulation_tools: list[str] = field(
         default_factory=list,

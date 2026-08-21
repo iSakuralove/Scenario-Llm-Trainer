@@ -92,12 +92,20 @@ def _render_intent_context(deps: MentorDeps) -> str:
     lines = [f"## 本轮消息类型\n{deps.current_intent}"]
     if deps.current_intent in {"clarification", "explanation_request"}:
         lines.append("这是澄清/解释请求：先直接回答学生问的对象，不要继续用排查反问替代回答。")
-    if deps.action_match_status == "unsupported" and deps.requested_action_raw:
-        lines.append(
-            f"学生请求的检查「{deps.requested_action_raw}」不在本题公开动作中；明确说明无法直接提供该观察，不要替换成相近动作。"
-        )
+    if deps.evidence_request is not None:
+        request = deps.evidence_request
+        lines.append(f"学生请求的证据对象：{request.requested_text}")
+        if request.availability == "UNAVAILABLE":
+            lines.append(
+                "题目世界没有这类可公开观察；诚实说明该模拟数据不包含它，不能编造数值，"
+                "也不要替换成相近指标。不要提内部目录、工具清单、权限或系统实现。"
+            )
+        elif request.availability == "SIMULATED_ALLOWED":
+            lines.append("这类观察属于题目允许的模拟数据，只能引用系统实际返回的结果。")
+        elif request.availability == "DERIVABLE":
+            lines.append("这类信息可以从已公开观察推导，但只能基于已展示事实计算，不得补造输入。")
     if deps.simulation_tools:
-        lines.append("本题可请求的虚拟工具：" + "；".join(deps.simulation_tools))
+        lines.append("题目允许的公开检查对象：" + "；".join(deps.simulation_tools))
     return "\n".join(lines)
 
 

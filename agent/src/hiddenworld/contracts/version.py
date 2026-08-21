@@ -97,6 +97,15 @@ HypothesisRelation = Literal[
 # 卡了三轮开始烦躁的学生，面对还在喊"快解锁啦"的 Agent 只会更烦。
 StudentAffect = Literal["engaged", "confused", "frustrated", "disengaged"]
 
+# 学生请求的证据在题目世界中的可用性。它描述的是世界模型状态，
+# 不是回复模板；Mentor 只能据此决定如何诚实表达，不能据此编造数据。
+EvidenceAvailability = Literal[
+    "AVAILABLE",
+    "DERIVABLE",
+    "SIMULATED_ALLOWED",
+    "UNAVAILABLE",
+]
+
 # TeachingConstraints.must_not 的取值域。由 Guard 强制执行，不是给模型的建议。
 MustNotConstraint = Literal[
     "confirm_hypothesis",
