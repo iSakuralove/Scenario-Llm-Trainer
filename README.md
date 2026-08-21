@@ -32,7 +32,7 @@ docker-compose.yml  API、Agent、PostgreSQL、Redis 本地编排
 
 仓库地址：https://github.com/iSakuralove/Scenario-Llm-Trainer
 
-本节说明如何从零把本项目跑起来，以及部署时需要注意的事项。没有真实模型 Key 也能启动；配置 DeepSeek / Embedding 后可验证完整 AI 能力。
+本节说明如何从零把本项目跑起来，以及部署时需要注意的事项。没有真实模型 Key 也能启动；在 config/llm_routes.yaml 填好 key 后可验证完整 AI 能力。
 
 ### 环境要求
 
@@ -40,7 +40,7 @@ docker-compose.yml  API、Agent、PostgreSQL、Redis 本地编排
 - Node.js 20+
 - Go 1.22+（本机直接运行后端时需要）
 - Docker Desktop（推荐，用于 PostgreSQL / Redis / API 的持久化演示）
-- 可选：DeepSeek、Embedding、SMTP 凭据
+- 可选：GLM / DeepSeek / MiniMax 任一 API Key（填入 config/llm_routes.yaml）
 
 ### 克隆项目
 
@@ -51,39 +51,28 @@ git checkout main
 git pull
 ```
 
-### 配置环境变量
+### 配置环境变量与 LLM 路由
 
-不要把真实 Key 提交进 Git。在仓库根目录创建本地 `.env`（已被忽略）：
+不要把真实 Key 提交进 Git。AI 配置与基础设施配置分开两个文件：
 
 ```powershell
-# 至少配置 JWT_SECRET；AI 相关变量可按需补充
+# 1. .env：基础设施变量（已被 gitignore）
 @'
 JWT_SECRET=please-change-me-to-a-long-random-string
-DEEPSEEK_KEY=
-EMBEDDING_BASE_URL=https://router.tumuer.me/
-EMBEDDING_API_KEY=
-EMBEDDING_MODEL=text-embedding-3-small
-SMTP_HOST=smtp.qq.com
-SMTP_PORT=587
-SMTP_USERNAME=
-SMTP_PASSWORD=
-SMTP_FROM=
-APP_PUBLIC_URL=http://localhost:5173
+CORS_ALLOWED_ORIGINS=http://localhost:5173
 '@ | Out-File -FilePath .env -Encoding utf8
+
+# 2. config/llm_routes.yaml：LLM / embedding / 语音转写（复制模板后直接填 key）
+Copy-Item config/llm_routes.example.yaml config/llm_routes.yaml
+# 编辑 config/llm_routes.yaml，把 api_key 填在对应站点下即可
 ```
 
 说明：
 
 1. Docker 启动 API 时必须提供 `JWT_SECRET`
-2. 配置 `DEEPSEEK_KEY` 后，面试反馈与题目生成会走真实模型
-3. Embedding 相关变量用于语义检索；缺失时会自动回退本地规则
-4. 修改 `.env` 后需要重建 API 容器才会生效：
-
-```powershell
-docker compose up -d --force-recreate --no-build api
-```
-
-更完整的变量清单见下文「环境变量」。
+2. 填好任一站点的 `api_key` 后，面试反馈、题目生成与排查工坊走真实模型；全部留空时回退 Mock
+3. `embedding:` / `stt:` 段 key 为空时分别回退本地相似度规则与内置 Mock 转写
+4. 修改配置后重启容器生效：`docker compose restart api agent`
 
 ### 推荐启动：Docker 后端 + 本机前端
 
@@ -190,46 +179,30 @@ npm run build
 
 ## 环境变量
 
-后端支持以下变量：
+`.env` 只保留基础设施变量；**全部 AI 配置（LLM 站点、embedding、语音转写）都在 `config/llm_routes.yaml`**，key 直接写在文件里：
 
 ```powershell
-PORT=8080
-JWT_SECRET=replace-with-a-long-random-secret
-STORE_MODE=postgres
-DATABASE_URL=postgres://teaching:teaching@localhost:5432/teaching_mvp?sslmode=disable
-REDIS_URL=redis://localhost:6379/0
-# LLM 路由已由 config/llm_routes.yaml 接管（见 docs/llm-routing.md）
-# 站点 key 经 GLM_API_KEY / DEEPSEEK_KEY / MINIMAX_API_KEY 注入
-ZETA_KEY=
-JIANYI_API_KEY=
-DEEPSEEK_KEY=
-EMBEDDING_BASE_URL=https://router.tumuer.me/
-EMBEDDING_API_KEY=
-jeniya_embedding_key=
-EMBEDDING_MODEL=text-embedding-3-small
-EMBEDDING_FALLBACK_MODEL=
-EMBEDDING_TIMEOUT_SECONDS=8
-STT_BASE_URL=https://api.zetatechs.com
-STT_API_KEY=
-STT_MODEL=gpt-4o-mini-transcribe-2025-12-15
-STT_TIMEOUT_SECONDS=60
+# .env（已 gitignore）
+JWT_SECRET=please-change-me-to-a-long-random-string
+CORS_ALLOWED_ORIGINS=http://localhost:5173
+LLM_STREAM_ENABLED=true
+
+# config/llm_routes.yaml（复制 config/llm_routes.example.yaml 后填写）
+# providers:
+#   - name: glm-official
+#     base_url: https://open.bigmodel.cn/api/paas/v4
+#     api_key: sk-直接粘贴        # 或 ${系统环境变量}
+#     model: glm-4.7
+#     max_tokens: 131072          # GLM-4.7 最大输出 128K；DeepSeek-V4 384K；MiniMax-M2.7 128K
 ```
 
 说明：
 
-- `STORE_MODE=postgres` 时使用 PostgreSQL。
-- `STORE_MODE=memory` 或未配置 `DATABASE_URL` 时降级为内存存储。
-- `REDIS_URL` 存在且连接成功时启用接口限流；连接失败时自动降级为不限流。
-- LLM 调用统一由 `config/llm_routes.yaml` 顺序路由接管：按声明顺序尝试站点，key 留空自动跳过，站点失败自动切换下一站；`GLM_API_KEY` / `DEEPSEEK_KEY` / `MINIMAX_API_KEY` 等站点 key 在 `.env` 注入。详见 [docs/llm-routing.md](docs/llm-routing.md)。
-- DeepSeek 固定默认地址为 `https://api.deepseek.com`，默认模型为 `deepseek-v4-flash`。
-- 情景题生成任务 `scenario_generate` 会优先固定使用 `deepseek-v4-flash`；即使管理员把全局 AI 配置改成其他 DeepSeek 模型，生成题仍回到该模型执行，失败后再按 Provider 链路降级。
-- `scenario_generate` 是非流式结构化 JSON 调用；验证时系统状态的 recent attempts 应显示 DeepSeek 成功，页面来源应为 `DeepSeek deepseek-v4-flash`，不应因全局流式开关误显示 `Mock LLM 兜底`。
-- 第三方中转站：在 `config/llm_routes.yaml` 追加条目（base_url + api_key + model）即可，支持 `extra_headers`。
-- 排查会话语义网关会直接调用 `https://router.tumuer.me/v1/embeddings`；Key 读取顺序为 `EMBEDDING_API_KEY`、`jeniya_embedding_key`、`JIANYI_API_KEY`，推荐用 `jeniya_embedding_key` 放置 embedding 专用 key。默认模型为 `text-embedding-3-small`；如果需要切换模型，请确认该模型仍在 embeddings 端点可用。未配置 key 或调用失败时，后端保留本地相似度与关键词规则，不影响 Go 后端单独运行。
-- 语音转写优先使用 `STT_API_KEY`，其次 `ZETA_KEY`，最后兼容 `JIANYI_API_KEY`；存在 `ZETA_KEY` 时默认 `STT_BASE_URL=https://api.zetatechs.com`，默认 `STT_MODEL=gpt-4o-mini-transcribe-2025-12-15`。
-- Zeta 可选路线包括 `https://api.zetatechs.com`、`https://api.zetatechs.online`、`https://ent.zetatechs.com`、`https://ent.zetatechs.online`，用 `STT_BASE_URL` 切换。
-- 不要把真实模型 Key 写入仓库；用系统环境变量或本机 `.env` 注入。
-
+- LLM 顺序路由：按 `providers` 声明顺序尝试，key 留空自动跳过该站，站点失败自动切下一站，详见 [docs/llm-routing.md](docs/llm-routing.md)
+- embedding / 语音转写在同一份 yaml 的 `embedding:` / `stt:` 段配置；key 为空时分别回退本地相似度规则与内置 Mock 转写
+- `HIDDENWORLD_ALLOW_MODEL_REQUESTS=1` 允许 Python Agent 发起真实模型请求（本地联调用）
+- `STORE_MODE=postgres` 时使用 PostgreSQL，未配置 `DATABASE_URL` 时降级内存存储；`REDIS_URL` 存在且连接成功时启用接口限流
+- 不要把真实 Key 提交进 Git：`config/llm_routes.yaml` 已被 gitignore，仓库只保留 `config/llm_routes.example.yaml` 模板
 ## Docker 启动
 
 推荐用 Docker Compose 启动后端依赖和 API：

@@ -27,7 +27,6 @@ services:
       # Runtime V2 迁移期间，过程事件只做影子校验并丢弃坏事件，不能阻断回复正文；
       # proposal / reply guard 仍由 SCENARIO_VALIDATION_MODE= strict 保护。
       SCENARIO_PUBLIC_TRACE_VALIDATION_MODE: ${SCENARIO_PUBLIC_TRACE_VALIDATION_MODE:-log}
-      DEEPSEEK_KEY: ${DEEPSEEK_KEY:-}
     ports:
       - "8080:8080"
     depends_on:
