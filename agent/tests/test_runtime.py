@@ -145,10 +145,110 @@ async def test_runtime_executes_compare_answer_only_for_answer_attempt(
     ]
     tool_result = next(item for item in result.public_trace if item.kind == "tool_result")
     assert tool_result.tool is not None
-    assert tool_result.tool.redacted_arguments == {"answer_attempt_id": "request-answer:answer"}
+    assert tool_result.tool.redacted_arguments == {}
     public_tool_json = tool_result.tool.model_dump_json()
     for forbidden in ["correct", "target", "claim_alignment", "missing_evidence", "completion_allowed"]:
         assert forbidden not in public_tool_json
+
+
+@pytest.mark.asyncio
+async def test_runtime_rejects_agent_observation_without_user_action_authorization(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    interpreter = create_interpreter_agent(
+        TestModel(
+            custom_output_text=json.dumps(
+                {
+                    "public_summary": "我判断这轮可以查一下 CPU。",
+                    "actions": ["inspect:metrics.cpu"],
+                    "hypothesis_id": "",
+                    "hypothesis_raw": "",
+                    "made_claim": False,
+                    "contains_answer_attempt": False,
+                    "answer_attempt_text": "",
+                    "established_facts": [],
+                    "is_stuck": False,
+                    "is_noise": False,
+                    "student_affect": "engaged",
+                    "confidence": 0.95,
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+    mentor = _plain_mentor()
+    request = AgentTurnRequest(
+        request_id="request-agent-only-observation",
+        session_id="session-1",
+        state_revision=12,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="我先说说自己的判断，不查任何东西",
+    )
+
+    result = await HiddenWorldRuntime(interpreter=interpreter, mentor=mentor).run_turn(request)
+
+    assert result.public_trace
+    assert all(item.observation is None for item in result.public_trace)
+    assert all(item.action != "inspect:metrics.cpu" for item in result.proposals)
+
+
+@pytest.mark.asyncio
+async def test_quickaction_turn_executes_authorized_observation_without_user_text(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    """QuickAction 点击轮没有自然语言；结构化动作本身就是授权，必须能触发观察。"""
+
+    interpreter = create_interpreter_agent(
+        TestModel(
+            custom_output_text=json.dumps(
+                {
+                    "public_summary": "学生通过按钮发起了一次检查。",
+                    "actions": [],
+                    "hypothesis_id": "",
+                    "hypothesis_raw": "",
+                    "made_claim": False,
+                    "contains_answer_attempt": False,
+                    "answer_attempt_text": "",
+                    "established_facts": [],
+                    "is_stuck": False,
+                    "is_noise": False,
+                    "student_affect": "engaged",
+                    "confidence": 0.95,
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+    request = AgentTurnRequest(
+        request_id="request-quickaction",
+        session_id="session-1",
+        state_revision=12,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="",
+        structured_user_action={
+            "action_id": "inspect:metrics.cpu",
+            "catalog_version": "catalog-1",
+            "state_revision": 12,
+        },
+    )
+
+    result = await HiddenWorldRuntime(interpreter=interpreter, mentor=_plain_mentor()).run_turn(request)
+
+    assert result.turn_analysis.actions == ["inspect:metrics.cpu"]
+    assert any(item.observation is not None for item in result.public_trace)
+    proposal_pairs = {
+        (item.kind, item.evidence_id or item.action) for item in result.proposals
+    }
+    assert ("release_evidence", "E_CPU_NORMAL") in proposal_pairs
+    assert ("record_action", "inspect:metrics.cpu") in proposal_pairs
 
 
 @pytest.mark.asyncio

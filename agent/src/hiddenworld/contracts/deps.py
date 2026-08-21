@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .answer import PublicAnswerComparison
+from .authorization import AuthorizedActionRef
 from .learner import LearnerStateView, Turn
 from .teaching import TeachingConstraints
 from .world import Hypothesis, PublicScenario, VirtualTool
@@ -81,6 +82,7 @@ class MentorDeps:
     current_intent: str = "investigate"
     requested_action_raw: str = ""
     action_match_status: str = "none"
+    authorized_actions: list[AuthorizedActionRef] = field(default_factory=list)
     simulation_tools: list[str] = field(
         default_factory=list,
         metadata={"why": "公开的虚拟工具类型与目标，不含隐藏证据"},

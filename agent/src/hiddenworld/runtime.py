@@ -18,6 +18,7 @@ from hiddenworld.contracts import (
     AgentTurnResult,
     AnswerAttempt,
     AuditTrace,
+    AuthorizedActionRef,
     GuardContext,
     InterpreterDeps,
     LearnerState,
@@ -30,7 +31,10 @@ from hiddenworld.contracts import (
     PublicReasoningSummary,
     PublicTraceEvent,
     ToolEventPayload,
+    TurnAnalysis,
     VerificationResult,
+    UserActionAuthorization,
+    validate_scenario_contract,
 )
 from hiddenworld.kernel import (
     AntiGuess,
@@ -92,6 +96,9 @@ class HiddenWorldRuntime:
         on_reply_delta: ReplyDeltaCallback | None = None,
     ) -> AgentTurnResult:
         request.require_contract_version()
+        # 旧 v1 题目仍允许读取；一旦带有 V2 独立答案字段，加载时执行强校验。
+        if request.hidden_world.canonical_answer is not None:
+            validate_scenario_contract(request.hidden_world)
         timeout_seconds = max(request.budget.deadline_ms, 1) / 1000
         try:
             return await asyncio.wait_for(
@@ -115,6 +122,7 @@ class HiddenWorldRuntime:
         on_reply_delta: ReplyDeltaCallback | None,
     ) -> AgentTurnResult:
         interpreter_started = perf_counter()
+        interpreter_ms = 0
         sequencer = _StreamSequencer()
         interpreter_deps = InterpreterDeps(
             public_scenario=request.public_scenario,
@@ -153,10 +161,17 @@ class HiddenWorldRuntime:
                 on_reasoning_delta=callback,
             )
 
-        interpreter_result = await run_with_network_retries(interpreter_call)
-        interpreter_ms = _elapsed_ms(interpreter_started)
-        analysis = interpreter_result.output
-        analysis = _resolve_declared_virtual_tool(request, analysis)
+        if request.structured_user_action is not None and not request.user_message.strip():
+            # QuickAction 点击轮没有自然语言，Interpreter 无从解析；
+            # 空 prompt 直发模型会被部分网关拒绝（智谱 1213）。动作本身
+            # 就是输入，直接确定性构造分析，不再调用意图模型。
+            analysis = _analysis_for_structured_action(request)
+        else:
+            interpreter_result = await run_with_network_retries(interpreter_call)
+            interpreter_ms = _elapsed_ms(interpreter_started)
+            analysis = interpreter_result.output
+            analysis = _resolve_declared_virtual_tool(request, analysis)
+        authorizations = _build_user_action_authorizations(request, analysis)
         if on_turn_analysis is not None:
             await on_turn_analysis(analysis)
 
@@ -168,6 +183,17 @@ class HiddenWorldRuntime:
         is_clarification = analysis.intent in {"clarification", "explanation_request"}
         action_match_is_unsafe = analysis.action_match_status in {"unsupported", "ambiguous"}
         actions = [] if analysis.is_low_confidence() or analysis.is_noise or is_clarification or action_match_is_unsafe else analysis.actions
+        authorized_action_refs = {item.action_ref for item in authorizations}
+        actions = [item for item in actions if item in authorized_action_refs]
+        if (
+            request.structured_user_action is not None
+            and request.structured_user_action.action_id in authorized_action_refs
+            and request.structured_user_action.action_id not in actions
+        ):
+            # QuickAction 点击轮没有自然语言，Interpreter 无从解析出动作；
+            # 结构化动作本身就是用户授权，不需要再过一遍意图猜测。
+            actions.append(request.structured_user_action.action_id)
+        effective_analysis = analysis.model_copy(update={"actions": actions})
         approved_releases = (
             []
             if is_clarification
@@ -196,13 +222,14 @@ class HiddenWorldRuntime:
             request,
             actions=actions,
             approved_releases=approved_releases,
+            authorizations=authorizations,
         )
         projected_state = (
             request.learner_state.model_copy(deep=True)
             if is_clarification
             else EvidenceEngine().advance(
                 request.learner_state,
-                analysis=analysis,
+                analysis=effective_analysis,
                 observations=observations,
             )
         )
@@ -247,7 +274,7 @@ class HiddenWorldRuntime:
                 attempts={attempt.answer_attempt_id: attempt},
             )
             compare_started = perf_counter()
-            answer_public = tool_runtime.execute(attempt.answer_attempt_id)
+            answer_public = tool_runtime.execute_bound()
             compare_answer_ms = _elapsed_ms(compare_started)
             answer_internal = tool_runtime.internal_result
 
@@ -265,7 +292,7 @@ class HiddenWorldRuntime:
         allowed_category = _first_release_category(request, approved_releases)
         constraints = TeachingPolicy().compile(
             projected_state,
-            analysis=analysis,
+            analysis=effective_analysis,
             completion_allowed=verification.completion_allowed,
             evidence_coverage=_coverage_label(projected_state, anti_guess.best_evidence_set),
             may_release=approved_releases,
@@ -293,6 +320,7 @@ class HiddenWorldRuntime:
             current_intent=analysis.intent,
             requested_action_raw=analysis.requested_action_raw,
             action_match_status=analysis.action_match_status,
+            authorized_actions=[AuthorizedActionRef.from_authorization(item) for item in authorizations],
             simulation_tools=_simulation_tool_labels(request),
             released_evidence=_released_evidence_text(request, projected_state),
             answer_comparison=answer_public,
@@ -340,7 +368,10 @@ class HiddenWorldRuntime:
             request_id=request.request_id,
             expected_revision=request.state_revision,
             reply=mentor_action.reply,
-            turn_analysis=analysis,
+            # 返回授权过滤后的 actions：Go 侧要求 observation_result 必须源自
+            # TurnAnalysis.Actions，原始 analysis 可能带有 Agent 自主提出、
+            # 未获用户授权的动作，直接外发会被 Go 整轮拒绝。
+            turn_analysis=effective_analysis,
             proposals=_state_proposals(
                 request.learner_state,
                 projected_state,
@@ -434,12 +465,17 @@ def _observe_actions(
     *,
     actions: list[str],
     approved_releases: list[str],
+    authorizations: list[UserActionAuthorization] | None = None,
 ) -> list[Observation]:
     approved = set(approved_releases)
+    authorized = {item.action_ref for item in (authorizations or [])}
     available = set(request.learner_state.collected_evidence)
     observations: list[Observation] = []
     engine = HiddenWorldEngine()
     for action in actions:
+        if action not in authorized:
+            # Agent 自己提出但没有学生授权的观察动作只能被忽略，不能读取新的世界事实。
+            continue
         configured = next((item for item in request.hidden_world.observations if item.action == action), None)
         if configured is None:
             continue
@@ -475,6 +511,116 @@ def _observe_actions(
         available.update(allowed_yields)
         observations.append(observation)
     return observations
+
+
+def _analysis_for_structured_action(request: AgentTurnRequest) -> TurnAnalysis:
+    """QuickAction 轮的确定性意图分析：动作已知，不需要模型猜测。
+
+    摘要从题目声明的工具目标推导，不引入学生没有表达的新信息；
+    confidence 置高保证 Go 侧 low_confidence 闸门放行。
+    """
+
+    action_id = request.structured_user_action.action_id if request.structured_user_action else ""
+    target = ""
+    for tool in request.hidden_world.virtual_tools:
+        if tool.observation_action == action_id:
+            target = tool.target
+            break
+    summary = f"你选择查看{target}。" if target else "你发起了一次快捷检查。"
+    return TurnAnalysis(
+        public_summary=summary,
+        intent="investigate",
+        requested_action_raw=request.structured_user_action.normalized_scope if request.structured_user_action else "",
+        clarification_target="",
+        action_match_status="matched",
+        actions=[action_id],
+        hypothesis_id="",
+        hypothesis_raw="",
+        made_claim=False,
+        contains_answer_attempt=False,
+        answer_attempt_text="",
+        established_facts=[],
+        is_stuck=False,
+        is_noise=False,
+        student_affect="engaged",
+        confidence=0.95,
+    )
+
+
+def _build_user_action_authorizations(
+    request: AgentTurnRequest,
+    analysis,
+) -> list[UserActionAuthorization]:
+    """从真实用户动作签发授权，绝不接受 Agent 自己的 tool_call 作为授权。"""
+
+    authorizations: list[UserActionAuthorization] = []
+    if request.structured_user_action is not None:
+        action = request.structured_user_action
+        if action.state_revision == request.state_revision:
+            configured = _observation_for_action(request, action.action_id)
+            if configured is not None:
+                tool_kind = _tool_kind_for_action(request, action.action_id)
+                authorizations.append(
+                    UserActionAuthorization(
+                        source="structured_user_action",
+                        action_ref=action.action_id,
+                        tool_kind=tool_kind,
+                        normalized_scope=action.normalized_scope,
+                        state_revision=request.state_revision,
+                        authorization_id=f"{request.request_id}:structured:{action.action_id}",
+                    )
+                )
+
+    if (
+        request.user_message.strip()
+        and analysis.intent in {"investigate", "inspect"}
+        and analysis.action_match_status in {"matched", "none"}
+    ):
+        for index, action in enumerate(analysis.actions):
+            explicitly_matched = analysis.action_match_status == "matched" or _action_is_explicitly_requested(
+                request.user_message, action
+            )
+            if _observation_for_action(request, action) is not None and explicitly_matched:
+                authorizations.append(
+                    UserActionAuthorization(
+                        source="user_message",
+                        action_ref=action,
+                        tool_kind=_tool_kind_for_action(request, action),
+                        normalized_scope=analysis.requested_action_raw.strip(),
+                        state_revision=request.state_revision,
+                        authorization_id=f"{request.request_id}:message:{index}",
+                    )
+                )
+    return authorizations
+
+
+def _tool_kind_for_action(request: AgentTurnRequest, action: str) -> str:
+    for item in request.hidden_world.virtual_tools:
+        if item.observation_action == action:
+            return item.kind
+    _, _, remainder = action.partition(":")
+    return remainder.split(".", 1)[0] or "observation"
+
+
+def _observation_for_action(request: AgentTurnRequest, action: str) -> Observation | None:
+    for item in request.hidden_world.observations:
+        if item.action == action:
+            return item
+    for item in request.hidden_world.virtual_tools:
+        if item.observation_action == action:
+            return next(
+                (observation for observation in request.hidden_world.observations if observation.action == action),
+                None,
+            )
+    return None
+
+
+def _action_is_explicitly_requested(user_message: str, action: str) -> bool:
+    """旧题目兼容匹配：只用动作标识中的自然词，不让 Agent 自己授予权限。"""
+
+    text = user_message.casefold()
+    tokens = [item for item in re.split(r"[:._-]+", action.casefold()) if item and item not in {"inspect"}]
+    return bool(tokens) and any(token in text for token in tokens)
 
 
 def _resolve_declared_virtual_tool(request: AgentTurnRequest, analysis):
@@ -688,7 +834,7 @@ def _public_trace_before_mentor(
     if analysis_contains_answer and answer_public is not None:
         tool_payload = ToolEventPayload(
             name="compare_answer",
-            redacted_arguments={"answer_attempt_id": answer_attempt_id},
+            redacted_arguments={},
             duration_ms=compare_answer_ms,
             result=answer_public,
         )

@@ -15,6 +15,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from .answer import InternalAnswerComparison
+from .authorization import StructuredUserAction
 from .events import PublicTraceEvent
 from .learner import LearnerState, Turn
 from .turn import TurnAnalysis
@@ -112,6 +113,7 @@ class AgentTurnRequest(BaseModel):
     learner_state: LearnerState
     transcript: list[Turn] = Field(default_factory=list)
     user_message: str
+    structured_user_action: StructuredUserAction | None = None
     budget: Budget = Field(default_factory=Budget)
 
     def require_contract_version(self) -> None:

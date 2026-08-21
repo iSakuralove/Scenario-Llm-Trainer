@@ -58,6 +58,12 @@ class CompareAnswerRuntime:
         self.execution_count += 1
         return self._public_result.model_copy(deep=True)
 
+    def execute_bound(self) -> PublicAnswerComparison:
+        """比较 Runtime 绑定的唯一 AnswerAttempt，不接受模型传入 ID。"""
+        if len(self.attempts) != 1:
+            raise CompareAnswerAuthorizationError("current turn must have exactly one bound answer attempt")
+        return self.execute(next(iter(self.attempts)))
+
     def _is_bound_to_current_turn(self, attempt: AnswerAttempt) -> bool:
         return (
             attempt.session_id == self.session_id
@@ -68,18 +74,17 @@ class CompareAnswerRuntime:
 
 def compare_answer(
     ctx: RunContext[CompareAnswerRuntime],
-    answer_attempt_id: str,
 ) -> PublicAnswerComparison:
-    """比较服务端绑定到当前轮的答案尝试；不得传入答案正文。"""
+    """比较 Runtime 绑定的当前轮答案尝试；工具没有可由模型构造的参数。"""
 
-    return ctx.deps.execute(answer_attempt_id)
+    return ctx.deps.execute_bound()
 
 
 compare_answer_tool = Tool(
     compare_answer,
     takes_ctx=True,
     name="compare_answer",
-    description="比较服务端绑定到当前轮的答案尝试，只接受 answer_attempt_id。",
+    description="比较 Runtime 绑定到当前轮的唯一答案尝试，不接受参数。",
     max_retries=1,
     strict=False,
 )

@@ -17,6 +17,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from .version import EvidenceCategory
+from .answer import CanonicalAnswer
 
 
 class _Strict(BaseModel):
@@ -188,6 +189,11 @@ class HiddenWorld(_Strict):
     """完整的世界。含答案，只由确定性组件消费。"""
 
     root_cause: RootCause
+    canonical_answer: CanonicalAnswer | None = Field(
+        default=None,
+        description="V2 题目必填；None 仅供旧 v1 题目读取兼容。",
+    )
+    diagnostic_relations: list[str] = Field(default_factory=list)
     hypotheses: list[Hypothesis]
     evidence_graph: list[EvidenceNode]
     observations: list[Observation]

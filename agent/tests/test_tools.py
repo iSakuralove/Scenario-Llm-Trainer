@@ -41,13 +41,12 @@ def test_compare_answer_rejects_unbound_attempt_id(hidden_world, learner_state) 
         runtime.execute("model-invented-id")
 
 
-def test_compare_answer_tool_schema_only_accepts_server_bound_id() -> None:
+def test_compare_answer_tool_schema_has_no_model_parameters() -> None:
     schema = compare_answer_tool.function_schema.json_schema
 
     assert schema == {
         "additionalProperties": False,
-        "properties": {"answer_attempt_id": {"type": "string"}},
-        "required": ["answer_attempt_id"],
+        "properties": {},
         "type": "object",
     }
 
@@ -72,8 +71,8 @@ def test_compare_answer_is_idempotent_and_only_returns_public_projection(hidden_
         attempts={attempt.answer_attempt_id: attempt},
     )
 
-    first = runtime.execute(attempt.answer_attempt_id)
-    second = runtime.execute(attempt.answer_attempt_id)
+    first = runtime.execute_bound()
+    second = runtime.execute_bound()
 
     assert first == second
     assert runtime.execution_count == 1

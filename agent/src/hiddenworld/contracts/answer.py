@@ -20,6 +20,20 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .version import HypothesisRelation
 
+
+class CanonicalAnswer(BaseModel):
+    """与 ScenarioContract 同版本持久化的唯一权威答案。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    canonical_conclusion: str
+    root_cause_id: str
+    required_evidence_ids: list[str] = Field(default_factory=list)
+    required_causal_relations: list[str] = Field(default_factory=list)
+    accepted_equivalents: list[str] = Field(default_factory=list)
+    solution_requirements: list[str] = Field(default_factory=list)
+    answer_version: str
+
 # 公开的支持状态。四选一，且四个取值都只描述"证据够不够"，
 # 没有任何一个能被反推成"猜中了 / 没猜中"。
 SupportStatus = Literal[

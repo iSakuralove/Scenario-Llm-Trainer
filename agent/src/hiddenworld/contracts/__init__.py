@@ -7,7 +7,12 @@
 
 from __future__ import annotations
 
-from .answer import InternalAnswerComparison, PublicAnswerComparison, SupportStatus
+from .answer import CanonicalAnswer, InternalAnswerComparison, PublicAnswerComparison, SupportStatus
+from .authorization import AuthorizedActionRef, StructuredUserAction, UserActionAuthorization
+from .debug_trace import DebugTraceEvent
+from .dimensions import TeachingDimensionCategory, TeachingDimensionRef
+from .model_output import AgentModelOutput, FinalReplyOutput, ToolCall, ToolCallsOutput
+from .validator import ScenarioContractValidationError, ScenarioContractValidator, validate_scenario_contract
 from .deps import GuardContext, InterpreterDeps, MentorDeps
 from .events import (
     PublicObservation,
@@ -134,15 +139,21 @@ __all__ = [
     "PUBLIC_MODELS",
     "AgentTurnRequest",
     "AgentTurnResult",
+    "AgentModelOutput",
+    "AuthorizedActionRef",
+    "StructuredUserAction",
     "AllowedDirection",
     "AnswerAttempt",
+    "CanonicalAnswer",
     "AuditTrace",
     "Budget",
     "ConstraintFacts",
     "ContractVersionMismatch",
+    "DebugTraceEvent",
     "EvidenceCategory",
     "EvidenceNode",
     "ExpectedEffort",
+    "FinalReplyOutput",
     "GuardContext",
     "HiddenWorld",
     "Hypothesis",
@@ -173,9 +184,17 @@ __all__ = [
     "StudentAffect",
     "SupportStatus",
     "TeachingConstraints",
+    "TeachingDimensionCategory",
+    "TeachingDimensionRef",
+    "ToolCall",
+    "ToolCallsOutput",
     "ToolEventPayload",
     "Turn",
     "TurnAnalysis",
     "VerificationResult",
+    "UserActionAuthorization",
+    "ScenarioContractValidationError",
+    "ScenarioContractValidator",
+    "validate_scenario_contract",
     "direction_for_category",
 ]

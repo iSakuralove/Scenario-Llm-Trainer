@@ -16,6 +16,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from hiddenworld.contracts import (
+    CanonicalAnswer,
     CONTRACT_VERSION,
     FORBIDDEN_PUBLIC_FIELDS,
     MENTOR_VISIBLE_MODELS,
@@ -28,6 +29,8 @@ from hiddenworld.contracts import (
     PublicAnswerComparison,
     RunEvent,
     TurnAnalysis,
+    ScenarioContractValidationError,
+    ScenarioContractValidator,
 )
 
 
@@ -88,6 +91,12 @@ def test_mentor_deps_field_boundary() -> None:
         "transcript",
         "learner_state",
         "constraints",
+        "current_user_message",
+        "current_intent",
+        "requested_action_raw",
+        "action_match_status",
+        "simulation_tools",
+        "authorized_actions",
         "released_evidence",
         "answer_comparison",
         "guard_only",
@@ -217,3 +226,44 @@ def test_agent_turn_request_roundtrip(hidden_world, learner_state, public_scenar
     restored = AgentTurnRequest.model_validate_json(request.model_dump_json())
     assert restored == request
     assert restored.hidden_world.root_cause.id == "RC_INDEX_DROPPED"
+
+
+def test_canonical_answer_validator_rejects_missing_evidence(hidden_world) -> None:
+    world = hidden_world.model_copy(
+        update={
+            "canonical_answer": CanonicalAnswer(
+                canonical_conclusion="发布重建索引时遗漏订单表索引",
+                root_cause_id=hidden_world.root_cause.id,
+                required_evidence_ids=["E_NOT_FOUND"],
+                required_causal_relations=[],
+                solution_requirements=list(hidden_world.root_cause.solution_requirements),
+                answer_version="answer-v1",
+            )
+        }
+    )
+    with pytest.raises(ScenarioContractValidationError, match="missing evidence"):
+        ScenarioContractValidator().validate(world)
+
+
+def test_canonical_answer_validator_accepts_aligned_snapshot(hidden_world) -> None:
+    rubric = hidden_world.solution_rubric.model_copy(
+        update={
+            "required_actions": list(hidden_world.root_cause.solution_requirements),
+        }
+    )
+    world = hidden_world.model_copy(
+        update={
+            "diagnostic_relations": ["root_cause->symptom"],
+            "solution_rubric": rubric,
+            "canonical_answer": CanonicalAnswer(
+                canonical_conclusion="发布重建索引时遗漏订单表索引",
+                root_cause_id=hidden_world.root_cause.id,
+                required_evidence_ids=["E_RELEASE_LOG", "E_DDL_DIFF"],
+                required_causal_relations=["root_cause->symptom"],
+                accepted_equivalents=["发布脚本漏了订单表索引"],
+                solution_requirements=list(hidden_world.root_cause.solution_requirements),
+                answer_version="answer-v1",
+            ),
+        }
+    )
+    assert ScenarioContractValidator().validate(world) == world
