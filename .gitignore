@@ -102,6 +102,10 @@ docs/adr/
 docs/memos-agent-prompt.md
 features/2026-06-11-agents-generated-doc.md
 *.md
+# 项目文档：LLM 路由与 Runtime V2 说明需要随仓库分发（负例须晚于上面的 *.md）
+!docs/llm-routing.md
+!docs/scenario-runtime-v2.md
+!docs/changelog-2026-07.md
 # Excluded from the GitHub source branch by policy
 交付/
 img/

@@ -3,7 +3,7 @@
   "name": "scenario-agent-runtime-contract-migration",
   "title": "排查工坊单 Agent Runtime 最终字段契约与跨层迁移",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

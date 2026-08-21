@@ -5,11 +5,13 @@
 ## 目录结构
 
 ```text
-backend/   Go 1.22 API 服务，支持 PostgreSQL 持久化、Redis 限流、DeepSeek/OpenAI-compatible LLM 与种子数据
+backend/   Go API 服务，支持 PostgreSQL 持久化、Redis 限流、顺序路由 LLM 与种子数据
+agent/     Python 排查工坊 Runtime（FastAPI + PydanticAI）
 frontend/  React + TypeScript + Zustand 前端应用
+config/    llm_routes.yaml —— LLM 站点顺序路由配置（见 docs/llm-routing.md）
 scripts/   比赛演示验收与演示数据重置脚本
-流程/      每次代码任务的实现记录
-docker-compose.yml  API、PostgreSQL、Redis 本地编排
+docs/      设计与配置文档（Runtime V2、LLM 路由、历史更新记录）
+docker-compose.yml  API、Agent、PostgreSQL、Redis 本地编排
 ```
 
 ## 演示账号
@@ -167,48 +169,27 @@ npm run build
 
 ---
 
-## 最近更新（2026-07）
+## 最近更新（2026-08）
 
-### 面试舱真实题目选择与简历深挖
+### 排查工坊 Runtime V2
 
-- `/interviews` 在同一页面提供自由选题、岗位专项和简历深挖三种模式
-- 自由选题按真实 `question_id` 精确启动；题卡展示稳定题号、领域、难度和题型，支持搜索与筛选
-- 点击题卡只更新选择，选中后显示勾选标记；当前模式满足条件后开始按钮才会激活
-- 推荐排序优先匹配合格简历与项目经历，再参考目标岗位、历史薄弱项、未练习状态和更新时间
-- 岗位专项支持岗位名称与技术范围搜索，切换模式时保留各自选择和共享设置
+单 Agent + 工具调用 Runtime 重构落地，三层（Python/Go/前端）契约同步迁移：
 
-### 多份简历与质量门槛
+- **V2 事件协议**（`hiddenworld.v2`）：判别联合 payload、`sequence`/`state_revision`/`schema_version` 职责分离，Go 成为 public sequence 唯一生成者，断线重连与幂等重放不重编号
+- **用户动作授权**：观察类工具只能执行学生明确提出或 QuickAction 点击授权的检查，Agent 自主观察被确定性拒绝
+- **无参数答案比较**：`compare_answer` 由 Runtime 绑定当前轮答案尝试，模型无法探测标准答案；CanonicalAnswer 独立持久化并有生成/加载强校验
+- **前端新交互**：事件驱动思考态、内嵌 Task List、QuickActions 快捷动作、工具结果/线索统一渲染 `markdown_ready`；界面不再出现「排查导师」等身份文字
+- **旧会话兼容**：v1 事件经 LegacyEventAdapter 进入同一渲染管线，历史数据只读兼容不回填
 
-- 个人档案支持保存和切换多份简历，上传 `TXT / Markdown / DOCX / PDF` 文件
-- `TXT / Markdown` 与手动填写内容可编辑，`DOCX / PDF` 保留原文件并以只读方式预览
-- 导入和手动保存复用同一质量检测，内容过少、信息类型不足或明显重复/乱码时拒绝写入
-- 简历深挖只允许选择本人且已通过质量检测的文档，并把本场候选人上下文保存为会话快照
+详见 [docs/scenario-runtime-v2.md](docs/scenario-runtime-v2.md)。
 
-### 面试无关作答误判修复
+### LLM 顺序路由（替代 LiteLLM）
 
-- 修复认真中文技术作答被误判为离题的问题
-- 增加技术结构词与题面短语相关度判断
-- 保留闲聊拦截与多次无效后结束逻辑
+全部 LLM 调用改由 `config/llm_routes.yaml` 声明的顺序路由接管，Python 与 Go 共用一份配置：官方 GLM / DeepSeek / MiniMax 预置默认地址与模型，key 引用 `.env` 环境变量不落盘，key 留空自动跳过该站，站点失败自动切下一站。
 
-### 面试时间线与历史清理
+详见 [docs/llm-routing.md](docs/llm-routing.md)。
 
-- 会话页按真实轮次展示开场题、用户回答与 AI 追问
-- 右侧面试导航与消息顺序保持一致
-- 历史面试支持清空全部，会先确认再逐条删除
-
-### DeepSeek / Embedding
-
-- DeepSeek 通过 `DEEPSEEK_KEY` 注入，容器重建后生效
-- Embedding 默认路由调整为 `https://router.tumuer.me/`
-- 反馈失败时回退 mock，可在系统状态页观察
-
-### 密码重置与其他
-
-- 完善邮箱密码重置与公开重置页
-- SMTP 环境变量注入修正
-- 面试会话时间线与锚点导航
-- Mentor 旧接口兼容回退
-
+> 更早的更新记录见 [docs/changelog-2026-07.md](docs/changelog-2026-07.md)。
 ---
 
 ## 环境变量
@@ -221,9 +202,8 @@ JWT_SECRET=replace-with-a-long-random-secret
 STORE_MODE=postgres
 DATABASE_URL=postgres://teaching:teaching@localhost:5432/teaching_mvp?sslmode=disable
 REDIS_URL=redis://localhost:6379/0
-LLM_BASE_URL=
-LLM_API_KEY=
-LLM_MODEL=
+# LLM 路由已由 config/llm_routes.yaml 接管（见 docs/llm-routing.md）
+# 站点 key 经 GLM_API_KEY / DEEPSEEK_KEY / MINIMAX_API_KEY 注入
 ZETA_KEY=
 JIANYI_API_KEY=
 DEEPSEEK_KEY=
@@ -244,11 +224,11 @@ STT_TIMEOUT_SECONDS=60
 - `STORE_MODE=postgres` 时使用 PostgreSQL。
 - `STORE_MODE=memory` 或未配置 `DATABASE_URL` 时降级为内存存储。
 - `REDIS_URL` 存在且连接成功时启用接口限流；连接失败时自动降级为不限流。
-- AI Provider 自动选择：存在 `DEEPSEEK_KEY` 时默认使用 DeepSeek；否则存在 `JIANYI_API_KEY` 时使用第三方中转站；都不存在时使用 mock。
+- LLM 调用统一由 `config/llm_routes.yaml` 顺序路由接管：按声明顺序尝试站点，key 留空自动跳过，站点失败自动切换下一站；`GLM_API_KEY` / `DEEPSEEK_KEY` / `MINIMAX_API_KEY` 等站点 key 在 `.env` 注入。详见 [docs/llm-routing.md](docs/llm-routing.md)。
 - DeepSeek 固定默认地址为 `https://api.deepseek.com`，默认模型为 `deepseek-v4-flash`。
 - 情景题生成任务 `scenario_generate` 会优先固定使用 `deepseek-v4-flash`；即使管理员把全局 AI 配置改成其他 DeepSeek 模型，生成题仍回到该模型执行，失败后再按 Provider 链路降级。
 - `scenario_generate` 是非流式结构化 JSON 调用；验证时系统状态的 recent attempts 应显示 DeepSeek 成功，页面来源应为 `DeepSeek deepseek-v4-flash`，不应因全局流式开关误显示 `Mock LLM 兜底`。
-- 第三方中转站可使用 `LLM_BASE_URL=https://jeniya.top`、`JIANYI_API_KEY=<your-key>`、`LLM_MODEL=gpt-5.5`。
+- 第三方中转站：在 `config/llm_routes.yaml` 追加条目（base_url + api_key + model）即可，支持 `extra_headers`。
 - 排查会话语义网关会直接调用 `https://router.tumuer.me/v1/embeddings`；Key 读取顺序为 `EMBEDDING_API_KEY`、`jeniya_embedding_key`、`JIANYI_API_KEY`，推荐用 `jeniya_embedding_key` 放置 embedding 专用 key。默认模型为 `text-embedding-3-small`；如果需要切换模型，请确认该模型仍在 embeddings 端点可用。未配置 key 或调用失败时，后端保留本地相似度与关键词规则，不影响 Go 后端单独运行。
 - 语音转写优先使用 `STT_API_KEY`，其次 `ZETA_KEY`，最后兼容 `JIANYI_API_KEY`；存在 `ZETA_KEY` 时默认 `STT_BASE_URL=https://api.zetatechs.com`，默认 `STT_MODEL=gpt-4o-mini-transcribe-2025-12-15`。
 - Zeta 可选路线包括 `https://api.zetatechs.com`、`https://api.zetatechs.online`、`https://ent.zetatechs.com`、`https://ent.zetatechs.online`，用 `STT_BASE_URL` 切换。
