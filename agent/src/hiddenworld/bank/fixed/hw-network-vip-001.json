@@ -22,31 +22,35 @@
   },
   "hidden_world": {
     "root_cause": {
-      "id": "RC_NETWORK_VIP_ROUTE",
-      "category": "dependency",
+      "id": "RC_GATEWAY_TIMEOUT",
+      "category": "config",
       "component": "云负载均衡 VIP",
-      "description": "网关发布时 VIP 后端路由列表遗漏了一个回调服务可用区，部分请求被转发到不存在的后端，触发连接超时和重试。",
+      "description": "10:05 网关发布把 upstream response_timeout 从 10 秒调整为 3 秒；少量回调因订单库锁等待需要 3～5 秒，网关先返回 504，后端随后仍可能成功完成并触发支付平台重试。",
       "sufficient_evidence_sets": [
-        ["E_CALLBACK_TIMEOUT", "E_VIP_ROUTE"],
-        ["E_GATEWAY_CHANGE", "E_ROUTE_DIFF"]
+        ["E_GATEWAY_TIMEOUT_CONFIG", "E_CALLBACK_TIMEOUT", "E_NGINX_LATE_200", "E_DB_LOCK_WAIT"],
+        ["E_GATEWAY_CHANGE", "E_GATEWAY_TIMEOUT_CONFIG", "E_SERVICE_SLOW", "E_DB_LOCK_WAIT"]
       ],
-      "accepted_hypotheses": ["H_VIP_ROUTE"],
+      "accepted_hypotheses": ["H_GATEWAY_TIMEOUT", "H_DB_LOCK"],
       "solution_requirements": [
-        "修正 VIP 后端路由并恢复缺失的可用区后端",
-        "把路由目标数量和可用区覆盖加入发布前检查"
+        "恢复或合理调整 Gateway response_timeout",
+        "排查并治理订单库锁等待造成的长尾延迟",
+        "保证支付回调幂等",
+        "调整后继续观察 504、重试率和 P99 延迟"
       ]
     },
     "canonical_answer": {
-      "canonical_conclusion": "10:05 网关发布遗漏 zone-b 的 VIP 后端目标，部分请求被转发到不存在的后端并发生连接超时和重试。",
-      "root_cause_id": "RC_NETWORK_VIP_ROUTE",
-      "required_evidence_ids": ["E_CALLBACK_TIMEOUT", "E_VIP_ROUTE"],
-      "required_causal_relations": ["REL_GATEWAY_RELEASE_TO_ROUTE_OMISSION", "REL_ROUTE_OMISSION_TO_TIMEOUT"],
-      "accepted_equivalents": ["网关发布漏掉 zone-b 后端，导致 VIP 流量命中无健康实例并超时。"],
-      "solution_requirements": ["修正 VIP 后端路由并恢复缺失的可用区后端", "把路由目标数量和可用区覆盖加入发布前检查"],
+      "canonical_conclusion": "10:05 网关发布把 response_timeout 从 10 秒改为 3 秒；少量回调因订单库锁等待需要 3～5 秒，网关先返回 504，而 Nginx/后端稍后仍以 200 完成，支付平台因此重试。",
+      "root_cause_id": "RC_GATEWAY_TIMEOUT",
+      "required_evidence_ids": ["E_GATEWAY_TIMEOUT_CONFIG", "E_CALLBACK_TIMEOUT", "E_NGINX_LATE_200", "E_DB_LOCK_WAIT"],
+      "required_causal_relations": ["REL_GATEWAY_RELEASE_TO_TIMEOUT", "REL_DB_LOCK_TO_SLOW_CALLBACK", "REL_TIMEOUT_TO_GATEWAY_504", "REL_GATEWAY_504_TO_RETRY"],
+      "accepted_equivalents": ["网关超时从 10 秒缩短到 3 秒，数据库锁等待让少量回调超过 3 秒，网关 504 但后端随后成功并触发重试。"],
+      "solution_requirements": ["恢复或合理调整 Gateway response_timeout", "排查并治理订单库锁等待造成的长尾延迟", "保证支付回调幂等", "调整后继续观察 504、重试率和 P99 延迟"],
       "answer_version": "hiddenworld.v2"
     },
-    "diagnostic_relations": ["REL_GATEWAY_RELEASE_TO_ROUTE_OMISSION", "REL_ROUTE_OMISSION_TO_TIMEOUT"],
+    "diagnostic_relations": ["REL_GATEWAY_RELEASE_TO_TIMEOUT", "REL_DB_LOCK_TO_SLOW_CALLBACK", "REL_TIMEOUT_TO_GATEWAY_504", "REL_GATEWAY_504_TO_RETRY"],
     "hypotheses": [
+      { "hypothesis_id": "H_GATEWAY_TIMEOUT", "label": "网关响应超时配置过短" },
+      { "hypothesis_id": "H_DB_LOCK", "label": "数据库锁等待导致长尾延迟" },
       { "hypothesis_id": "H_VIP_ROUTE", "label": "VIP 后端路由错误" },
       { "hypothesis_id": "H_DNS", "label": "DNS 解析异常" },
       { "hypothesis_id": "H_CPU", "label": "回调服务资源打满" },
@@ -55,40 +59,51 @@
       { "hypothesis_id": "H_OTHER", "label": "其他" }
     ],
     "evidence_graph": [
-      { "evidence_id": "E_CALLBACK_TIMEOUT", "content": "回调服务访问 VIP 时有 8% 请求连接建立超过 2 秒，失败请求集中在同一批重试流量。", "category": "logs", "prerequisites": [], "obtained_by": ["inspect:logs.callback_timeout"] },
-      { "evidence_id": "E_VIP_ROUTE", "content": "VIP 监控显示部分请求被转发到一个没有健康实例的后端目标，正常目标没有同样的超时。", "category": "dependency", "prerequisites": [], "obtained_by": ["inspect:dependency.vip_route"] },
-      { "evidence_id": "E_GATEWAY_CHANGE", "content": "上午 10:05 的网关发布修改了 VIP 后端池配置，时间与超时开始时间一致。", "category": "change", "prerequisites": [], "obtained_by": ["inspect:change.gateway_release"] },
-      { "evidence_id": "E_ROUTE_DIFF", "content": "变更前后的路由清单对比发现，zone-b 的回调服务目标不在变更后的 VIP 后端列表中。", "category": "config", "prerequisites": ["E_GATEWAY_CHANGE"], "obtained_by": ["inspect:config.route_diff"] },
+      { "evidence_id": "E_CALLBACK_TIMEOUT", "content": "Gateway 日志显示少量回调在 3.000 秒处返回 504，失败请求集中在重试流量。", "category": "logs", "prerequisites": [], "obtained_by": ["inspect:logs.callback_timeout"] },
+      { "evidence_id": "E_GATEWAY_TIMEOUT_CONFIG", "content": "网关切换前 upstream response_timeout 为 10 秒，切换后变为 3 秒，其他主要配置没有明显变化。", "category": "config", "prerequisites": [], "obtained_by": ["inspect:config.route_diff"] },
+      { "evidence_id": "E_GATEWAY_CHANGE", "content": "上午 10:05 的网关发布早于第一批超时，发布时间与配置差异吻合。", "category": "change", "prerequisites": [], "obtained_by": ["inspect:change.gateway_release"] },
+      { "evidence_id": "E_NGINX_LATE_200", "content": "同一 request_id=pay_b72 在 Nginx 侧 3.842 秒后返回 200，upstream_response_time 为 3.841 秒。", "category": "logs", "prerequisites": ["E_CALLBACK_TIMEOUT"], "obtained_by": ["inspect:logs.nginx_callback"] },
+      { "evidence_id": "E_SERVICE_SLOW", "content": "回调服务同一请求 total=3810ms，其中 db_time=3544ms。", "category": "logs", "prerequisites": ["E_NGINX_LATE_200"], "obtained_by": ["inspect:logs.service_callback"] },
+      { "evidence_id": "E_DB_LOCK_WAIT", "content": "数据库监控显示 order_id=78291 的 lock_wait=3.31s，足以把少量请求拖过新的 3 秒网关限制。", "category": "metrics", "prerequisites": ["E_SERVICE_SLOW"], "obtained_by": ["inspect:database.lock_wait"] },
+      { "evidence_id": "E_DB_WRITE_OK", "content": "订单库写入提交成功率 99.98%，返回码 200，未见写入超时。", "category": "data", "prerequisites": [], "obtained_by": ["inspect:database.order_write"] },
+      { "evidence_id": "E_SLOW_QUERY_NORMAL", "content": "MySQL 慢查询日志没有与本次超时同时升高的慢查询峰值。", "category": "data", "prerequisites": [], "obtained_by": ["inspect:database.slow_query"] },
+      { "evidence_id": "E_VIP_ROUTE_NORMAL", "content": "VIP 后端健康检查与路由目标数量正常，没有发现缺失后端证据。", "category": "dependency", "prerequisites": [], "obtained_by": ["inspect:dependency.vip_route"] },
       { "evidence_id": "E_DNS_NORMAL", "content": "支付平台和内部探针解析 VIP 的结果一致，DNS TTL 和解析延迟均正常。", "category": "dependency", "prerequisites": [], "obtained_by": ["inspect:dependency.dns"] },
       { "evidence_id": "E_CPU_NORMAL", "content": "6 个回调服务 Pod CPU 和内存均低于 45%，没有排队和重启峰值。", "category": "metrics", "prerequisites": [], "obtained_by": ["inspect:metrics.service"] }
     ],
     "observations": [
-      { "action": "inspect:logs.callback_timeout", "result": "模拟回调访问日志（10:00-10:20）：10:05 后请求分别命中 vip-zone-a、vip-zone-b；zone-a 多为 HTTP 200（约 92%），zone-b 出现 HTTP 401（上游拒绝）和 connect timeout（连接建立超过 2s），失败请求重试后大多回到 HTTP 200。日志字段：upstream=callback-zone-b、connect_ms=2000、retry=1。", "is_negative": false, "yields_evidence": ["E_CALLBACK_TIMEOUT"], "rules_out": [], "unmet_prerequisite_result": "请在输入框直接说要看回调访问日志，并可附上时间范围。" },
-      { "action": "inspect:dependency.vip_route", "result": "VIP 后端池里有一个目标没有健康实例，超时请求都落到了这个目标。", "is_negative": false, "yields_evidence": ["E_VIP_ROUTE"], "rules_out": [], "unmet_prerequisite_result": "你要检查哪个入口的后端池？" },
-      { "action": "inspect:change.gateway_release", "result": "10:05 的网关发布修改了 VIP 后端池，发布时间早于第一批超时。", "is_negative": false, "yields_evidence": ["E_GATEWAY_CHANGE"], "rules_out": [], "unmet_prerequisite_result": "请先给出要核对的发布时间或网关对象。" },
-      { "action": "inspect:config.route_diff", "result": "路由差异显示 zone-b 回调服务目标被遗漏。", "is_negative": false, "yields_evidence": ["E_ROUTE_DIFF"], "rules_out": [], "unmet_prerequisite_result": "要比对哪一次网关变更前后的路由清单？" },
+      { "action": "inspect:logs.callback_timeout", "result": "Gateway 日志（10:00-10:20）：pay_a81 返回 200、response_time=0.284s；pay_b72 和 pay_c19 返回 504、response_time=3.000s。失败请求集中在重试流量。", "is_negative": false, "yields_evidence": ["E_CALLBACK_TIMEOUT"], "rules_out": [], "unmet_prerequisite_result": "请说明要查看回调访问日志或给出时间范围。" },
+      { "action": "inspect:dependency.vip_route", "result": "VIP 后端健康检查和路由目标数量正常，暂未看到后端池缺失证据。", "is_negative": true, "yields_evidence": ["E_VIP_ROUTE_NORMAL"], "rules_out": ["H_VIP_ROUTE"], "unmet_prerequisite_result": "" },
+      { "action": "inspect:change.gateway_release", "result": "10:05 的网关发布早于第一批超时，发布记录显示本次变更涉及 VIP 入口配置。", "is_negative": false, "yields_evidence": ["E_GATEWAY_CHANGE"], "rules_out": [], "unmet_prerequisite_result": "请说明要查看网关发布记录。" },
+      { "action": "inspect:config.route_diff", "result": "网关切换前后配置差异：upstream response_timeout 从 10s 变为 3s；connect_timeout、健康检查间隔和负载均衡策略没有明显变化。", "is_negative": false, "yields_evidence": ["E_GATEWAY_TIMEOUT_CONFIG"], "rules_out": [], "unmet_prerequisite_result": "请说明要查看网关切换前后的配置差异。" },
+      { "action": "inspect:logs.nginx_callback", "result": "Nginx 日志：同一 request_id=pay_b72 在 3.842s 后返回 200，request_time=3.842s，upstream_response_time=3.841s。", "is_negative": false, "yields_evidence": ["E_NGINX_LATE_200"], "rules_out": [], "unmet_prerequisite_result": "请先提供对应的网关超时请求标识。" },
+      { "action": "inspect:logs.service_callback", "result": "回调服务日志：request_id=pay_b72，total=3810ms，db_time=3544ms。", "is_negative": false, "yields_evidence": ["E_SERVICE_SLOW"], "rules_out": [], "unmet_prerequisite_result": "请先提供对应的慢回调请求。" },
+      { "action": "inspect:database.lock_wait", "result": "数据库监控：order_id=78291，lock_wait=3.31s。", "is_negative": false, "yields_evidence": ["E_DB_LOCK_WAIT"], "rules_out": [], "unmet_prerequisite_result": "请先说明要查看数据库锁等待指标。" },
       { "action": "inspect:dependency.dns", "result": "多地探针解析 VIP 一致，解析延迟正常。", "is_negative": true, "yields_evidence": ["E_DNS_NORMAL"], "rules_out": ["H_DNS"], "unmet_prerequisite_result": "" },
       { "action": "inspect:metrics.service", "result": "服务 Pod 资源平稳，没有 CPU、内存或重启异常。", "is_negative": true, "yields_evidence": ["E_CPU_NORMAL"], "rules_out": ["H_CPU"], "unmet_prerequisite_result": "" },
       { "action": "inspect:dependency.firewall", "result": "安全组规则没有在该时间窗口发生变更，其他接口链路也未出现连接拒绝。", "is_negative": true, "yields_evidence": [], "rules_out": ["H_FIREWALL"], "unmet_prerequisite_result": "" },
       { "action": "inspect:dependency.payment_provider", "result": "支付平台成功率和其他商户接口均正常，异常只出现在本方 VIP 入口。", "is_negative": true, "yields_evidence": [], "rules_out": ["H_PAYMENT_PROVIDER"], "unmet_prerequisite_result": "" }
-       ,{ "action": "inspect:database.order_write", "result": "订单库写入日志（10:00-10:20）：INSERT order_callback 的提交成功率 99.98%，返回码 200；未见锁等待、连接池耗尽或写入超时。少量 401 只出现在网关入口日志，数据库没有对应失败写入。", "is_negative": true, "yields_evidence": [], "rules_out": [], "unmet_prerequisite_result": "请说明要查询订单写入日志或给出只读 SQL。" }
-       ,{ "action": "inspect:database.slow_query", "result": "MySQL 慢查询日志（10:00-10:20）：未发现与本次回调超时同时升高的慢查询；查询耗时和记录数没有异常峰值。", "is_negative": true, "yields_evidence": [], "rules_out": [], "unmet_prerequisite_result": "请说明要查询 MySQL 慢查询日志或给出只读查询。" }
+       ,{ "action": "inspect:database.order_write", "result": "订单库写入日志（10:00-10:20）：INSERT order_callback 的提交成功率 99.98%，返回码 200；未见写入超时。少量 401 只出现在网关入口日志，数据库没有对应失败写入。", "is_negative": true, "yields_evidence": ["E_DB_WRITE_OK"], "rules_out": [], "unmet_prerequisite_result": "请说明要查询订单写入日志或给出只读 SQL。" }
+       ,{ "action": "inspect:database.slow_query", "result": "MySQL 慢查询日志（10:00-10:20）：未发现与本次回调超时同时升高的慢查询；查询耗时和记录数没有异常峰值。", "is_negative": true, "yields_evidence": ["E_SLOW_QUERY_NORMAL"], "rules_out": [], "unmet_prerequisite_result": "请说明要查询 MySQL 慢查询日志或给出只读查询。" }
     ],
     "virtual_tools": [
-      { "tool_id": "tool.logs.callback", "kind": "logs", "target": "回调访问日志", "aliases": ["看回调日志", "回调服务日志", "网关日志", "访问日志", "看日志"], "query_patterns": ["status=401", "connect timeout", "upstream=callback", "SELECT * FROM callback_access_log"], "redacted_parameters": ["time_range", "upstream"], "simulated_output": "返回 200、401、connect timeout、upstream 和 retry 字段的回调访问日志。", "observation_action": "inspect:logs.callback_timeout", "evidence_ids": ["E_CALLBACK_TIMEOUT"] },
-      { "tool_id": "tool.change.gateway", "kind": "config", "target": "网关 VIP 发布记录", "aliases": ["看网关配置", "网关发布", "看发布记录"], "query_patterns": ["SELECT * FROM gateway_release", "release gateway"], "redacted_parameters": ["time_range", "release_id"], "simulated_output": "返回 10:05 网关发布修改 VIP 后端池的模拟记录。", "observation_action": "inspect:change.gateway_release", "evidence_ids": ["E_GATEWAY_CHANGE"] },
-      { "tool_id": "tool.config.route", "kind": "config", "target": "网关 VIP 后端池与路由差异", "aliases": ["后端池定义", "VIP 后端池", "路由配置", "看路由差异"], "query_patterns": ["SELECT backend_pool", "route diff", "vip backend"], "redacted_parameters": ["release_id", "route"], "simulated_output": "返回网关变更前后的 VIP 路由差异模拟结果。", "observation_action": "inspect:config.route_diff", "evidence_ids": ["E_ROUTE_DIFF"] },
-       { "tool_id": "tool.database.orders", "kind": "database", "target": "订单库回调写入日志", "aliases": ["数据库日志", "订单库日志", "订单库写入日志", "看订单库日志", "看数据库", "订单写入", "数据库写入"], "query_patterns": ["SELECT * FROM order_write_log", "SELECT count(*) FROM order_callback", "SHOW ENGINE INNODB STATUS"], "redacted_parameters": ["time_range", "table"], "simulated_output": "返回订单写入成功率、返回码、锁等待和连接池状态的模拟记录。", "observation_action": "inspect:database.order_write", "evidence_ids": [] },
-       { "tool_id": "tool.database.slow_query", "kind": "database", "target": "MySQL 慢查询日志", "aliases": ["MySQL慢查询日志", "慢查询日志", "MySQL 慢日志", "看慢查询"], "query_patterns": ["SELECT * FROM mysql.slow_log", "SELECT * FROM slow_query_log", "slow query"], "redacted_parameters": ["time_range", "table"], "simulated_output": "返回 MySQL 慢查询日志的公开结果。", "observation_action": "inspect:database.slow_query", "evidence_ids": [] }
+      { "tool_id": "tool.logs.callback", "kind": "logs", "target": "回调访问日志", "aliases": ["看回调日志", "网关日志", "Gateway日志", "访问日志", "看日志"], "query_patterns": ["status=504", "response_time=3.000s", "SELECT * FROM callback_access_log"], "redacted_parameters": ["time_range", "request_id"], "simulated_output": "返回 Gateway 200/504 与 response_time 字段的回调访问日志。", "observation_action": "inspect:logs.callback_timeout", "evidence_ids": ["E_CALLBACK_TIMEOUT"] },
+      { "tool_id": "tool.logs.nginx", "kind": "logs", "target": "Nginx 回调访问日志", "aliases": ["Nginx日志", "Nginx 访问日志", "看Nginx日志", "查Nginx"], "query_patterns": ["request_id=pay_b72", "upstream_response_time", "SELECT * FROM nginx_access_log"], "redacted_parameters": ["time_range", "request_id"], "simulated_output": "返回同一 request_id 在 Nginx 侧的最终状态和耗时。", "observation_action": "inspect:logs.nginx_callback", "evidence_ids": ["E_NGINX_LATE_200"] },
+      { "tool_id": "tool.logs.service", "kind": "logs", "target": "回调服务耗时日志", "aliases": ["回调服务日志", "服务耗时日志", "看回调服务", "db_time"], "query_patterns": ["db_time", "total=3810ms", "request_id=pay_b72"], "redacted_parameters": ["time_range", "request_id"], "simulated_output": "返回回调服务 total 与 db_time 的耗时拆分。", "observation_action": "inspect:logs.service_callback", "evidence_ids": ["E_SERVICE_SLOW"] },
+      { "tool_id": "tool.change.gateway", "kind": "config", "target": "网关 VIP 发布记录", "aliases": ["看网关发布记录", "网关发布", "看发布记录"], "query_patterns": ["SELECT * FROM gateway_release", "release gateway"], "redacted_parameters": ["time_range", "release_id"], "simulated_output": "返回 10:05 网关发布记录与发布时间。", "observation_action": "inspect:change.gateway_release", "evidence_ids": ["E_GATEWAY_CHANGE"] },
+      { "tool_id": "tool.config.route", "kind": "config", "target": "网关切换前后配置差异", "aliases": ["配置差异", "切换前后配置", "response_timeout", "路由配置", "看配置差异"], "query_patterns": ["SELECT response_timeout FROM gateway_config", "response_timeout", "config diff"], "redacted_parameters": ["release_id", "config_scope"], "simulated_output": "返回网关切换前后的 response_timeout 等配置差异。", "observation_action": "inspect:config.route_diff", "evidence_ids": ["E_GATEWAY_TIMEOUT_CONFIG"] },
+       { "tool_id": "tool.database.orders", "kind": "database", "target": "订单库回调写入日志", "aliases": ["数据库日志", "订单库日志", "订单库写入日志", "看订单库日志", "订单写入", "数据库写入"], "query_patterns": ["SELECT * FROM order_write_log", "SELECT count(*) FROM order_callback", "SHOW ENGINE INNODB STATUS"], "redacted_parameters": ["time_range", "table"], "simulated_output": "返回订单写入成功率、返回码和写入耗时状态。", "observation_action": "inspect:database.order_write", "evidence_ids": ["E_DB_WRITE_OK"] },
+       { "tool_id": "tool.database.lock_wait", "kind": "metrics", "target": "数据库锁等待指标", "aliases": ["数据库锁等待", "锁等待", "DB锁等待", "看锁等待"], "query_patterns": ["lock_wait", "SHOW ENGINE INNODB STATUS", "performance_schema.data_lock_waits"], "redacted_parameters": ["time_range", "order_id"], "simulated_output": "返回订单回调对应的锁等待时长。", "observation_action": "inspect:database.lock_wait", "evidence_ids": ["E_DB_LOCK_WAIT"] },
+       { "tool_id": "tool.database.slow_query", "kind": "database", "target": "MySQL 慢查询日志", "aliases": ["MySQL慢查询日志", "慢查询日志", "MySQL 慢日志", "看慢查询"], "query_patterns": ["SELECT * FROM mysql.slow_log", "SELECT * FROM slow_query_log", "slow query"], "redacted_parameters": ["time_range", "table"], "simulated_output": "返回 MySQL 慢查询日志的公开结果。", "observation_action": "inspect:database.slow_query", "evidence_ids": ["E_SLOW_QUERY_NORMAL"] }
     ],
     "solution_rubric": {
-      "required_actions": ["修正 VIP 后端路由并恢复缺失的可用区后端", "把路由目标数量和可用区覆盖加入发布前检查"],
-      "verification_steps": ["确认所有可用区后端均健康", "观察回调超时率和重试率回落", "检查发布前路由覆盖校验"],
-      "rollback_notes": ["先回滚网关路由配置，再在低峰期补发修正版本", "保留变更前后路由清单用于审计"]
+      "required_actions": ["恢复或合理调整 Gateway response_timeout", "排查并治理订单库锁等待造成的长尾延迟", "保证支付回调幂等", "调整后继续观察 504、重试率和 P99 延迟"],
+      "verification_steps": ["确认网关 504 和 response_timeout 恢复到合理范围", "观察回调超时率、重试率和 P99 延迟回落", "确认数据库锁等待长尾消失并保持回调幂等"],
+      "rollback_notes": ["先回滚网关 timeout 配置，再在低峰期治理数据库锁等待", "保留变更前后配置、request_id 和锁等待记录用于审计"]
     },
     "misconception_rules": [
       { "misconception_id": "M_BLAME_DNS", "pattern_hypotheses": ["H_DNS"], "why_wrong": "多地解析一致且延迟正常，异常只发生在 VIP 后端转发。" },
-      { "misconception_id": "M_BLAME_CPU", "pattern_hypotheses": ["H_CPU"], "why_wrong": "服务资源平稳，超时集中在无健康实例的路由目标。" },
+      { "misconception_id": "M_BLAME_CPU", "pattern_hypotheses": ["H_CPU"], "why_wrong": "服务资源平稳，当前证据指向网关 timeout 与数据库长尾，而不是 CPU 打满。" },
       { "misconception_id": "M_BLAME_PROVIDER", "pattern_hypotheses": ["H_PAYMENT_PROVIDER"], "why_wrong": "支付平台其他接口正常，问题从本方网关发布后开始。" }
     ]
   }
