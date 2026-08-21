@@ -178,8 +178,13 @@ class SingleAgentRuntime:
         actions = [] if is_clarification else [item for item in successful_actions if item]
         actions = list(dict.fromkeys(actions))
         effective_analysis = analysis.model_copy(update={"actions": actions})
+        # QuickAction 已由 Runtime 直接执行，模型回注上下文里故意没有授权动作，
+        # 因此模型返回的 assessment.actions 可能为空；对外传输的结构化
+        # TurnAssessment 必须与最终 TurnAnalysis 共用同一份 Runtime 事实，
+        # 否则 Go 会把它判定为跨层语义不一致。
+        effective_assessment = assessment.model_copy(update={"actions": actions})
         teaching_decision = _teaching_decision_from_agent(
-            final_output, events, assessment, has_observations=False
+            final_output, events, effective_assessment, has_observations=False
         )
         # 先用同一个 StateReducer 入口取得本轮允许公开的证据，再过滤执行器
         # 返回；最终归约仍会在观察注入后重新计算状态、关系和教学约束。
@@ -221,7 +226,7 @@ class SingleAgentRuntime:
                 observations.append(observation)
         if observations:
             teaching_decision = _teaching_decision_from_agent(
-                final_output, events, assessment, has_observations=True
+                final_output, events, effective_assessment, has_observations=True
             )
         reduction = StateReducer().reduce(
             request,
@@ -309,17 +314,37 @@ class SingleAgentRuntime:
         try:
             action = Guard().validate(action, constraints=constraints, context=guard_context)
         except ValueError as exc:
-            retry_context = _reply_retry_context(
-                context,
-                events,
-                feedback=getattr(exc, "code", "reply_guard_rejected"),
-                evidence_request=evidence_request,
-            )
-            retry_output = await _retry_final_reply(runner, retry_context, feedback=retry_context.reply_feedback)
-            if retry_output is None:
-                raise TurnDeadlineExceeded("agent did not produce a reply accepted by the public boundary") from exc
-            action = _mentor_action_from_reply(retry_output.reply, teaching_decision)
-            action = Guard().validate(action, constraints=constraints, context=guard_context)
+            last_error = exc
+            accepted = False
+            for _ in range(2):
+                retry_context = _reply_retry_context(
+                    context,
+                    events,
+                    feedback=getattr(last_error, "code", "reply_guard_rejected"),
+                    evidence_request=evidence_request,
+                )
+                retry_output = await _retry_final_reply(
+                    runner,
+                    retry_context,
+                    feedback=retry_context.reply_feedback,
+                )
+                if retry_output is None:
+                    break
+                action = _mentor_action_from_reply(retry_output.reply, teaching_decision)
+                try:
+                    action = Guard().validate(action, constraints=constraints, context=guard_context)
+                    accepted = True
+                    break
+                except ValueError as retry_error:
+                    last_error = retry_error
+            else:
+                raise TurnDeadlineExceeded(
+                    "agent did not produce a reply accepted by the public boundary"
+                ) from last_error
+            if not accepted:
+                raise TurnDeadlineExceeded(
+                    "agent did not produce a reply accepted by the public boundary"
+                ) from last_error
         final_trace = _public_trace_after_mentor(start_sequence=len(public_trace) + 1)
         public_trace.extend(final_trace)
         await _emit_trace(on_public_trace, final_trace)
@@ -337,7 +362,7 @@ class SingleAgentRuntime:
             expected_revision=request.state_revision,
             reply=action.reply,
             turn_analysis=effective_analysis,
-            turn_assessment=assessment,
+            turn_assessment=effective_assessment,
             teaching_decision=teaching_decision,
             guidance_state=guidance_state,
             turn_control=turn_control,
