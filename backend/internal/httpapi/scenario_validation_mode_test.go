@@ -20,6 +20,7 @@ func newServerForValidationTest(t *testing.T, mode scenarioValidationMode, clien
 	dataStore := store.NewMemoryStore(auth.HashPassword)
 	server := NewServerForTests(dataStore, auth.NewManager("test-secret", 3600), client)
 	server.scenarioValidationMode = mode
+	server.scenarioPublicTraceValidationMode = mode
 	return server, server.Handler(), dataStore
 }
 
@@ -41,6 +42,28 @@ func TestScenarioValidationModeFromEnvParsesKnownValues(t *testing.T) {
 		getenvValue = func(string) string { return raw }
 		if got := scenarioValidationModeFromEnv(); got != expected {
 			t.Fatalf("env %q: expected %s, got %s", raw, expected, got)
+		}
+	}
+}
+
+func TestScenarioPublicTraceValidationModeDefaultsToLogAndSupportsStrictOptIn(t *testing.T) {
+	original := getenvValue
+	defer func() { getenvValue = original }()
+	for raw, expected := range map[string]scenarioValidationMode{
+		"":       scenarioValidationLog,
+		" log ":  scenarioValidationLog,
+		"strict": scenarioValidationStrict,
+		"off":    scenarioValidationOff,
+		"bad":    scenarioValidationLog,
+	} {
+		getenvValue = func(key string) string {
+			if key == "SCENARIO_PUBLIC_TRACE_VALIDATION_MODE" {
+				return raw
+			}
+			return ""
+		}
+		if got := scenarioPublicTraceValidationModeFromEnv(); got != expected {
+			t.Fatalf("public trace env %q: expected %s, got %s", raw, expected, got)
 		}
 	}
 }

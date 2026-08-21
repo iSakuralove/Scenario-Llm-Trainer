@@ -188,10 +188,15 @@ func (s *Server) handleScenarioSession(w http.ResponseWriter, r *http.Request, u
 			return
 		}
 		var req struct {
-			Content       string `json:"content"`
-			RequestID     string `json:"request_id"`
-			StateRevision *int   `json:"state_revision"`
-			AfterSequence int    `json:"after_sequence"`
+			Content          string `json:"content"`
+			RequestID        string `json:"request_id"`
+			StateRevision    *int   `json:"state_revision"`
+			AfterSequence    int    `json:"after_sequence"`
+			StructuredAction *struct {
+				ActionID        string `json:"action_id"`
+				CatalogVersion  string `json:"catalog_version"`
+				NormalizedScope string `json:"normalized_scope"`
+			} `json:"structured_user_action"`
 		}
 		if !decode(w, r, &req) {
 			return
@@ -202,10 +207,18 @@ func (s *Server) handleScenarioSession(w http.ResponseWriter, r *http.Request, u
 			requestID = store.NewID()
 		}
 		userContent := strings.TrimSpace(req.Content)
+		structuredAction := (*scenarioStructuredUserAction)(nil)
+		if req.StructuredAction != nil && strings.TrimSpace(req.StructuredAction.ActionID) != "" {
+			structuredAction = &scenarioStructuredUserAction{
+				ActionID:        strings.TrimSpace(req.StructuredAction.ActionID),
+				CatalogVersion:  strings.TrimSpace(req.StructuredAction.CatalogVersion),
+				NormalizedScope: strings.TrimSpace(req.StructuredAction.NormalizedScope),
+			}
+		}
 		sentThrough := req.AfterSequence
 		if wantsSSE(r) {
 			writer = newSSEWriter(w)
-			for _, event := range scenarioInitialRunEvents(requestID, userContent) {
+			for _, event := range scenarioInitialRunEvents(requestID, s.scenarioSessionRevision(sessionID)) {
 				if event.Sequence <= sentThrough {
 					continue
 				}
@@ -221,50 +234,51 @@ func (s *Server) handleScenarioSession(w http.ResponseWriter, r *http.Request, u
 			sentThrough = event.Sequence
 		}
 		message, session, err := s.processScenarioMessage(r.Context(), user, scenarioMessageInput{
-			SessionID:     sessionID,
-			Content:       userContent,
-			RequestID:     requestID,
-			StateRevision: req.StateRevision,
-			OnRunEvent:    onRunEvent,
+			SessionID:        sessionID,
+			Content:          userContent,
+			RequestID:        requestID,
+			StateRevision:    req.StateRevision,
+			StructuredAction: structuredAction,
+			OnRunEvent:       onRunEvent,
 		})
-	if err != nil {
-		status, code, message := scenarioMessageError(err)
-		if writer != nil {
-			writer.runEvent(domain.ScenarioRunEvent{
-				RequestID: requestID,
-				Sequence:  sentThrough + 1,
-				Kind:      "turn_failed",
-				Status:    "failed",
-				Summary:   message,
-				ErrorCode: code,
-			})
+		if err != nil {
+			status, code, message := scenarioMessageError(err)
+			if writer != nil {
+				writer.runEvent(scenarioTurnFailedEvent(
+					requestID,
+					s.scenarioSessionRevision(sessionID),
+					sentThrough+1,
+					code,
+					message,
+					scenarioErrorCodeRetryable(code),
+				))
+				return
+			}
+			writeErrorWithData(w, status, message, map[string]string{"error_code": code})
 			return
 		}
-		writeErrorWithData(w, status, message, map[string]string{"error_code": code})
-		return
-	}
-	payload := map[string]interface{}{
-		"message":        message,
-		"response_meta":  message.ResponseMeta,
-		"run_events":     message.ResponseMeta.RunEvents,
-		"session_status": session.Status,
-		"session":        scenarioSessionView(session),
-	}
-	if writer != nil {
-		// 实时序号与落库序号共用同一空间：流式阶段已下发的事件（含
-		// reply_delta）满足 Sequence <= sentThrough 自动跳过，避免重复渲染；
-		// 断线重连（after_sequence）或幂等回放时补发客户端尚未确认的事件。
-		for _, event := range message.ResponseMeta.RunEvents {
-			if event.Sequence <= sentThrough {
-				continue
-			}
-			writer.runEvent(event)
-			sentThrough = event.Sequence
+		payload := map[string]interface{}{
+			"message":        message,
+			"response_meta":  message.ResponseMeta,
+			"run_events":     message.ResponseMeta.RunEvents,
+			"session_status": session.Status,
+			"session":        scenarioSessionView(session),
 		}
-		writer.finish(payload)
-		return
-	}
-	writeOK(w, payload)
+		if writer != nil {
+			// 实时序号与落库序号共用同一空间：流式阶段已下发的事件（含
+			// reply_delta）满足 Sequence <= sentThrough 自动跳过，避免重复渲染；
+			// 断线重连（after_sequence）或幂等回放时补发客户端尚未确认的事件。
+			for _, event := range message.ResponseMeta.RunEvents {
+				if event.Sequence <= sentThrough {
+					continue
+				}
+				writer.runEvent(event)
+				sentThrough = event.Sequence
+			}
+			writer.finish(payload)
+			return
+		}
+		writeOK(w, payload)
 	case "answer":
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -332,16 +346,45 @@ func (s *Server) handleScenarioSession(w http.ResponseWriter, r *http.Request, u
 	}
 }
 
+type scenarioStructuredUserAction struct {
+	ActionID        string
+	CatalogVersion  string
+	NormalizedScope string
+}
+
 type scenarioMessageInput struct {
-	SessionID     string
-	Content       string
-	RequestID     string
-	StateRevision *int
-	OnRunEvent    func(domain.ScenarioRunEvent)
+	SessionID        string
+	Content          string
+	RequestID        string
+	StateRevision    *int
+	StructuredAction *scenarioStructuredUserAction
+	OnRunEvent       func(domain.ScenarioRunEvent)
+}
+
+// scenarioSessionRevision 取会话当前业务状态版本，供 V2 事件外层携带。
+// 会话不存在时返回 0；调用方都处于已鉴权路径，这里只做尽力读取。
+func (s *Server) scenarioSessionRevision(sessionID string) int {
+	if session, ok := s.store.GetScenarioSession(sessionID); ok {
+		return session.StateRevision
+	}
+	return 0
+}
+
+// scenarioErrorCodeRetryable 判断失败码是否值得原样重试。
+// 契约不兼容与 request_id 冲突重试也不会成功，其余（超时、熔断、上游异常）
+// 都允许学生直接重发。
+func scenarioErrorCodeRetryable(code string) bool {
+	switch code {
+	case "agent_contract_mismatch", "request_id_conflict", "unknown_structured_action":
+		return false
+	default:
+		return true
+	}
 }
 
 func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, input scenarioMessageInput) (message domain.ScenarioMessage, responseSession *domain.ScenarioSession, err error) {
-	if input.Content == "" {
+	// QuickAction 轮没有自然语言正文：结构化动作本身就是用户输入。
+	if input.Content == "" && input.StructuredAction == nil {
 		return domain.ScenarioMessage{}, nil, fmt.Errorf("content is required")
 	}
 	if input.RequestID == "" || len(input.RequestID) > 160 {
@@ -351,7 +394,13 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 	if !ok || session.UserID != user.ID {
 		return domain.ScenarioMessage{}, nil, fmt.Errorf("session not found")
 	}
-	fingerprint := scenarioRequestFingerprint(session.ID, input.Content)
+	// 指纹包含结构化动作 ID：同一会话里不同 QuickAction 的空正文轮不能共用指纹，
+	// 否则 request_id 重放校验会把两次不同点击误判为冲突。
+	fingerprintContent := input.Content
+	if input.StructuredAction != nil {
+		fingerprintContent += "\x00action:" + input.StructuredAction.ActionID
+	}
+	fingerprint := scenarioRequestFingerprint(session.ID, fingerprintContent)
 	if existing, ok := s.store.GetScenarioAgentTurn(session.ID, input.RequestID); ok {
 		if existing.RequestFingerprint != fingerprint {
 			return domain.ScenarioMessage{}, nil, domain.ScenarioRequestConflictError{RequestID: input.RequestID}
@@ -401,7 +450,16 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 		return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
 			Status:  http.StatusServiceUnavailable,
 			Code:    "agent_not_configured",
-			Message: "排查导师服务尚未配置",
+			Message: "排查服务尚未配置",
+		}
+	}
+	// 结构化动作白名单：只接受题目声明的观察动作（Runtime ActionCatalog 切片），
+	// 未知动作在入口拒绝，不进入 Python。
+	if input.StructuredAction != nil && !scenarioActionDeclared(question.Content.HiddenWorld, input.StructuredAction.ActionID) {
+		return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
+			Status:  http.StatusUnprocessableEntity,
+			Code:    "unknown_structured_action",
+			Message: "该快捷动作不在当前题目目录中",
 		}
 	}
 	existingMessages := s.store.ListScenarioMessages(session.ID)
@@ -410,20 +468,36 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 	// 但用服务端总 deadline 约束这次业务执行。
 	agentContext, cancelAgent := context.WithTimeout(context.WithoutCancel(ctx), s.scenarioAgentTimeout)
 	defer cancelAgent()
-	agentRequest := agentclient.TurnRequest{
-		ContractVersion: agentclient.ContractVersion,
-		RequestID:       input.RequestID,
-		SessionID:       session.ID,
-		StateRevision:   expectedRevision,
-		PublicScenario:  *question.Content.PublicScenario,
-		HiddenWorld:     *question.Content.HiddenWorld,
-		LearnerState:    learnerStateForAgent(session.LearnerState),
-		Transcript:      scenarioTranscript(existingMessages),
-		UserMessage:     input.Content,
-		Budget:          agentclient.Budget{DeadlineMS: s.scenarioTurnDeadlineMS, MaxReleases: 3},
+	var structuredAction *agentclient.StructuredUserAction
+	if input.StructuredAction != nil {
+		// state_revision 由服务端按 CAS 期望值写入：客户端不能自带别的版本号，
+		// Python 侧用它做同轮绑定校验。
+		structuredAction = &agentclient.StructuredUserAction{
+			ActionID:        input.StructuredAction.ActionID,
+			CatalogVersion:  input.StructuredAction.CatalogVersion,
+			StateRevision:   expectedRevision,
+			NormalizedScope: input.StructuredAction.NormalizedScope,
+		}
 	}
+	agentRequest := agentclient.TurnRequest{
+		ContractVersion:      agentclient.ContractVersion,
+		RequestID:            input.RequestID,
+		SessionID:            session.ID,
+		StateRevision:        expectedRevision,
+		PublicScenario:       *question.Content.PublicScenario,
+		HiddenWorld:          *question.Content.HiddenWorld,
+		LearnerState:         learnerStateForAgent(session.LearnerState),
+		Transcript:           scenarioTranscript(existingMessages),
+		UserMessage:          input.Content,
+		StructuredUserAction: structuredAction,
+		Budget:               agentclient.Budget{DeadlineMS: s.scenarioTurnDeadlineMS, MaxReleases: 3},
+	}
+	// V2 事件统一携带提交后的业务状态版本；catalog 版本绑定题目快照。
+	committedRevision := expectedRevision + 1
+	catalogVersion := question.ID + ":" + question.Content.ModelVersion
 	var result agentclient.TurnResult
 	var streamValidator *scenarioPublicTraceStream
+	var acceptedStreamTraces []agentclient.PublicTraceEvent
 	var streamedReplyChunks []string
 	tracesBeforeReply := -1
 	if streamingClient, ok := s.scenarioAgent.(scenarioAgentStreamingClient); ok && input.OnRunEvent != nil {
@@ -433,20 +507,33 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 			question.Content.HiddenWorld,
 			question.Content.PublicScenario,
 			session.LearnerState.Normalized(),
-			s.scenarioValidationMode,
+			s.scenarioPublicTraceValidationMode,
 		)
-		// 实时序号与落库序号共用同一空间：user_message 占 1，此后每个事件
-		// （公开过程事件或 reply_delta）按真实到达顺序递增。落库时按同样
-		// 顺序重建（rebuildScenarioRunEvents），断线重连回放才能与实时流对齐。
-		realtimeSeq := len(scenarioInitialRunEvents(input.RequestID, input.Content))
+		// Go 是 public sequence 唯一生成者：turn_started 占 1，此后每个 V2 事件
+		// 按真实到达顺序递增；落库（buildScenarioRunEvents）用同一投影函数重建，
+		// 断线重连（after_sequence）回放与实时流逐位对齐，不重新编号。
+		realtimeSeq := 1
+		projectedTraceEvents := 0
 		result, err = streamingClient.TurnStream(agentContext, agentRequest, agentclient.StreamCallbacks{
 			OnTurnAnalysis: streamValidator.onTurnAnalysis,
 			OnPublicTrace: func(trace agentclient.PublicTraceEvent) error {
 				if err := streamValidator.onPublicTrace(trace); err != nil {
 					return err
 				}
+				if !streamValidator.lastAccepted {
+					// 过程事件降级只影响事件本身；正文回调继续向前端流动，
+					// 但不把未通过复核的 payload 放进正式历史。
+					return nil
+				}
+				acceptedStreamTraces = append(acceptedStreamTraces, trace)
+				event, ok := projectScenarioTraceEvent(input.RequestID, committedRevision, question.Content.HiddenWorld, trace)
+				if !ok {
+					return nil
+				}
 				realtimeSeq++
-				input.OnRunEvent(mapScenarioPublicTraceEvent(input.RequestID, trace, realtimeSeq))
+				event.Sequence = realtimeSeq
+				projectedTraceEvents++
+				input.OnRunEvent(event)
 				return nil
 			},
 			OnReplyDelta: func(text string) error {
@@ -454,17 +541,11 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 					return nil
 				}
 				if tracesBeforeReply < 0 {
-					tracesBeforeReply = streamValidator.emittedCount
+					tracesBeforeReply = projectedTraceEvents
 				}
 				streamedReplyChunks = append(streamedReplyChunks, text)
 				realtimeSeq++
-				input.OnRunEvent(domain.ScenarioRunEvent{
-					RequestID: input.RequestID,
-					Sequence:  realtimeSeq,
-					Kind:      "reply_delta",
-					Status:    "running",
-					Text:      text,
-				})
+				input.OnRunEvent(scenarioAssistantDeltaEvent(input.RequestID, committedRevision, realtimeSeq, "replying", text))
 				return nil
 			},
 		})
@@ -476,17 +557,22 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 			return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
 				Status:  http.StatusBadGateway,
 				Code:    "public_trace_rejected",
-				Message: "排查导师返回了未通过公开协议校验的过程事件",
+				Message: "排查服务返回了未通过公开协议校验的过程事件",
 			}
 		}
 		return domain.ScenarioMessage{}, nil, classifyScenarioAgentError(err)
+	}
+	if streamValidator != nil {
+		// 实时投影和落库必须使用同一份“通过过程事件复核”的子集；否则 log
+		// 模式虽然能继续流正文，收尾时 rebuild 又可能把坏事件投影回历史。
+		result.PublicTrace = acceptedStreamTraces
 	}
 	nextState, approvals, err := approveScenarioProposals(session, question.Content.HiddenWorld, result, s.scenarioValidationMode)
 	if err != nil {
 		return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
 			Status:  http.StatusBadGateway,
 			Code:    "proposal_rejected",
-			Message: "排查导师返回了未通过业务校验的状态提议",
+			Message: "排查服务返回了未通过业务校验的状态提议",
 		}
 	}
 	if s.scenarioValidationMode == scenarioValidationLog {
@@ -505,18 +591,22 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 				return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
 					Status:  http.StatusBadGateway,
 					Code:    "reply_guard_rejected",
-					Message: "排查导师回复未通过安全校验",
+					Message: "本轮回复未通过安全校验",
 				}
 			}
 		}
+	}
+	// 过程事件有独立的迁移闸门：默认 log，只记录协议分歧，不阻断已经通过
+	// 回复安全校验的正文；off 才会完全跳过这一组复核，strict 可在联调时恢复。
+	if s.scenarioPublicTraceValidationMode != scenarioValidationOff {
 		if err := validateScenarioPublicTrace(input.RequestID, input.Content, result, question.Content.HiddenWorld, question.Content.PublicScenario, nextState); err != nil {
-			if s.scenarioValidationMode == scenarioValidationLog {
+			if s.scenarioPublicTraceValidationMode == scenarioValidationLog {
 				s.recordScenarioValidationBypass("public_trace", input.RequestID, err.Error())
 			} else {
 				return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
 					Status:  http.StatusBadGateway,
 					Code:    "public_trace_rejected",
-					Message: "排查导师返回了未通过公开协议校验的过程事件",
+					Message: "排查服务返回了未通过公开协议校验的过程事件",
 				}
 			}
 		}
@@ -534,16 +624,30 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 	if nextSession.CurrentTurn >= nextSession.MaxTurns {
 		reply += " 当前会话已达到最大轮次，请提交最终根因答案。"
 	}
-	runEvents := buildScenarioRunEvents(input.RequestID, input.Content, result, reply)
-	if len(streamedReplyChunks) > 0 {
-		runEvents = rebuildScenarioRunEvents(runEvents, input.RequestID, streamedReplyChunks, tracesBeforeReply)
-	}
+	runEvents := buildScenarioRunEvents(
+		input.RequestID,
+		result,
+		reply,
+		committedRevision,
+		question.Content.HiddenWorld,
+		nextState,
+		catalogVersion,
+		streamedReplyChunks,
+		tracesBeforeReply,
+	)
 	publicTrace := marshalAgentAudit(runEvents)
+	// QuickAction 轮的展示正文：Agent 收到的 user_message 仍为空（结构化动作
+	// 走授权投影），但消息记录必须保留学生点了什么——否则历史回放只剩
+	// 一条孤立的回复，对话上下文断裂。标题与 QuickActions 按钮同源。
+	userDisplayContent := input.Content
+	if input.StructuredAction != nil && userDisplayContent == "" {
+		userDisplayContent = scenarioActionDisplayTitle(question.Content.HiddenWorld, input.StructuredAction.ActionID)
+	}
 	message = domain.ScenarioMessage{
 		SessionID:        session.ID,
 		TurnNumber:       nextSession.CurrentTurn,
 		Role:             "assistant",
-		UserContent:      input.Content,
+		UserContent:      userDisplayContent,
 		AssistantContent: reply,
 		ResponseMeta: domain.ResponseMeta{
 			ResponseType: "mentor_reply",
@@ -572,71 +676,9 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 	committedSession := commitResult.Record.SessionSnapshot
 	return commitResult.Record.Message, &committedSession, nil
 }
-// rebuildScenarioRunEvents 按"实时流出顺序"重建落库 run_events：user_message →
-// mentor 流式前的公开过程事件 → 真实 reply_delta 块 → mentor 后的公开过程事件
-// （mentor_buffered / guard_passed 等）→ proposal_approved → turn_completed。
-// 序号与实时下发时完全一致，断线重连（after_sequence）回放才能与实时流对齐，
-// 前端按 (request_id, sequence) 去重也不会冲突。
-// tracesBeforeReply 是首个 reply_delta 到达前已发出的公开过程事件数；
-// 调用方保证 len(chunks) > 0 时它 >= 0。
-func rebuildScenarioRunEvents(events []domain.ScenarioRunEvent, requestID string, chunks []string, tracesBeforeReply int) []domain.ScenarioRunEvent {
-	if tracesBeforeReply < 0 {
-		tracesBeforeReply = 0
-	}
-	userContent := ""
-	if len(events) > 0 {
-		userContent = events[0].Text
-	}
-	var before, after []domain.ScenarioRunEvent
-	processed := 0
-	for _, event := range events {
-		if event.Kind == "reply_delta" || event.Kind == "user_message" || event.Kind == "turn_completed" {
-			continue
-		}
-		// buildScenarioRunEvents 产出：user_message(1) + 公开过程事件（按
-		// result.PublicTrace 原序）+ proposal_approved + 伪 reply_delta +
-		// turn_completed。跳过 user_message / 伪 delta / turn_completed 后，
-		// 余下事件按 tracesBeforeReply 拆成 delta 前后两段。
-		if processed < tracesBeforeReply {
-			before = append(before, event)
-		} else {
-			after = append(after, event)
-		}
-		processed++
-	}
-	out := make([]domain.ScenarioRunEvent, 0, 1+len(before)+len(chunks)+len(after)+1)
-	out = append(out, domain.ScenarioRunEvent{
-		RequestID: requestID,
-		Kind:      "user_message",
-		Status:    "completed",
-		Text:      userContent,
-	})
-	out = append(out, before...)
-	for _, chunk := range chunks {
-		if chunk == "" {
-			continue
-		}
-		out = append(out, domain.ScenarioRunEvent{
-			RequestID: requestID,
-			Kind:      "reply_delta",
-			Status:    "running",
-			Text:      chunk,
-		})
-	}
-	out = append(out, after...)
-	out = append(out, domain.ScenarioRunEvent{
-		RequestID: requestID,
-		Kind:      "turn_completed",
-		Status:    "completed",
-		Summary:   "本轮排查已完成。",
-	})
-	for i := range out {
-		out[i].Sequence = i + 1
-	}
-	return out
-}
 
-func buildScenarioConversationSummary(existing string, question *domain.ScenarioQuestion, messages []domain.ScenarioMessage) string {	if len(messages) == 0 {
+func buildScenarioConversationSummary(existing string, question *domain.ScenarioQuestion, messages []domain.ScenarioMessage) string {
+	if len(messages) == 0 {
 		return strings.TrimSpace(existing)
 	}
 	limit := len(messages) - 5

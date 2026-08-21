@@ -220,13 +220,30 @@ type PublicScenario struct {
 }
 
 type HiddenWorld struct {
-	RootCause          RootCause           `json:"root_cause"`
-	Hypotheses         []Hypothesis        `json:"hypotheses"`
-	EvidenceGraph      []EvidenceNode      `json:"evidence_graph"`
-	Observations       []Observation       `json:"observations"`
-	VirtualTools       []VirtualTool       `json:"virtual_tools,omitempty"`
-	SolutionRubric     SolutionRubric      `json:"solution_rubric"`
-	MisconceptionRules []MisconceptionRule `json:"misconception_rules"`
+	RootCause RootCause `json:"root_cause"`
+	// CanonicalAnswer 是 V2 题目的独立持久化权威答案；旧 v1 题目为 nil，
+	// 仅做读取兼容。Go 只透传给 Python Runtime 消费，绝不下发前端。
+	CanonicalAnswer     *CanonicalAnswer    `json:"canonical_answer,omitempty"`
+	DiagnosticRelations []string            `json:"diagnostic_relations,omitempty"`
+	Hypotheses          []Hypothesis        `json:"hypotheses"`
+	EvidenceGraph       []EvidenceNode      `json:"evidence_graph"`
+	Observations        []Observation       `json:"observations"`
+	VirtualTools        []VirtualTool       `json:"virtual_tools,omitempty"`
+	SolutionRubric      SolutionRubric      `json:"solution_rubric"`
+	MisconceptionRules  []MisconceptionRule `json:"misconception_rules"`
+}
+
+// CanonicalAnswer 与 agent/src/hiddenworld/contracts/answer.py 的 CanonicalAnswer
+// 逐字段一致。唯一性与引用一致性由 Python ScenarioContractValidator 在生成/加载时
+// 校验；Go 持有同一份快照用于透传与审计，不自行解读。
+type CanonicalAnswer struct {
+	CanonicalConclusion     string   `json:"canonical_conclusion"`
+	RootCauseID             string   `json:"root_cause_id"`
+	RequiredEvidenceIDs     []string `json:"required_evidence_ids"`
+	RequiredCausalRelations []string `json:"required_causal_relations"`
+	AcceptedEquivalents     []string `json:"accepted_equivalents"`
+	SolutionRequirements    []string `json:"solution_requirements"`
+	AnswerVersion           string   `json:"answer_version"`
 }
 
 // VirtualTool 描述题目自带的只读模拟查询入口。查询文本仅用于意图匹配，

@@ -14,7 +14,48 @@ type TurnRequest struct {
 	LearnerState    LearnerState          `json:"learner_state"`
 	Transcript      []Turn                `json:"transcript"`
 	UserMessage     string                `json:"user_message"`
-	Budget          Budget                `json:"budget"`
+	// StructuredUserAction 是 QuickAction 点击产生的一等用户动作；
+	// Python Runtime 只把它签发成 UserActionAuthorization，Agent 自身
+	// 的 tool_call 不能充当授权。与自然语言共用 request_id / state_revision。
+	StructuredUserAction *StructuredUserAction `json:"structured_user_action,omitempty"`
+	Budget               Budget                `json:"budget"`
+}
+
+// StructuredUserAction 与 agent/src/hiddenworld/contracts/authorization.py
+// 的 StructuredUserAction 逐字段一致；Python 侧 extra="forbid"。
+type StructuredUserAction struct {
+	ActionID        string `json:"action_id"`
+	CatalogVersion  string `json:"catalog_version"`
+	StateRevision   int    `json:"state_revision"`
+	NormalizedScope string `json:"normalized_scope,omitempty"`
+}
+
+// UserActionAuthorization 是 Python Runtime 签发的观察授权投影。
+// Agent 只能消费授权引用，不能创建或扩大授权。
+type UserActionAuthorization struct {
+	Source          string `json:"source"`
+	ActionRef       string `json:"action_ref"`
+	ToolKind        string `json:"tool_kind"`
+	NormalizedScope string `json:"normalized_scope"`
+	StateRevision   int    `json:"state_revision"`
+	AuthorizationID string `json:"authorization_id"`
+}
+
+// AuthorizedActionRef 是进入 AgentContext 的安全授权引用。
+type AuthorizedActionRef struct {
+	AuthorizationID string `json:"authorization_id"`
+	ActionRef       string `json:"action_ref"`
+	ToolKind        string `json:"tool_kind"`
+	NormalizedScope string `json:"normalized_scope"`
+}
+
+// TeachingDimensionRef 与 agent/src/hiddenworld/contracts/dimensions.py 一致：
+// 题目定义的安全教学维度，category 取值受 Runtime 白名单约束。
+type TeachingDimensionRef struct {
+	DimensionID string `json:"dimension_id"`
+	Category    string `json:"category"`
+	Status      string `json:"status"`
+	HintLevel   string `json:"hint_level"`
 }
 
 type LearnerState struct {

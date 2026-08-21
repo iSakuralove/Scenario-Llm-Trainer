@@ -43,11 +43,15 @@ type Server struct {
 	// scenarioValidationMode 控制排查工坊 Go 侧校验器的执行方式（strict/log/off），
 	// 见 scenario_validation_mode.go。revision/幂等/原子提交不受它影响。
 	scenarioValidationMode scenarioValidationMode
-	scenarioTurnMu         sync.Mutex
-	scenarioTurnFlights    map[string]*scenarioTurnFlight
-	assets                 AssetStorage
-	jobMu                  sync.Mutex
-	jobStop                map[string]context.CancelFunc
+	// scenarioPublicTraceValidationMode 只控制 Python 过程事件的协议复核。
+	// Runtime V2 迁移期间默认采用 log：坏过程事件不能阻断正文 SSE，且不会进入
+	// 正式事件流；回复安全校验、状态提议审批和最终结果解码仍由上面的总闸门控制。
+	scenarioPublicTraceValidationMode scenarioValidationMode
+	scenarioTurnMu                    sync.Mutex
+	scenarioTurnFlights               map[string]*scenarioTurnFlight
+	assets                            AssetStorage
+	jobMu                             sync.Mutex
+	jobStop                           map[string]context.CancelFunc
 	// openingStemCache 缓存被 LLM 改写过的开场题干，按题目 ID 索引。
 	// 既避免每次「开始面试」都同步等一次模型，也保证同一道题的题干稳定不变。
 	openingStemMu    sync.RWMutex
@@ -122,11 +126,12 @@ func NewServer(dataStore store.Store, authManager *auth.Manager, limiter ratelim
 			BaseURL: envOrDefault("AGENT_BASE_URL", "http://127.0.0.1:8091"),
 			Timeout: scenarioAgentTimeout,
 		}),
-		scenarioAgentTimeout:   scenarioAgentTimeout,
-		scenarioTurnDeadlineMS: scenarioTurnDeadlineMS,
-		scenarioValidationMode: scenarioValidationModeFromEnv(),
-		scenarioTurnFlights:    map[string]*scenarioTurnFlight{},
-		jobStop:                map[string]context.CancelFunc{},
+		scenarioAgentTimeout:              scenarioAgentTimeout,
+		scenarioTurnDeadlineMS:            scenarioTurnDeadlineMS,
+		scenarioValidationMode:            scenarioValidationModeFromEnv(),
+		scenarioPublicTraceValidationMode: scenarioPublicTraceValidationModeFromEnv(),
+		scenarioTurnFlights:               map[string]*scenarioTurnFlight{},
+		jobStop:                           map[string]context.CancelFunc{},
 	}
 	server.applyPromptOverrides()
 	return server

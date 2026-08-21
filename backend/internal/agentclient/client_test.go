@@ -106,7 +106,7 @@ func TestClientTurnStreamForwardsTypedEventsAndReturnsFinalResult(t *testing.T) 
 			ToolName: "compare_answer",
 			Tool: &ToolEventPayload{
 				Name:              "compare_answer",
-				RedactedArguments: map[string]string{"answer_attempt_id": request.RequestID + ":answer"},
+				RedactedArguments: map[string]string{},
 			},
 		})
 		result := validTurnResult(request.RequestID, request.StateRevision)
@@ -119,7 +119,7 @@ func TestClientTurnStreamForwardsTypedEventsAndReturnsFinalResult(t *testing.T) 
 			ToolName: "compare_answer",
 			Tool: &ToolEventPayload{
 				Name:              "compare_answer",
-				RedactedArguments: map[string]string{"answer_attempt_id": request.RequestID + ":answer"},
+				RedactedArguments: map[string]string{},
 			},
 		}}
 		writeAgentSSE(t, w, "result", result)

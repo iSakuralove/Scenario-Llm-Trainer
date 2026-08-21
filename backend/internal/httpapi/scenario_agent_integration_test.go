@@ -535,7 +535,7 @@ func TestScenarioRunEventsExposeOnlyPublicCompareAnswerResult(t *testing.T) {
 				Status:   "completed",
 				Tool: &agentclient.ToolEventPayload{
 					Name:              "compare_answer",
-					RedactedArguments: map[string]string{"answer_attempt_id": "request-tool:answer"},
+					RedactedArguments: map[string]string{},
 					DurationMS:        12,
 					Result: &agentclient.PublicAnswerComparison{
 						Tool:          "compare_answer",
@@ -548,7 +548,7 @@ func TestScenarioRunEventsExposeOnlyPublicCompareAnswerResult(t *testing.T) {
 			},
 		},
 	}
-	events := buildScenarioRunEvents("request-tool", "我认为是索引问题", result, "继续验证。")
+	events := buildScenarioRunEvents("request-tool", result, "继续验证。", 1, &domain.HiddenWorld{}, domain.ScenarioLearnerState{}, "catalog-test", nil, -1)
 	raw, err := json.Marshal(events)
 	if err != nil {
 		t.Fatal(err)
@@ -559,12 +559,30 @@ func TestScenarioRunEventsExposeOnlyPublicCompareAnswerResult(t *testing.T) {
 			t.Fatalf("public tool event leaked %q: %s", forbidden, text)
 		}
 	}
-	if !strings.Contains(text, `"name":"compare_answer"`) || !strings.Contains(text, `"support_status":"needs_more_evidence"`) {
-		t.Fatalf("missing public compare_answer payload: %s", text)
+	// V2：compare_answer 以 tool_result 判别联合下发，公开信号合成进
+	// content.markdown_ready；无参数、无内部比较字段。
+	if !strings.Contains(text, `"tool_id":"compare_answer"`) {
+		t.Fatalf("missing public compare_answer tool_result: %s", text)
+	}
+	if !strings.Contains(text, "还需要更多直接观察") || !strings.Contains(text, "索引可能缺失") {
+		t.Fatalf("missing public compare_answer signal in markdown_ready: %s", text)
+	}
+	if strings.Contains(text, "answer_attempt_id") {
+		t.Fatalf("compare_answer must be argument-free: %s", text)
 	}
 }
 
 func TestScenarioMessageRejectsPythonReplyDeltaInPublicTrace(t *testing.T) {
+	// 过程事件闸门在 V2 迁移窗口默认 log（坏过程事件只记审计、由投影丢弃）；
+	// 本用例验证 strict 档位仍然整轮拒绝伪造 trace。
+	original := getenvValue
+	defer func() { getenvValue = original }()
+	getenvValue = func(key string) string {
+		if key == "SCENARIO_PUBLIC_TRACE_VALIDATION_MODE" {
+			return "strict"
+		}
+		return original(key)
+	}
 	dataStore := store.NewMemoryStore(auth.HashPassword)
 	client := scenarioAgentClientFunc(func(_ context.Context, request agentclient.TurnRequest) (agentclient.TurnResult, error) {
 		result := noProgressTurnResult(request, "安全的最终回复。")
@@ -596,6 +614,15 @@ func TestScenarioMessageRejectsPythonReplyDeltaInPublicTrace(t *testing.T) {
 }
 
 func TestScenarioMessageRejectsFabricatedToolTraceOnOrdinaryTurn(t *testing.T) {
+	// 与上一用例同理：过程事件闸门迁移窗口默认 log，这里验证 strict 档位。
+	original := getenvValue
+	defer func() { getenvValue = original }()
+	getenvValue = func(key string) string {
+		if key == "SCENARIO_PUBLIC_TRACE_VALIDATION_MODE" {
+			return "strict"
+		}
+		return original(key)
+	}
 	dataStore := store.NewMemoryStore(auth.HashPassword)
 	client := scenarioAgentClientFunc(func(_ context.Context, request agentclient.TurnRequest) (agentclient.TurnResult, error) {
 		result := noProgressTurnResult(request, "普通轮回复。")
@@ -607,7 +634,7 @@ func TestScenarioMessageRejectsFabricatedToolTraceOnOrdinaryTurn(t *testing.T) {
 				ToolName: "compare_answer",
 				Tool: &agentclient.ToolEventPayload{
 					Name:              "compare_answer",
-					RedactedArguments: map[string]string{"answer_attempt_id": request.RequestID + ":answer"},
+					RedactedArguments: map[string]string{},
 				},
 			},
 			{Sequence: 2, Kind: "guard_passed", Status: "completed", Summary: "回复已通过安全校验。"},
@@ -638,7 +665,7 @@ func TestValidateScenarioPublicTraceAcceptsBoundCompareAnswerLifecycle(t *testin
 	userContent := "我认为目前的证据还需要继续验证索引问题"
 	payload := &agentclient.ToolEventPayload{
 		Name:              "compare_answer",
-		RedactedArguments: map[string]string{"answer_attempt_id": requestID + ":answer"},
+		RedactedArguments: map[string]string{},
 		DurationMS:        12,
 		Result: &agentclient.PublicAnswerComparison{
 			Tool:          "compare_answer",
@@ -733,4 +760,153 @@ func collectScenarioRunEvents(t *testing.T, raw string) []domain.ScenarioRunEven
 		events = append(events, event)
 	}
 	return events
+}
+
+func TestScenarioQuickActionTurnBindsServerRevisionAndEmitsV2Events(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	var captured *agentclient.TurnRequest
+	client := scenarioAgentClientFunc(func(_ context.Context, request agentclient.TurnRequest) (agentclient.TurnResult, error) {
+		snapshot := request
+		captured = &snapshot
+		return noProgressTurnResult(request, "已按你的选择完成检查。"), nil
+	})
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour), client).Handler()
+	token, sessionID := createScenarioSessionForAgentTest(t, handler, dataStore)
+
+	question := dataStore.ListScenarios("database", "", "")[0]
+	_, action := firstImmediatelyAvailableEvidence(t, *question.Content.HiddenWorld)
+	payload := map[string]any{
+		"request_id": "request-quickaction",
+		"structured_user_action": map[string]string{
+			"action_id":       action,
+			"catalog_version": "catalog-test",
+		},
+	}
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/scenarios/sessions/"+sessionID+"/messages", token, payload)
+	if status != http.StatusOK {
+		t.Fatalf("quickaction turn failed: %d %s", status, env.Message)
+	}
+	if captured == nil || captured.StructuredUserAction == nil {
+		t.Fatalf("agent request must carry the structured user action: %+v", captured)
+	}
+	if captured.StructuredUserAction.ActionID != action || captured.StructuredUserAction.StateRevision != captured.StateRevision {
+		t.Fatalf("structured action must be bound to the current turn revision: %+v", captured.StructuredUserAction)
+	}
+	if captured.UserMessage != "" {
+		t.Fatalf("structured action turn must not fabricate a user message, got %q", captured.UserMessage)
+	}
+
+	// 未知动作在入口被拒，不进入 Python。
+	payload["request_id"] = "request-quickaction-unknown"
+	payload["structured_user_action"] = map[string]string{"action_id": "inspect:nonsense.unknown", "catalog_version": "catalog-test"}
+	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/scenarios/sessions/"+sessionID+"/messages", token, payload)
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("unknown structured action must be rejected with 422, got %d %s", status, env.Message)
+	}
+}
+
+func TestScenarioV2RunEventsCarrySchemaRevisionAndStableSequence(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	client := scenarioAgentClientFunc(func(_ context.Context, request agentclient.TurnRequest) (agentclient.TurnResult, error) {
+		result := noProgressTurnResult(request, "安全的最终回复。")
+		result.PublicTrace = []agentclient.PublicTraceEvent{
+			{Sequence: 1, Kind: "reasoning_summary_completed", Status: "completed", Summary: "识别到一次公开检查。"},
+			{Sequence: 2, Kind: "guard_passed", Status: "completed", Summary: "回复已通过安全校验。"},
+		}
+		return result, nil
+	})
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour), client).Handler()
+	token, sessionID := createScenarioSessionForAgentTest(t, handler, dataStore)
+
+	payload := map[string]any{"content": "看一下慢查询日志", "request_id": "request-seq-stability", "state_revision": 0}
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/scenarios/sessions/"+sessionID+"/messages", token, payload)
+	if status != http.StatusOK {
+		t.Fatalf("turn failed: %d %s", status, env.Message)
+	}
+	var data struct {
+		RunEvents []domain.ScenarioRunEvent `json:"run_events"`
+	}
+	mustDecodeData(t, env, &data)
+	events := data.RunEvents
+	if len(events) < 3 {
+		t.Fatalf("expected V2 event sequence, got %+v", events)
+	}
+	if events[0].Kind != "turn_started" || events[len(events)-1].Kind != "turn_completed" {
+		t.Fatalf("sequence must start with turn_started and end with turn_completed: %+v", events)
+	}
+	previous := 0
+	for _, event := range events {
+		if event.SchemaVersion != domain.ScenarioRunEventSchemaV2 {
+			t.Fatalf("every V2 event must carry schema_version: %+v", event)
+		}
+		if event.StateRevision == 0 {
+			t.Fatalf("every V2 event must carry state_revision: %+v", event)
+		}
+		if event.Sequence != previous+1 {
+			t.Fatalf("sequence must be dense and strictly increasing: previous=%d event=%+v", previous, event)
+		}
+		previous = event.Sequence
+		if event.Kind == "guard_passed" || event.Kind == "mentor_buffered" || event.Kind == "proposal_approved" || event.Kind == "response_summary" {
+			t.Fatalf("internal stage event must not be projected into V2 stream: %+v", event)
+		}
+	}
+
+	// 幂等重放：同一 request_id 原样重放，序号不得重新编号。
+	status, env = requestJSON(t, handler, http.MethodPost, "/api/v1/scenarios/sessions/"+sessionID+"/messages", token, payload)
+	if status != http.StatusOK {
+		t.Fatalf("replay failed: %d %s", status, env.Message)
+	}
+	mustDecodeData(t, env, &data)
+	if len(data.RunEvents) != len(events) {
+		t.Fatalf("replay must reproduce the same event count, got %d vs %d", len(data.RunEvents), len(events))
+	}
+	for index := range events {
+		if data.RunEvents[index].Sequence != events[index].Sequence || data.RunEvents[index].Kind != events[index].Kind {
+			t.Fatalf("replay renumbered events: original=%+v replay=%+v", events[index], data.RunEvents[index])
+		}
+	}
+}
+
+func TestScenarioPublicObservationMarkdownStripsImplementationPrefix(t *testing.T) {
+	cases := map[string]string{
+		"模拟回调访问日志（10:00-10:20）：10:05 后 zone-b 出现超时。": "回调访问日志（10:00-10:20）：10:05 后 zone-b 出现超时。",
+		"  模拟订单库写入日志：出现慢插入  ":                      "订单库写入日志：出现慢插入",
+		"服务 Pod 资源平稳。":                                "服务 Pod 资源平稳。",
+		"模拟数据里的模拟只剥离开头一次":                          "数据里的模拟只剥离开头一次",
+	}
+	for input, expected := range cases {
+		if got := scenarioPublicObservationMarkdown(input); got != expected {
+			t.Fatalf("scenarioPublicObservationMarkdown(%q) = %q, want %q", input, got, expected)
+		}
+	}
+}
+
+func TestScenarioQuickActionTurnKeepsUserActionInHistory(t *testing.T) {
+	dataStore := store.NewMemoryStore(auth.HashPassword)
+	client := scenarioAgentClientFunc(func(_ context.Context, request agentclient.TurnRequest) (agentclient.TurnResult, error) {
+		return noProgressTurnResult(request, "已按你的选择完成检查。"), nil
+	})
+	handler := NewServerForTests(dataStore, auth.NewManager("test-secret", time.Hour), client).Handler()
+	token, sessionID := createScenarioSessionForAgentTest(t, handler, dataStore)
+
+	question := dataStore.ListScenarios("database", "", "")[0]
+	_, action := firstImmediatelyAvailableEvidence(t, *question.Content.HiddenWorld)
+	payload := map[string]any{
+		"request_id": "request-quickaction-history",
+		"structured_user_action": map[string]string{
+			"action_id":       action,
+			"catalog_version": "catalog-test",
+		},
+	}
+	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/scenarios/sessions/"+sessionID+"/messages", token, payload)
+	if status != http.StatusOK {
+		t.Fatalf("quickaction turn failed: %d %s", status, env.Message)
+	}
+	messages := dataStore.ListScenarioMessages(sessionID)
+	if len(messages) != 1 {
+		t.Fatalf("expected one committed message, got %d", len(messages))
+	}
+	if strings.TrimSpace(messages[0].UserContent) == "" {
+		t.Fatalf("quickaction turn must keep the clicked action in user_content for history replay, got %q", messages[0].UserContent)
+	}
 }

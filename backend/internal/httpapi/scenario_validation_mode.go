@@ -44,6 +44,24 @@ func scenarioValidationModeFromEnv() scenarioValidationMode {
 	}
 }
 
+// scenarioPublicTraceValidationModeFromEnv 解析过程事件专用闸门。
+// V2 迁移窗口默认使用 log，让不兼容的旧过程事件被记录并丢弃，而不是把已经
+// 可以展示的正文一起截断；需要恢复严格过程事件复核时设置
+// SCENARIO_PUBLIC_TRACE_VALIDATION_MODE=strict。
+func scenarioPublicTraceValidationModeFromEnv() scenarioValidationMode {
+	raw := strings.ToLower(strings.TrimSpace(getenvValue("SCENARIO_PUBLIC_TRACE_VALIDATION_MODE")))
+	if raw == "" {
+		return scenarioValidationLog
+	}
+	switch scenarioValidationMode(raw) {
+	case scenarioValidationStrict, scenarioValidationLog, scenarioValidationOff:
+		return scenarioValidationMode(raw)
+	default:
+		log.Printf("invalid SCENARIO_PUBLIC_TRACE_VALIDATION_MODE %q, falling back to log", raw)
+		return scenarioValidationLog
+	}
+}
+
 // getenvValue 抽出 os.Getenv，便于测试注入。
 var getenvValue = os.Getenv
 

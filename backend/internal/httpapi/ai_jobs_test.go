@@ -684,8 +684,11 @@ func TestScenarioMessageSSE(t *testing.T) {
 		t.Fatalf("sse status=%d body=%s", rr.Code, rr.Body.String())
 	}
 	raw := rr.Body.String()
-	if !strings.Contains(raw, "event: run_event") || !strings.Contains(raw, `"kind":"proposal_approved"`) || !strings.Contains(raw, "event: finish") {
-		t.Fatalf("expected ordered run events and finish event, got %s", raw)
+	if !strings.Contains(raw, "event: run_event") || !strings.Contains(raw, `"kind":"turn_started"`) || !strings.Contains(raw, `"kind":"assistant_delta"`) || !strings.Contains(raw, `"kind":"turn_completed"`) || !strings.Contains(raw, "event: finish") {
+		t.Fatalf("expected ordered V2 run events and finish event, got %s", raw)
+	}
+	if strings.Contains(raw, `"kind":"guard_passed"`) || strings.Contains(raw, `"kind":"mentor_buffered"`) || strings.Contains(raw, `"kind":"proposal_approved"`) {
+		t.Fatalf("V2 event stream must not expose internal stage events, got %s", raw)
 	}
 	streamed := collectScenarioReplyText(t, raw)
 	if streamed == "" {
@@ -724,8 +727,8 @@ func collectScenarioReplyText(t *testing.T, raw string) string {
 			t.Fatalf("run event sequence is not monotonic: previous=%d current=%d", lastSequence, event.Sequence)
 		}
 		lastSequence = event.Sequence
-		if event.Kind == "reply_delta" {
-			builder.WriteString(event.Text)
+		if event.Kind == "assistant_delta" && event.Payload != nil && event.Payload.Phase == "replying" {
+			builder.WriteString(event.Payload.MarkdownReadyDelta)
 		}
 	}
 	return builder.String()

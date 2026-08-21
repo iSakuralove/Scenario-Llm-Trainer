@@ -166,21 +166,21 @@ func waitScenarioTurnFlight(ctx context.Context, flight *scenarioTurnFlight) (do
 func classifyScenarioAgentError(err error) scenarioAgentHTTPError {
 	switch {
 	case errors.Is(err, agentclient.ErrCircuitOpen):
-		return scenarioAgentHTTPError{Status: http.StatusServiceUnavailable, Code: "agent_circuit_open", Message: "排查导师暂时不可用，请稍后重试"}
+		return scenarioAgentHTTPError{Status: http.StatusServiceUnavailable, Code: "agent_circuit_open", Message: "排查服务暂时不可用，请稍后重试"}
 	case errors.Is(err, agentclient.ErrRequestTimeout):
-		return scenarioAgentHTTPError{Status: http.StatusGatewayTimeout, Code: "agent_timeout", Message: "排查导师本轮处理超时，请重试"}
+		return scenarioAgentHTTPError{Status: http.StatusGatewayTimeout, Code: "agent_timeout", Message: "本轮处理超时，请重试"}
 	case errors.Is(err, agentclient.ErrAgentUnavailable):
-		return scenarioAgentHTTPError{Status: http.StatusServiceUnavailable, Code: "agent_unavailable", Message: "排查导师暂时不可用，请稍后重试"}
+		return scenarioAgentHTTPError{Status: http.StatusServiceUnavailable, Code: "agent_unavailable", Message: "排查服务暂时不可用，请稍后重试"}
 	}
 	var versionErr agentclient.ContractVersionError
 	if errors.As(err, &versionErr) {
-		return scenarioAgentHTTPError{Status: http.StatusBadGateway, Code: "agent_contract_mismatch", Message: "排查导师服务契约不兼容"}
+		return scenarioAgentHTTPError{Status: http.StatusBadGateway, Code: "agent_contract_mismatch", Message: "排查服务契约不兼容"}
 	}
 	var httpErr agentclient.HTTPError
 	if errors.As(err, &httpErr) {
-		return scenarioAgentHTTPError{Status: http.StatusBadGateway, Code: "agent_upstream_error", Message: "排查导师服务返回异常"}
+		return scenarioAgentHTTPError{Status: http.StatusBadGateway, Code: "agent_upstream_error", Message: "排查服务返回异常"}
 	}
-	return scenarioAgentHTTPError{Status: http.StatusBadGateway, Code: "agent_invalid_response", Message: "排查导师返回了无效结果"}
+	return scenarioAgentHTTPError{Status: http.StatusBadGateway, Code: "agent_invalid_response", Message: "排查服务返回了无效结果"}
 }
 
 func scenarioMessageError(err error) (int, string, string) {
@@ -419,22 +419,20 @@ func validateScenarioPublicTrace(
 		"has_evidence_conflict":   true,
 		"evidence_consistent":     true,
 	}
-	phaseByKind := map[string]int{
-		"reasoning_summary_delta":     1,
-		"reasoning_summary_completed": 1,
-		"observation_result":          2,
-		"tool_started":                3,
-		"tool_result":                 3,
-		"tool_completed":              3,
-		"response_summary":            4,
-		"mentor_buffered":             5,
-		"guard_passed":                6,
+	allowedKinds := map[string]bool{
+		"reasoning_summary_delta":     true,
+		"reasoning_summary_completed": true,
+		"observation_result":          true,
+		"tool_started":                true,
+		"tool_result":                 true,
+		"tool_completed":              true,
+		"response_summary":            true,
+		"mentor_buffered":             true,
+		"guard_passed":                true,
 	}
 
 	previousSequence := 0
-	currentPhase := 0
-	toolStage := 0
-	guardCount := 0
+	hasCompareResult := false
 	shouldCompareAnswer := result.TurnAnalysis.ContainsAnswerAttempt && result.TurnAnalysis.Confidence >= interpreterLowConfidenceThreshold
 	normalizedUserContent := strings.ToLower(norm.NFKC.String(userContent))
 
@@ -443,14 +441,11 @@ func validateScenarioPublicTrace(
 			return errors.New("public trace sequence is not strictly increasing")
 		}
 		previousSequence = trace.Sequence
-		phase, ok := phaseByKind[trace.Kind]
-		if !ok {
+		// V2 起 Go 不再强制固定 phase 顺序，也不要求 guard_passed 恰好一条：
+		// 旧阶段事件只做白名单放行，正式事件由 Go 投影为判别联合。
+		if !allowedKinds[trace.Kind] {
 			return fmt.Errorf("public trace kind %q is not allowed from Python", trace.Kind)
 		}
-		if phase < currentPhase {
-			return errors.New("public trace event order is invalid")
-		}
-		currentPhase = phase
 		if !allowedStatuses[trace.Status] {
 			return fmt.Errorf("public trace status %q is invalid", trace.Status)
 		}
@@ -511,25 +506,26 @@ func validateScenarioPublicTrace(
 			if tool.DurationMS < 0 || trace.DurationMS < 0 || (trace.DurationMS != 0 && trace.DurationMS != tool.DurationMS) {
 				return errors.New("public tool duration is invalid")
 			}
-			if len(tool.RedactedArguments) != 1 || tool.RedactedArguments["answer_attempt_id"] != requestID+":answer" {
-				return errors.New("compare_answer arguments are not bound to the current request")
+			// compare_answer 已迁移为无参数工具：Runtime 自动绑定当前轮
+			// AnswerAttempt，模型无法构造候选答案参数。任何残留参数都拒绝。
+			if len(tool.RedactedArguments) != 0 {
+				return errors.New("compare_answer must not carry model-supplied arguments")
 			}
 			switch trace.Kind {
 			case "tool_started":
-				if toolStage != 0 || trace.Status != "started" || tool.Result != nil {
+				if trace.Status != "started" || tool.Result != nil {
 					return errors.New("compare_answer start event is invalid")
 				}
-				toolStage = 1
 			case "tool_result":
-				if toolStage != 1 || trace.Status != "completed" || tool.Result == nil {
+				if trace.Status != "completed" || tool.Result == nil {
 					return errors.New("compare_answer result event is invalid")
 				}
-				toolStage = 2
+				hasCompareResult = true
 			case "tool_completed":
-				if toolStage != 2 || trace.Status != "completed" || tool.Result == nil {
+				if trace.Status != "completed" || tool.Result == nil {
 					return errors.New("compare_answer completion event is invalid")
 				}
-				toolStage = 3
+				hasCompareResult = true
 			}
 			if tool.Result != nil {
 				if tool.Result.Tool != "compare_answer" || tool.Result.Status != "completed" || !allowedSupportStatuses[tool.Result.SupportStatus] {
@@ -546,42 +542,34 @@ func validateScenarioPublicTrace(
 				}
 			}
 		}
-
-		if trace.Kind == "guard_passed" {
-			guardCount++
-			if trace.Status != "completed" {
-				return errors.New("guard_passed event must be completed")
-			}
-		}
 	}
-	if guardCount != 1 {
-		return errors.New("public trace must contain exactly one guard_passed event")
+	if shouldCompareAnswer && !hasCompareResult {
+		return errors.New("answer attempt is missing the compare_answer result")
 	}
-	if shouldCompareAnswer && toolStage != 3 {
-		return errors.New("answer attempt is missing the complete compare_answer lifecycle")
-	}
-	if !shouldCompareAnswer && toolStage != 0 {
-		return errors.New("ordinary turn contains a compare_answer lifecycle")
+	if !shouldCompareAnswer && hasCompareResult {
+		return errors.New("ordinary turn contains a compare_answer result")
 	}
 	return nil
 }
 
 type scenarioPublicTraceStream struct {
-	requestID      string
-	userContent    string
-	world          *domain.HiddenWorld
-	publicScenario *domain.PublicScenario
-	state          domain.ScenarioLearnerState
-	analysis       *agentclient.TurnAnalysis
-	lastSequence   int
-	lastPhase      int
-	toolStage      int
-	guardCount     int
-	emittedCount   int
-	mode           scenarioValidationMode
+	requestID        string
+	userContent      string
+	world            *domain.HiddenWorld
+	publicScenario   *domain.PublicScenario
+	state            domain.ScenarioLearnerState
+	analysis         *agentclient.TurnAnalysis
+	lastSequence     int
+	hasCompareResult bool
+	emittedCount     int
+	mode             scenarioValidationMode
 	// bypasses 收集 log 模式下放行的违规，轮次结束后统一落审计。
 	bypasses        []string
 	validationError error
+	// lastAccepted 供流式投影层判断当前事件是否可以安全落到正式事件流。
+	// log/off 模式下 onPublicTrace 仍返回 nil，但违规事件必须被丢弃，不能因为
+	// 暂时放宽校验就把未知 payload 直接透传到前端或业务历史。
+	lastAccepted bool
 }
 
 func newScenarioPublicTraceStream(
@@ -608,6 +596,7 @@ func (stream *scenarioPublicTraceStream) onTurnAnalysis(analysis agentclient.Tur
 }
 
 func (stream *scenarioPublicTraceStream) onPublicTrace(trace agentclient.PublicTraceEvent) error {
+	stream.lastAccepted = false
 	if stream.validationError != nil {
 		return stream.validationError
 	}
@@ -616,13 +605,13 @@ func (stream *scenarioPublicTraceStream) onPublicTrace(trace agentclient.PublicT
 		// 一起断流，前端表现为「回复到一半挂了」。off 模式 validate 恒 nil。
 		if stream.mode == scenarioValidationLog {
 			stream.bypasses = append(stream.bypasses, err.Error())
-			stream.emittedCount++
 			return nil
 		}
 		stream.validationError = err
 		return err
 	}
 	stream.emittedCount++
+	stream.lastAccepted = true
 	return nil
 }
 
@@ -644,29 +633,26 @@ func (stream *scenarioPublicTraceStream) validate(trace agentclient.PublicTraceE
 		stream.lastSequence = trace.Sequence
 		return nil
 	}
-	phaseByKind := map[string]int{
-		"reasoning_summary_delta":     1,
-		"reasoning_summary_completed": 1,
-		"observation_result":          2,
-		"tool_started":                3,
-		"tool_result":                 3,
-		"tool_completed":              3,
-		"response_summary":            4,
-		"mentor_buffered":             5,
-		"guard_passed":                6,
+	// V2 起 Go 不再强制固定 phase 顺序，也不要求 guard_passed 恰好一条：
+	// 旧阶段事件只做白名单放行，正式事件由 Go 投影为判别联合。
+	allowedKinds := map[string]bool{
+		"reasoning_summary_delta":     true,
+		"reasoning_summary_completed": true,
+		"observation_result":          true,
+		"tool_started":                true,
+		"tool_result":                 true,
+		"tool_completed":              true,
+		"response_summary":            true,
+		"mentor_buffered":             true,
+		"guard_passed":                true,
 	}
-	phase, ok := phaseByKind[trace.Kind]
-	if !ok {
+	if !allowedKinds[trace.Kind] {
 		return fmt.Errorf("public trace kind %q is not allowed from Python", trace.Kind)
 	}
 	if trace.Sequence <= stream.lastSequence {
 		return errors.New("public trace sequence is not strictly increasing")
 	}
 	stream.lastSequence = trace.Sequence
-	if phase < stream.lastPhase {
-		return errors.New("public trace event order is invalid")
-	}
-	stream.lastPhase = phase
 	if !scenarioTraceStatusAllowed(trace.Status) {
 		return fmt.Errorf("public trace status %q is invalid", trace.Status)
 	}
@@ -722,12 +708,6 @@ func (stream *scenarioPublicTraceStream) validate(trace agentclient.PublicTraceE
 			return err
 		}
 	}
-	if trace.Kind == "guard_passed" {
-		stream.guardCount++
-		if stream.guardCount > 1 || trace.Status != "completed" {
-			return errors.New("guard_passed event is invalid")
-		}
-	}
 	return nil
 }
 
@@ -739,25 +719,25 @@ func (stream *scenarioPublicTraceStream) validateTool(trace agentclient.PublicTr
 	if tool.DurationMS < 0 || trace.DurationMS < 0 || (trace.DurationMS != 0 && trace.DurationMS != tool.DurationMS) {
 		return errors.New("public tool duration is invalid")
 	}
-	if len(tool.RedactedArguments) != 1 || tool.RedactedArguments["answer_attempt_id"] != stream.requestID+":answer" {
-		return errors.New("compare_answer arguments are not bound to the current request")
+	// compare_answer 已迁移为无参数工具：Runtime 自动绑定当前轮 AnswerAttempt。
+	if len(tool.RedactedArguments) != 0 {
+		return errors.New("compare_answer must not carry model-supplied arguments")
 	}
 	switch trace.Kind {
 	case "tool_started":
-		if stream.toolStage != 0 || trace.Status != "started" || tool.Result != nil {
+		if trace.Status != "started" || tool.Result != nil {
 			return errors.New("compare_answer start event is invalid")
 		}
-		stream.toolStage = 1
 	case "tool_result":
-		if stream.toolStage != 1 || trace.Status != "completed" || tool.Result == nil {
+		if trace.Status != "completed" || tool.Result == nil {
 			return errors.New("compare_answer result event is invalid")
 		}
-		stream.toolStage = 2
+		stream.hasCompareResult = true
 	case "tool_completed":
-		if stream.toolStage != 2 || trace.Status != "completed" || tool.Result == nil {
+		if trace.Status != "completed" || tool.Result == nil {
 			return errors.New("compare_answer completion event is invalid")
 		}
-		stream.toolStage = 3
+		stream.hasCompareResult = true
 	}
 	if tool.Result != nil {
 		if err := validateScenarioPublicComparison(tool.Result, stream.userContent, stream.world, stream.publicScenario, stream.state); err != nil {
@@ -939,131 +919,368 @@ func scenarioTranscript(messages []domain.ScenarioMessage) []agentclient.Turn {
 	return turns
 }
 
-func scenarioInitialRunEvents(requestID, userContent string) []domain.ScenarioRunEvent {
-	return []domain.ScenarioRunEvent{
-		{
-			RequestID: requestID,
-			Sequence:  1,
-			Kind:      "user_message",
-			Status:    "completed",
-			Text:      userContent,
+// scenarioInitialRunEvents 是每轮的第一条正式事件（V2 turn_started）。
+// 旧 v1 的 user_message 事件不再下发：用户正文由消息记录承载，前端从
+// message.user_content / activeRun.userContent 渲染。
+func scenarioInitialRunEvents(requestID string, stateRevision int) []domain.ScenarioRunEvent {
+	return []domain.ScenarioRunEvent{scenarioTurnStartedEvent(requestID, stateRevision, 1)}
+}
+
+// scenarioActionDeclared 校验结构化动作是否在题目声明的观察目录内。
+func scenarioActionDeclared(world *domain.HiddenWorld, actionID string) bool {
+	if world == nil || actionID == "" {
+		return false
+	}
+	for _, observation := range world.Observations {
+		if observation.Action == actionID {
+			return true
+		}
+	}
+	for _, tool := range world.VirtualTools {
+		if tool.ObservationAction == actionID {
+			return true
+		}
+	}
+	return false
+}
+
+// scenarioActionDisplayTitle 返回结构化动作的展示标题，与 QuickActions
+// 按钮文案同源（查看 + 题目声明的工具目标）。
+func scenarioActionDisplayTitle(world *domain.HiddenWorld, actionID string) string {
+	if world != nil {
+		for _, tool := range world.VirtualTools {
+			if tool.ObservationAction == actionID {
+				return "查看" + tool.Target
+			}
+		}
+	}
+	return "发起了一次快捷检查"
+}
+
+// V2 正式事件构造器：每种 kind 只填对应 payload 子对象，
+// 判别联合的正确性由构造保证，不提供 kitchen-sink 填法。
+
+func scenarioTurnStartedEvent(requestID string, revision, sequence int) domain.ScenarioRunEvent {
+	return domain.ScenarioRunEvent{
+		RequestID:     requestID,
+		Sequence:      sequence,
+		SchemaVersion: domain.ScenarioRunEventSchemaV2,
+		StateRevision: revision,
+		Kind:          "turn_started",
+		Payload:       &domain.ScenarioRunEventPayload{TurnID: requestID},
+	}
+}
+
+func scenarioAssistantDeltaEvent(requestID string, revision, sequence int, phase, delta string) domain.ScenarioRunEvent {
+	return domain.ScenarioRunEvent{
+		RequestID:     requestID,
+		Sequence:      sequence,
+		SchemaVersion: domain.ScenarioRunEventSchemaV2,
+		StateRevision: revision,
+		Kind:          "assistant_delta",
+		Payload: &domain.ScenarioRunEventPayload{
+			Phase:              phase,
+			MarkdownReadyDelta: delta,
 		},
 	}
 }
 
-func buildScenarioRunEvents(requestID, userContent string, result agentclient.TurnResult, reply string) []domain.ScenarioRunEvent {
-	events := scenarioInitialRunEvents(requestID, userContent)
-	sequence := len(events) + 1
-	hasGuardPassed := false
-	for _, trace := range result.PublicTrace {
-		event := mapScenarioPublicTraceEvent(requestID, trace, sequence)
-		if trace.Kind == "guard_passed" {
-			hasGuardPassed = true
-		}
+func scenarioTaskUpsertedEvent(requestID string, revision, sequence int, task domain.ScenarioTaskPayload) domain.ScenarioRunEvent {
+	return domain.ScenarioRunEvent{
+		RequestID:     requestID,
+		Sequence:      sequence,
+		SchemaVersion: domain.ScenarioRunEventSchemaV2,
+		StateRevision: revision,
+		Kind:          "task_upserted",
+		Payload:       &domain.ScenarioRunEventPayload{Task: &task},
+	}
+}
+
+func scenarioToolResultEvent(requestID string, revision, sequence int, payload domain.ScenarioToolResultPayload) domain.ScenarioRunEvent {
+	return domain.ScenarioRunEvent{
+		RequestID:     requestID,
+		Sequence:      sequence,
+		SchemaVersion: domain.ScenarioRunEventSchemaV2,
+		StateRevision: revision,
+		Kind:          "tool_result",
+		Payload:       &domain.ScenarioRunEventPayload{ToolResult: &payload},
+	}
+}
+
+func scenarioTurnCompletedEvent(requestID string, revision, sequence int, nextActions []domain.ScenarioAllowedAction) domain.ScenarioRunEvent {
+	return domain.ScenarioRunEvent{
+		RequestID:     requestID,
+		Sequence:      sequence,
+		SchemaVersion: domain.ScenarioRunEventSchemaV2,
+		StateRevision: revision,
+		Kind:          "turn_completed",
+		Payload:       &domain.ScenarioRunEventPayload{NextActions: nextActions},
+	}
+}
+
+func scenarioTurnFailedEvent(requestID string, revision, sequence int, errorCode, message string, retryable bool) domain.ScenarioRunEvent {
+	return domain.ScenarioRunEvent{
+		RequestID:     requestID,
+		Sequence:      sequence,
+		SchemaVersion: domain.ScenarioRunEventSchemaV2,
+		StateRevision: revision,
+		Kind:          "turn_failed",
+		ErrorCode:     errorCode,
+		Summary:       message,
+		Payload:       &domain.ScenarioRunEventPayload{ErrorCode: errorCode, Retryable: retryable},
+	}
+}
+
+// projectScenarioTraceEvent 把一条 Python v1 公开 trace 投影为零或一条 V2 正式事件。
+// 实时 SSE 与落库重建共用此函数：同输入必同输出，public sequence 由 Go 独占分配，
+// 断线重连或重放时不会重新编号。guard_passed / mentor_buffered / response_summary
+// 等内部阶段事件在此静默丢弃——「不下发」是 V2 的正式决策，与 Python 是否继续
+// 发送这些旧事件无关（Python 侧保留它们只为 v1 兼容窗口）。
+func projectScenarioTraceEvent(
+	requestID string,
+	stateRevision int,
+	world *domain.HiddenWorld,
+	trace agentclient.PublicTraceEvent,
+) (domain.ScenarioRunEvent, bool) {
+	switch trace.Kind {
+	case "reasoning_summary_delta", "reasoning_summary_completed":
+		text := ""
 		if trace.Reasoning != nil {
-			event.Reasoning = &domain.ScenarioPublicReasoningSummary{
-				Stage: trace.Reasoning.Stage,
-				Text:  trace.Reasoning.Text,
+			text = trace.Reasoning.Text
+		}
+		if text == "" {
+			text = trace.Summary
+		}
+		if strings.TrimSpace(text) == "" {
+			return domain.ScenarioRunEvent{}, false
+		}
+		// sequence 由调用方分配，这里返回 0 占位。
+		return scenarioAssistantDeltaEvent(requestID, stateRevision, 0, "understanding", text), true
+	case "observation_result":
+		if trace.Observation == nil {
+			return domain.ScenarioRunEvent{}, false
+		}
+		toolKind := scenarioToolKindForAction(world, trace.Observation.Action)
+		return scenarioToolResultEvent(requestID, stateRevision, 0, domain.ScenarioToolResultPayload{
+			CallID:       "obs:" + trace.Observation.Action,
+			ToolID:       trace.Observation.Action,
+			ToolKind:     toolKind,
+			ResultStatus: "succeeded",
+			Content: &domain.ScenarioPublicContent{
+				ContentType:    "observation",
+				MarkdownReady:  scenarioPublicObservationMarkdown(trace.Observation.Result),
+				DisplayVariant: scenarioObservationDisplayVariant(toolKind),
+				Meta: &domain.ScenarioPublicContentMeta{
+					ToolKind:   toolKind,
+					IsNegative: trace.Observation.IsNegative,
+				},
+			},
+		}), true
+	case "tool_started":
+		return scenarioTaskUpsertedEvent(requestID, stateRevision, 0, domain.ScenarioTaskPayload{
+			TaskID:  "compare-answer",
+			CallID:  "compare_answer",
+			Title:   "对比答案与已公开证据",
+			State:   domain.ScenarioTaskRunning,
+			ToolRef: "compare_answer",
+		}), true
+	case "tool_result":
+		if trace.Tool == nil {
+			return domain.ScenarioRunEvent{}, false
+		}
+		content := (*domain.ScenarioPublicContent)(nil)
+		if trace.Tool.Result != nil {
+			content = &domain.ScenarioPublicContent{
+				ContentType:    "observation",
+				MarkdownReady:  scenarioComparisonMarkdown(trace.Tool.Result),
+				DisplayVariant: "tool_return",
+				Meta:           &domain.ScenarioPublicContentMeta{ToolKind: "verification"},
 			}
 		}
-		if trace.Tool != nil {
-			event.Tool = scenarioToolEvent(trace.Tool)
-		}
-		events = append(events, event)
-		sequence++
+		return scenarioToolResultEvent(requestID, stateRevision, 0, domain.ScenarioToolResultPayload{
+			CallID:       "compare_answer",
+			ToolID:       "compare_answer",
+			ToolKind:     "verification",
+			ResultStatus: "succeeded",
+			DurationMS:   trace.Tool.DurationMS,
+			Content:      content,
+		}), true
+	case "tool_completed":
+		return scenarioTaskUpsertedEvent(requestID, stateRevision, 0, domain.ScenarioTaskPayload{
+			TaskID:  "compare-answer",
+			CallID:  "compare_answer",
+			Title:   "对比答案与已公开证据",
+			State:   domain.ScenarioTaskCompleted,
+			ToolRef: "compare_answer",
+		}), true
+	default:
+		return domain.ScenarioRunEvent{}, false
 	}
-	if !hasGuardPassed {
-		events = append(events, domain.ScenarioRunEvent{
-			RequestID: requestID,
-			Sequence:  sequence,
-			Kind:      "guard_passed",
-			Status:    "completed",
-			Summary:   "回复已通过安全校验。",
-		})
-		sequence++
-	}
-	events = append(events, domain.ScenarioRunEvent{
-		RequestID: requestID,
-		Sequence:  sequence,
-		Kind:      "proposal_approved",
-		Status:    "completed",
-		Summary:   "状态提议已通过校验并完成提交。",
-	})
-	sequence++
-	for _, chunk := range chunkText(reply, 20) {
-		events = append(events, domain.ScenarioRunEvent{
-			RequestID: requestID,
-			Sequence:  sequence,
-			Kind:      "reply_delta",
-			Status:    "running",
-			Text:      chunk,
-		})
-		sequence++
-	}
-	events = append(events, domain.ScenarioRunEvent{
-		RequestID: requestID,
-		Sequence:  sequence,
-		Kind:      "turn_completed",
-		Status:    "completed",
-		Summary:   "本轮排查已完成。",
-	})
-	return events
 }
 
-func mapScenarioPublicTraceEvent(requestID string, trace agentclient.PublicTraceEvent, sequence int) domain.ScenarioRunEvent {
-	status := trace.Status
-	if status == "" {
-		status = "completed"
-	}
-	event := domain.ScenarioRunEvent{
-		RequestID: requestID,
-		Sequence:  sequence,
-		Kind:      trace.Kind,
-		Status:    status,
-		Text:      trace.Text,
-		Summary:   trace.Summary,
-	}
-	if trace.Reasoning != nil {
-		event.Reasoning = &domain.ScenarioPublicReasoningSummary{
-			Stage: trace.Reasoning.Stage,
-			Text:  trace.Reasoning.Text,
+// scenarioToolKindForAction 与 agent runtime.py 的 _tool_kind_for_action 同构：
+// 优先取题目声明的 virtual_tools.kind，退化到动作前缀（inspect:logs.x → logs）。
+func scenarioToolKindForAction(world *domain.HiddenWorld, action string) string {
+	if world != nil {
+		for _, tool := range world.VirtualTools {
+			if tool.ObservationAction == action {
+				return tool.Kind
+			}
 		}
 	}
-	if trace.Observation != nil {
-		event.Observation = &domain.ScenarioPublicObservation{
-			Action:     trace.Observation.Action,
-			Result:     trace.Observation.Result,
-			IsNegative: trace.Observation.IsNegative,
-		}
+	_, remainder, _ := strings.Cut(action, ":")
+	kind, _, _ := strings.Cut(remainder, ".")
+	if kind != "" {
+		return kind
 	}
-	if trace.Tool != nil {
-		event.Tool = scenarioToolEvent(trace.Tool)
-	}
-	return event
+	return "observation"
 }
 
-func scenarioToolEvent(tool *agentclient.ToolEventPayload) *domain.ScenarioToolEventPayload {
-	if tool == nil {
+func scenarioObservationDisplayVariant(toolKind string) string {
+	switch toolKind {
+	case "logs":
+		return "log"
+	default:
+		return "tool_return"
+	}
+}
+
+// scenarioPublicObservationMarkdown 落实公开文案规则：实现术语不得出现在
+// 开头。题库观察结果常以「模拟××日志」起头（内部生成注记），对外投影时
+// 只剥离开头前缀，正文数据一字不改。
+func scenarioPublicObservationMarkdown(result string) string {
+	trimmed := strings.TrimSpace(result)
+	if rest := strings.TrimPrefix(trimmed, "模拟"); rest != trimmed {
+		return strings.TrimSpace(rest)
+	}
+	return trimmed
+}
+
+func scenarioComparisonMarkdown(comparison *agentclient.PublicAnswerComparison) string {
+	parts := []string{"答案对比：" + scenarioSupportStatusLabel(comparison.SupportStatus)}
+	if len(comparison.UserPoints) > 0 {
+		parts = append(parts, "你的要点："+strings.Join(comparison.UserPoints, "；"))
+	}
+	if next := strings.TrimSpace(comparison.NextAction); next != "" {
+		parts = append(parts, next)
+	}
+	return strings.Join(parts, "；")
+}
+
+func scenarioSupportStatusLabel(status string) string {
+	switch status {
+	case "insufficiently_specific":
+		return "表述还不够具体"
+	case "needs_more_evidence":
+		return "还需要更多直接观察"
+	case "has_evidence_conflict":
+		return "与已有观察存在冲突"
+	case "evidence_consistent":
+		return "与已有观察一致"
+	default:
+		return status
+	}
+}
+
+// scenarioAllowedActions 从题目声明的虚拟工具目录（动态 ActionCatalog 实例）
+// 生成 turn_completed 下一步动作。只做当前状态过滤：全部关联证据都已收集的
+// 工具不再推荐；按钮只表达抽象检查方向，不携带答案关键词。
+func scenarioAllowedActions(world *domain.HiddenWorld, state domain.ScenarioLearnerState, catalogVersion string) []domain.ScenarioAllowedAction {
+	if world == nil {
 		return nil
 	}
-	payload := &domain.ScenarioToolEventPayload{
-		Name:              tool.Name,
-		RedactedArguments: map[string]string{},
-		DurationMS:        tool.DurationMS,
+	collected := stringSet(state.CollectedEvidence)
+	actions := []domain.ScenarioAllowedAction{}
+	for _, tool := range world.VirtualTools {
+		if tool.ObservationAction == "" {
+			continue
+		}
+		if len(tool.EvidenceIDs) > 0 && containsAll(state.CollectedEvidence, tool.EvidenceIDs) {
+			continue
+		}
+		if collected[tool.ObservationAction] {
+			continue
+		}
+		actions = append(actions, domain.ScenarioAllowedAction{
+			ActionID:       tool.ObservationAction,
+			CatalogVersion: catalogVersion,
+			ToolKind:       tool.Kind,
+			Title:          "查看" + tool.Target,
+		})
 	}
-	for key, value := range tool.RedactedArguments {
-		payload.RedactedArguments[key] = value
+	return actions
+}
+
+// buildScenarioRunEvents 产出 V2 正式事件序列。
+// streamedChunks 非空表示实时流已经按真实顺序下发过 reply 分片：
+// tracesBeforeReply 是首个分片到达前已下发的 trace 投影事件数，
+// 落库序列与实时序列逐位对齐，断线重连（after_sequence）回放不重编号。
+func buildScenarioRunEvents(
+	requestID string,
+	result agentclient.TurnResult,
+	reply string,
+	stateRevision int,
+	world *domain.HiddenWorld,
+	state domain.ScenarioLearnerState,
+	catalogVersion string,
+	streamedChunks []string,
+	tracesBeforeReply int,
+) []domain.ScenarioRunEvent {
+	chunks := streamedChunks
+	if len(chunks) == 0 {
+		chunks = chunkText(reply, 20)
+		tracesBeforeReply = len(result.PublicTrace) + 1
 	}
-	if tool.Result != nil {
-		payload.Result = &domain.ScenarioPublicAnswerComparison{
-			Tool:          tool.Result.Tool,
-			Status:        tool.Result.Status,
-			UserPoints:    append([]string{}, tool.Result.UserPoints...),
-			SupportStatus: tool.Result.SupportStatus,
-			NextAction:    tool.Result.NextAction,
+	events := []domain.ScenarioRunEvent{scenarioTurnStartedEvent(requestID, stateRevision, 1)}
+	for _, trace := range result.PublicTrace {
+		event, ok := projectScenarioTraceEvent(requestID, stateRevision, world, trace)
+		if !ok {
+			continue
+		}
+		events = append(events, event)
+	}
+	// 序号统一在组装时分配：trace 投影事件保持 Python 到达顺序，
+	// reply 分片插入 tracesBeforeReply 分割点，与实时流出顺序逐位一致。
+	return insertReplyChunksAndComplete(events, requestID, stateRevision, chunks, tracesBeforeReply, state, world, catalogVersion)
+}
+
+// insertReplyChunksAndComplete 把 reply 分片插入 trace 投影事件的正确位置并
+// 追加 turn_completed。tracesBeforeReply 之前的投影事件已经排在分片前面，
+// 之后的投影事件需要移动到分片后面，与实时流出顺序逐位一致。
+func insertReplyChunksAndComplete(
+	events []domain.ScenarioRunEvent,
+	requestID string,
+	stateRevision int,
+	chunks []string,
+	tracesBeforeReply int,
+	state domain.ScenarioLearnerState,
+	world *domain.HiddenWorld,
+	catalogVersion string,
+) []domain.ScenarioRunEvent {
+	var before, after []domain.ScenarioRunEvent
+	// events[0] 是 turn_started，恒在分片之前。
+	for _, event := range events[1:] {
+		if len(before) < tracesBeforeReply {
+			before = append(before, event)
+		} else {
+			after = append(after, event)
 		}
 	}
-	return payload
+	out := make([]domain.ScenarioRunEvent, 0, 1+len(before)+len(chunks)+len(after)+1)
+	out = append(out, events[0])
+	out = append(out, before...)
+	for _, chunk := range chunks {
+		if chunk == "" {
+			continue
+		}
+		out = append(out, scenarioAssistantDeltaEvent(requestID, stateRevision, 0, "replying", chunk))
+	}
+	out = append(out, after...)
+	out = append(out, scenarioTurnCompletedEvent(requestID, stateRevision, 0, scenarioAllowedActions(world, state, catalogVersion)))
+	for i := range out {
+		out[i].Sequence = i + 1
+	}
+	return out
 }
 
 func marshalAgentAudit(value any) json.RawMessage {
