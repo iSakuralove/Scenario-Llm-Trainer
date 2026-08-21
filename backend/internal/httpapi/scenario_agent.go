@@ -1679,6 +1679,25 @@ func scenarioReleasedClueEvents(
 	return events
 }
 
+// scenarioFillCurrentFocus 只在 Agent 没有提交焦点时补齐公开调查维度。
+// 焦点来自已经通过 Go 审批的证据类别，不接受模型自造字符串，也不把
+// 下一步动作或排除范围写入学生状态。
+func scenarioFillCurrentFocus(state domain.ScenarioLearnerState, world *domain.HiddenWorld) domain.ScenarioLearnerState {
+	if strings.TrimSpace(state.CurrentFocus) != "" || world == nil {
+		return state
+	}
+	for index := len(state.CollectedEvidence) - 1; index >= 0; index-- {
+		evidenceID := state.CollectedEvidence[index]
+		for _, node := range world.EvidenceGraph {
+			if node.EvidenceID == evidenceID && validScenarioFocus(node.Category) {
+				state.CurrentFocus = node.Category
+				return state
+			}
+		}
+	}
+	return state
+}
+
 func marshalAgentAudit(value any) json.RawMessage {
 	raw, err := json.Marshal(value)
 	if err != nil {

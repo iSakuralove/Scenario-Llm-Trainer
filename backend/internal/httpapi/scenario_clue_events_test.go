@@ -49,3 +49,23 @@ func TestScenarioReleasedClueEventsIgnoreUnknownOrPreviouslyCollectedEvidence(t 
 		t.Fatalf("unexpected clue events for non-public evidence: %+v", events)
 	}
 }
+
+func TestScenarioFillCurrentFocusUsesLatestApprovedEvidence(t *testing.T) {
+	world := &domain.HiddenWorld{
+		EvidenceGraph: []domain.EvidenceNode{
+			{EvidenceID: "E_LOG", Content: "日志观察", Category: "logs"},
+			{EvidenceID: "E_CONFIG", Content: "配置观察", Category: "config"},
+		},
+	}
+	state := domain.ScenarioLearnerState{CollectedEvidence: []string{"E_LOG", "E_CONFIG"}}
+	filled := scenarioFillCurrentFocus(state, world)
+	if filled.CurrentFocus != "config" {
+		t.Fatalf("expected latest approved evidence category as focus, got %+v", filled)
+	}
+
+	state.CurrentFocus = "metrics"
+	kept := scenarioFillCurrentFocus(state, world)
+	if kept.CurrentFocus != "metrics" {
+		t.Fatalf("explicit focus should remain unchanged, got %+v", kept)
+	}
+}

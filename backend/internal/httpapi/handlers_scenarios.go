@@ -583,6 +583,7 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 			}
 		}
 	}
+	nextState = scenarioFillCurrentFocus(nextState, question.Content.HiddenWorld)
 	if s.scenarioValidationMode != scenarioValidationOff {
 		if err := validateScenarioReply(result.Reply, question.Content.HiddenWorld, question.Content.PublicScenario, nextState); err != nil {
 			if s.scenarioValidationMode == scenarioValidationLog {
