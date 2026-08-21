@@ -9,21 +9,21 @@
 ## Phase A：Python 契约与新 Runtime（生产方）
 
 ### A1 新契约层（contracts/）
-- 文件：`agent/src/hiddenworld/contracts/agent_context.py`（新）、`events.py`（重写）、`answer.py`（增独立 CanonicalAnswer 与无 terminal 的 AgentComparison）、`world.py`（simulated_output 注记 Runtime-only）、`transport.py`（TurnResult v2 形状）、`model_output.py`（新 AgentModelOutput）、`debug_trace.py`（新独立 DebugTraceEvent）
-- 内容：AgentContext / TeachingNavigation / AgentTurnControlView / ActionCatalogEntry / ToolCallState / ToolResult / RunEvent 判别联合 / PublicContent / CanonicalAnswer / AgentComparison 白名单
-- 测试：`agent/tests/test_contracts.py` 扩展——字段白名单测试（AgentContext 不含 ScenarioContract，仅暴露 turn_control.terminal；AgentComparison 不含 terminal）；AgentModelOutput 两分支与 public_summary 规则；ToolCallState/ToolResult 分层；正式 RunEvent 与独立 DebugTraceEvent parse/reject 测试
+- 文件：`agent/src/hiddenworld/contracts/agent_context.py`（新）、`events.py`（重写）、`answer.py`（增独立 CanonicalAnswer 与无 terminal 的 AgentComparison）、`authorization.py`（新 UserActionAuthorization）、`dimensions.py`（新 TeachingDimensionRef）、`validator.py`（新 ScenarioContractValidator）、`world.py`（simulated_output 注记 Runtime-only）、`transport.py`（TurnResult v2 形状）、`model_output.py`（新 AgentModelOutput）、`debug_trace.py`（新独立 DebugTraceEvent）
+- 内容：AgentContext 明确分离历史 `transcript` 与当前 `current_user_message`；结构化动作轮使用授权投影而不是伪造用户文本；其余契约包括 TeachingDimensionRef / AgentTurnControlView / AuthorizedActionRef / ActionCatalogEntry / UserActionAuthorization / ToolCallState / ToolResult / RunEvent 判别联合 / PublicContent / CanonicalAnswer / AgentComparison 白名单
+- 测试：`agent/tests/test_contracts.py` 扩展——字段白名单测试（AgentContext 不含 ScenarioContract，保留当前 user_message，仅暴露安全维度、authorized_actions 和 turn_control.terminal；AgentComparison 不含 terminal）；增加“当前消息传入最终 ScenarioAgent”回归测试；AgentModelOutput 两分支与 public_summary 规则；ToolCallState/ToolResult 分层；正式 RunEvent 与独立 DebugTraceEvent parse/reject；TeachingDimensionRef 与 ScenarioContractValidator 唯一性/引用/一致性测试
 - ✅ 验收：`cd agent && python -m pytest tests/test_contracts.py -q`
 
 ### A2 工具层（agents/tools.py 重写）
-- 文件：`agent/src/hiddenworld/agents/tools.py`（重写）、新增 `agent/src/hiddenworld/runtime/tool_executor.py`
-- 内容：语义工具集（logs/metrics/config/database/dependency 查询工具，虚拟数据确定性执行，复用 HiddenWorldEngine.observe）；compare_answer 零参数化 + Runtime 绑定 AnswerAttempt；保留 `_resolve_declared_virtual_tool` 确定性映射作为执行入口校验
-- 测试：`agent/tests/test_tools.py` 重写——无参数 compare_answer；no_answer_attempt 错误码；未声明查询 unsupported；幂等
+- 文件：`agent/src/hiddenworld/agents/tools.py`（重写）、新增 `agent/src/hiddenworld/runtime/tool_executor.py`、`runtime/user_action_authorization.py`
+- 内容：语义工具集（logs/metrics/config/database/dependency 查询工具，虚拟数据确定性执行，复用 HiddenWorldEngine.observe）；Observation Tool 执行前强制匹配 UserActionAuthorization；无授权只产生 rejected task，不执行、不产生 WorldObservation；compare_answer 零参数化 + Runtime 绑定 AnswerAttempt；保留 `_resolve_declared_virtual_tool` 确定性映射作为执行入口校验
+- 测试：`agent/tests/test_tools.py` 重写——无参数 compare_answer；no_answer_attempt 错误码；无 user action 授权拒绝；当前 user_message 检查意图授权成功；StructuredUserAction/QuickAction 授权成功；未声明查询 unsupported；幂等
 - ✅ 验收：`cd agent && python -m pytest tests/test_tools.py -q`
 
 ### A3 AgentLoop 与调度器
 - 文件：新增 `agent/src/hiddenworld/runtime/agent_loop.py`、`runtime/batch_scheduler.py`、`runtime/state_reducer.py`、`runtime/event_publisher.py`；改 `agents/scenario_agent.py`（新单 Agent）；`app.py`（入口接线）
-- 内容：≤11 轮 / ≤10 次逻辑调用预算；所有业务工具共用预算，规范化重复调用合并，批内独立查询分别计数；用户超预算请求进入 pending 但不自动执行，Agent 自主超额调用直接拒绝，必要答案核验预留预算；批次依赖拆分（无依赖只读并行、依赖跨轮）；失败/超时/重复/预算耗尽确定性处理；StateReducer 编组现有 kernel（cluegate/evidence/verifier/antiguess/policy 不重写算法）；AgentModelOutput 的 public_summary 投影；正式 RunEvent 与独立 DebugTraceEvent 分流。
-- 测试：`agent/tests/test_runtime.py` 重写——依赖批次调度（并行/串行/违规拆批）；预算耗尽收束；正式模式无 DebugTraceEvent；有 tool_calls 必有摘要、纯 final_reply 默认无摘要；摘要后必有后续实质事件；理解摘要流式保留
+- 内容：≤11 轮 / ≤10 次逻辑调用预算；所有业务工具共用预算，规范化重复调用合并，批内独立查询分别计数；用户超预算请求进入 pending 但不自动执行，Agent 自主超额调用直接拒绝，必要答案核验预留预算；Observation Tool 仅执行已授权动作，Agent 自主提出但无授权的观察调用确定性拒绝；批次依赖拆分（无依赖只读并行、依赖跨轮）；失败/超时/重复/预算耗尽确定性处理；StateReducer 编组现有 kernel（cluegate/evidence/verifier/antiguess/policy 不重写算法）；AgentModelOutput 的 public_summary 投影；正式 RunEvent 与独立 DebugTraceEvent 分流。
+- 测试：`agent/tests/test_runtime.py` 重写——依赖批次调度（并行/串行/违规拆批）；无授权 Observation Tool 拒绝；用户授权与 QuickAction 授权执行；预算耗尽收束；正式模式无 DebugTraceEvent；有 tool_calls 必有摘要、纯 final_reply 默认无摘要；摘要后必有后续实质事件；理解摘要流式保留
 - ✅ 验收：`cd agent && python -m pytest -q`
 
 ### A4 Python 旧链路删除（独立 commit，可单独 revert）
@@ -49,7 +49,7 @@
 
 ### B3 SSE / 持久化 / AllowedAction
 - 文件：`backend/internal/httpapi/handlers_scenarios.go`、`sse.go`（如需）、`backend/internal/domain/scenario_agent.go`（ScenarioRunEvent v2）、新增 AllowedAction 生成与 StructuredUserAction handler
-- 内容：schema_version 与 state_revision 写入每个正式 SSE 事件；正式 sequence 一旦确定即持久化，断线重放不得重编号；QuickAction 与自然语言共用预算/幂等/state_revision；ActionCatalog 采用题目动态实例 + 固定 ToolKind + Runtime 白名单
+- 内容：schema_version 与 state_revision 写入每个正式 SSE 事件；Python 只产生 internal_event_index，Go 是 public sequence 唯一生成者，正式 sequence 一旦确定即持久化，断线重放不得重编号；QuickAction 与自然语言共用预算/幂等/state_revision，并产生 UserActionAuthorization；ActionCatalog 采用题目动态实例 + 固定 ToolKind + Runtime 白名单
 - 测试：SSE 端到端（httptest + event-stream）；QuickAction 计预算测试
 - ✅ 验收：`cd backend && go test ./...`
 
@@ -64,7 +64,7 @@
 
 ### C1 类型与解析
 - 文件：`frontend/src/types/agentRun.ts`（重写判别联合 + PublicContent + AgentModelOutput + ToolCallState/ToolResult + 双版本解析器）、`types/index.ts`（hidden_world 移除 + 引用收敛）、`api/client.ts`、新增 `LegacyEventAdapter.ts`
-- 内容：v1 Event → LegacyEventAdapter → UnifiedViewModel；v2 直接进入同一 ViewModel；不把旧事件伪装成新 Runtime 事实
+- 内容：v1 Event → LegacyEventAdapter → UnifiedViewModel；v2 直接进入同一 ViewModel；不把旧事件伪装成新 Runtime 事实；assistant 回复只走 assistant_delta，不再保留 PublicContent assistant 分支
 - ✅ 验收：`cd frontend && pnpm type-check`
 
 ### C2 AgentRun 渲染
@@ -123,17 +123,17 @@ cd frontend && pnpm test
 
 | # | 验收项 | Python | Go | 前端 | 端到端 |
 |---|---|---|---|---|---|
-| 1 | AgentContext 无 ScenarioContract | test_contracts 字段白名单 + prompt 渲染断言 | — | — | 抓包/日志抽查 |
-| 2 | RunEvent 判别联合契约 | parse/reject 测试 | 校验矩阵测试 + golden；每个事件必有 state_revision；ToolCallState/ToolResult 分层 | 类型测试 | SSE 抓包对比 |
+| 1 | AgentContext 无 ScenarioContract 且保留当前 user_message | test_contracts 字段白名单 + 当前消息传入最终 Agent 回归测试 + prompt 渲染断言 | TurnRequest.transcript/user_message 映射测试 | — | 澄清问题端到端冒烟 |
+| 2 | RunEvent 判别联合契约 | parse/reject 测试 | 校验矩阵测试 + golden；每个事件必有 state_revision；ToolCallState/ToolResult 分层 | 类型测试；assistant_delta 唯一回复路径 | SSE 抓包对比 |
 | 3 | sequence 严格递增/去重/恢复 | event_publisher 测试 | 校验测试；重放不重编号 | dedupeEvents 测试（现状保留） | 断线重连冒烟 |
 | 4 | state_revision 并发控制 | 提议测试 | 审批+409 测试；事件外层必带 revision | — | 双开冲突冒烟 |
-| 5 | tool_calls 依赖批次 | batch_scheduler 测试 | — | — | 并行查询轮事件序 |
+| 5 | tool_calls 依赖批次与用户授权 | batch_scheduler + authorization 测试 | 授权拒绝/QuickAction 授权复核 | — | 并行查询轮事件序 |
 | 6 | 10 次逻辑调用预算 | agent_loop 测试 | 复核测试 | — | 连续提问冒烟 |
 | 7 | compare_answer 无参数+绑定 | test_tools | 无参数校验测试 | — | 答案尝试轮冒烟 |
 | 8 | DebugTraceEvent 非生产边界 | 独立协议与生产禁用测试 | 正式 RunEvent 未知 debug kind 拒绝；独立调试通道测试 | 调试面板仅消费独立通道 | 生产配置抽查 |
 | 9 | 前端无"排查导师"文字 | — | 文案替换 | UI 测试 | 页面走查 |
 | 10 | thinking 事件驱动非固定 | 摘要后必有后续事件测试 | 完整性校验测试 | thinkingLabel 测试 | 走查 |
-| 11 | PublicContent 白名单 | 投影测试 | validateScenarioReply 等价校验 | 只渲染 markdown_ready | 走查 |
+| 11 | PublicContent 白名单与 assistant_delta 分离 | 投影测试 | validateScenarioReply 等价校验 | observation/clue 只渲染 markdown_ready，回复只渲染 markdown_ready_delta | 走查 |
 | 12 | QuickAction 共用预算/幂等 | — | handler 测试 | 交互测试 | 点击冒烟 |
 | 13 | schema_version / LegacyEventAdapter 路由 | CONTRACT_VERSION v2 | 拒 v1 新写入 + 存量适配 | 双解析器汇聚同一 ViewModel | 旧会话打开冒烟 |
 

@@ -6,7 +6,7 @@
 
 ```
 ┌─ Frontend (React/SSE) ──────────────────────────────┐
-│ 只消费 RunEvent(判别联合 payload) + PublicContent     │
+│ 只消费 RunEvent(判别联合 payload；回复含 assistant_delta) │
 │ 渲染 markdown_ready；无身份文字；事件驱动状态          │
 └──────────────▲──────────────────────────────────────┘
                │ SSE (schema_version 路由)
@@ -26,7 +26,7 @@
                │ AgentContext（唯一入口，投影而成）
 ┌──────────────┴──────────────────────────────────────┐
 │ ScenarioAgent（单 LLM 节点）                          │
-│ 理解 / 规划 / 决定 tool_calls 或 final_reply           │
+│ 理解 / 规划 / 提议 tool_calls 或 final_reply           │
 │ 看不到 ScenarioContract、CanonicalAnswer、内部比较     │
 └──────────────────────────────────────────────────────┘
 ```
@@ -52,20 +52,33 @@
 - `CanonicalAnswer` 是独立持久化字段，不是运行时临时从 RootCause 拼出的对象；至少包含 `canonical_conclusion`、`required_evidence_ids`、`required_causal_relations`、`accepted_equivalents`、`solution_requirements`，并绑定 `answer_version`。
 - 消费者仅限：工具执行引擎（WorldObservation 生成）、StateReducer（EvidenceEngine/AntiGuess/RootCauseVerifier 吸收）、InternalComparison（AnswerComparator）、Guard、审计。
 
+**ScenarioContractValidator（生成/加载硬门槛）**：
+
+- `canonical_conclusion` 必须是单一、稳定的权威结论对象，不能同时存在两个完整结论身份。
+- `required_evidence_ids` 必须全部引用存在的 `WorldObservation`，且证据关系能够支持该结论。
+- `required_causal_relations` 必须全部存在于 `DiagnosticRelations`/因果图，并能从 RootCause 连到题面症状。
+- CanonicalAnswer 必须与 RootCause 一致，`solution_requirements` 必须与 SolutionRubric 一致；任何漂移都拒绝加载。
+- `accepted_equivalents` 只能指向同一 canonical identity/root-cause identity 的语义等价表达；无法证明同根因或出现第二个完整答案时拒绝入库，连续生成失败进入人工审核。
+- 校验在题目生成保存前、Runtime 加载前各执行一次；Runtime 不接受“只通过字段白名单但语义不一致”的契约。
+
 **AgentContext（Agent 唯一输入）**：
 
 | 字段 | 类型/来源 | 说明 |
 |---|---|---|
 | public_scenario | PublicScenario 投影 | 题面，同现状 |
-| transcript | Turn[] | 对话历史 |
+| transcript | Turn[] | 已持久化的历史对话；不包含本轮尚未落库的输入 |
+| current_user_message | string | 当前轮用户原话，必须单独注入 Agent；不能假设它已追加到 transcript。结构化动作轮为空字符串，动作授权通过 `authorized_actions` 注入 |
 | learner_summary | LearnerStateView | 已确立事实/已做动作/当前焦点/排除项（抽象标签）——同现状 MentorDeps.learner_state |
-| teaching_navigation | TeachingNavigation **新增** | 四个抽象维度：waiting_time / dependency_latency / capacity_saturation / causal_chain；每个取值 = {status: 未探索/进行中/已覆盖, hint_level}，由 GuidanceState 投影，**不含任何答案关键词** |
+| teaching_navigation | `TeachingDimensionRef[]` **新增** | 题目生成时定义的安全教学维度实例 + Runtime 固定允许的通用 category；每个取值 = {dimension_id, category, status: 未探索/进行中/已覆盖, hint_level}，由 GuidanceState 投影，**不含任何答案关键词** |
 | action_catalog | ActionCatalogEntry[] | Runtime 暴露的可调用工具目录（tool_id/kind/target/参数 schema），即现有 virtual_tools 的 Agent-visible 投影（**去掉 simulated_output、evidence_ids、内部 observation 映射细节**） |
+| authorized_actions | `AuthorizedActionRef[]` | 当前 user_message 或 StructuredUserAction 已授权的观察动作安全投影；空集合表示 Agent 不能请求新的 Observation Tool |
 | tool_results | 最近一轮工具结果（Agent-visible 投影） | WorldObservation 的公开文本 + AgentComparison 信号 |
 | budget | 剩余模型轮次/工具调用次数 | Agent 感知预算以自行收束 |
 | turn_control | `AgentTurnControlView` | 只读暴露 `terminal`；不暴露 `completion_allowed` / `completion_ready` 或内部比较结果 |
 
-**禁止进入 AgentContext**：ScenarioContract 本体、CanonicalAnswer、InternalComparison、答案原文、精确缺失项（missing_evidence/missing_solution_requirements 原文）、相似度（claim_alignment 等）、未释放 EvidenceNode.content、发布策略、hidden_world 键。
+**禁止进入 AgentContext**：ScenarioContract 本体、CanonicalAnswer、InternalComparison、答案原文、精确缺失项（missing_evidence/missing_solution_requirements 原文）、相似度（claim_alignment 等）、未释放 EvidenceNode.content、发布策略、hidden_world 键。`authorized_actions` 只包含本轮已授权动作的安全引用，不携带隐藏工具目录或答案信息。
+
+**当前轮输入不丢失**：Go 的 `TurnRequest.transcript` 只表示既有历史，`TurnRequest.user_message` 必须映射到 `AgentContext.current_user_message`。Runtime 不得只把当前输入交给解析/授权路径，而遗漏给最终生成回复的 ScenarioAgent；澄清、解释、假设和答案尝试都必须能在同一轮 Agent 输入中被读取。
 
 **物理隔离方式**：AgentContext 是独立 dataclass（contracts/agent_context.py），Runtime 构造时逐字段白名单投影（类似现有 `to_public()` 的"笨搬运"模式 + `test_mentor_deps_field_boundary` 式字段白名单测试）。ScenarioContract 对象在 Runtime 进程内存在，但 Agent 构造函数签名只接受 AgentContext——类型层面不可误传。
 
@@ -91,8 +104,8 @@ payload 判别联合（Python 端 Pydantic discriminated union，Go 端 sealed �
 | turn_started | { turn_id, task_summary? } | 每轮开始 |
 | task_upserted | { task_id, call_id?, title, state: ToolCallState, tool_ref? } | Agent 规划出多步任务或工具生命周期状态变化 |
 | tool_result | { call_id, tool_id, tool_kind, result_status: succeeded/failed/timeout, duration_ms, content?: PublicContent, error_code? } | 工具执行结束后发布；不表示 pending/running，未执行的 pending/rejected/unsupported 只通过 task_upserted 表达 |
-| clue_published | { clue_id, content: PublicContent, dimension: TeachingNavigation 维度 } | ClueGate 释放线索 |
-| assistant_delta | { phase: understanding/replying, text } | 理解摘要流（phase=understanding，承接现有 public_summary 能力）与正文流（phase=replying） |
+| clue_published | { clue_id, content: PublicContent, dimension: TeachingDimensionRef } | ClueGate 释放线索 |
+| assistant_delta | { phase: understanding/replying, markdown_ready_delta } | 安全摘要或回复 Markdown 增量；assistant 回复不再包装成 PublicContent |
 | turn_completed | { next_actions: AllowedAction[] } | 轮次成功收束 |
 | turn_failed | { error_code, retryable } | 轮次失败 |
 
@@ -107,9 +120,9 @@ payload 判别联合（Python 端 Pydantic discriminated union，Go 端 sealed �
 
 ```
 PublicContent {
-  content_type: "observation" | "clue" | "assistant"
+  content_type: "observation" | "clue"
   markdown_ready: string      // 唯一渲染源
-  display_variant?: "log" | "tool_return" | "clue" | "reply"
+  display_variant?: "log" | "tool_return" | "clue"
   meta?: { tool_kind?: logs/metrics/config/database/dependency, is_negative?: bool }
 }
 ```
@@ -119,11 +132,11 @@ PublicContent {
 
 | 维度 | 生成者 | 作用域 | 生命周期 |
 |---|---|---|---|
-| sequence | Runtime/Go 在正式事件序列确定时分配并持久化 | 单 request 单轮 | 严格递增；断线重连按 request_id + after_sequence 恢复；已持久化 sequence 在重连、重放、重新建立 SSE 连接时不得重新编号；去重键 request_id+sequence |
+| sequence | **Go 唯一生成**；Python 仅维护 `internal_event_index` | 单 request 单轮 | Go 在复核通过、写入持久化/SSE 前分配 public sequence；严格递增；断线重连按 request_id + after_sequence 恢复；已持久化 sequence 在重连、重放、重新建立 SSE 连接时不得重新编号；去重键 request_id+sequence |
 | state_revision | Go（DB scenario_sessions.state_revision） | 会话级业务状态 | 每个正式事件外层必带；同一状态快照的连续事件可保持同一 revision；只有 Runtime 成功提交业务状态时才提升；冲突返回 409；QuickAction 与自然语言共用同一 CAS/revision 链路 |
 | schema_version | Go（事件出口）+ Python（契约常量） | 协议级 | "hiddenworld.v1" → "hiddenworld.v2"；SSE 首事件携带；前端按版本路由解析器；落库旧 v1 trace 只读兼容、新写入一律 v2 |
 
-要点：实时序号与落库序号分离的教训（spec Scenario 4）保留，但不得在每次 SSE 重连时重新编号。新 v2 事件序列直接持久化；旧 v1 事件由 `LegacyEventAdapter` 使用稳定源序号或一次性确定性索引适配，适配结果仅用于统一展示模型。
+要点：实时序号与落库序号分离的教训（spec Scenario 4）保留，但不得在每次 SSE 重连时重新编号。Python 只维护内部排序索引，不对外声明 sequence；Go 在正式事件通过复核后生成并持久化唯一 public sequence。旧 v1 事件由 `LegacyEventAdapter` 使用稳定源序号或一次性确定性索引适配，适配结果仅用于统一展示模型。
 
 **ToolCallState 与 ToolResult 分层**：
 
@@ -133,6 +146,21 @@ ToolResult    = result_status(succeeded | failed | timeout) + optional PublicCon
 ```
 
 `task_upserted` 负责表达 ToolCallState 生命周期；`tool_result` 只在工具真正结束后表达执行结果。`started` 不是 ToolResult，预算拒绝、unsupported、pending 也不伪造工具结果。
+
+**UserActionAuthorization 硬边界**：
+
+```text
+UserActionAuthorization
+├── source: user_message | structured_user_action
+├── action_ref / tool_kind / normalized_scope
+├── state_revision
+└── authorization_id
+```
+
+- Runtime 从既有语义帧/动作解析结果生成授权，不新增关键词意图分类器。
+- Observation Tool 执行前必须匹配当前授权的 `action_ref + tool_kind + normalized_scope`；Agent 自己生成的 tool_call 只能被校验，不能生成授权。
+- 无匹配授权时发布 `task_upserted(state=rejected, error_code=user_action_required)`，不执行、不产生 WorldObservation、不消耗“已执行”预算。
+- StructuredUserAction/QuickAction 点击直接生成授权并进入同一 ToolScheduler；`compare_answer`、StateReducer、ClueGate 属于 Runtime 内部路径，不受该观察授权限制。
 
 ## 5. ToolCall 批次调度模型
 
@@ -176,10 +204,10 @@ CanonicalAnswer → InternalComparison(AnswerComparator, Runtime-only)
               StateReducer(EvidenceEngine+AntiGuess 吸收)
                 ├─ LearnerState 投影（提议，Go 审批）
                 ├─ GuidanceState（Agent 可见导航切片）
-                │     → teaching_navigation 四维度
-                │     → AgentComparison(若本轮有 AnswerAttempt)
-                │        {conclusion_status, evidence_status, causal_status,
-                │         missing_dimensions(抽象枚举), contradictions(学生自述)}
+                 │     → teaching_navigation = contract-defined safe dimensions + runtime categories
+                 │     → AgentComparison(若本轮有 AnswerAttempt)
+                 │        {conclusion_status, evidence_status, causal_status,
+                 │         missing_dimensions(TeachingDimensionRef[]), contradictions(学生自述)}
                 └─ TurnControl（轮次控制）
                       ├─ completion_allowed / completion_ready   # Runtime+StateReducer 私有
                       ├─ allowed_actions(ActionCatalog∩GuidanceState∩预算)
@@ -187,7 +215,8 @@ CanonicalAnswer → InternalComparison(AnswerComparator, Runtime-only)
 ```
 
 - 现有 kernel 组件去向：cluegate/evidence/verifier/antiguess/policy **保留实现、重新编组**为 StateReducer 的子模块（不重写算法，只改调用边界与输出形状）。
-- missing_dimensions：只允许 {waiting_time, dependency_latency, capacity_saturation, causal_chain, verification} 的子集——从 InternalComparison.missing_evidence 的 evidence category **映射到抽象维度**，绝不下发原文。
+- `TeachingDimensionRef` 是 `TeachingNavigation` 与 `AgentComparison.missing_dimensions` 的共同类型：`dimension_id` 由题目契约定义，`category` 必须来自 Runtime 固定安全枚举（例如 evidence/causal/temporal/dependency/capacity/configuration/verification）。现有四个维度只是兼容映射样例；不能再单独硬编码第五个 `verification`。
+- `missing_dimensions` 由 InternalComparison 的内部证据缺口映射为上述安全维度引用，绝不下发标准答案原文或动态缺失句子。
 - contradictions：沿用现有"只引用学生自己原话"的实现。
 - completion_allowed（原 AntiGuess.completion_allowed）：不再进 AgentComparison（现状 PublicAnswerComparison 无此字段，继续保持），仅 TurnControl 内部用于 turn_completed 是否允许携带"提交结论"动作；terminal 同样只属于 TurnControl/SessionState，不进入 AgentComparison。
 
@@ -204,10 +233,10 @@ CanonicalAnswer → InternalComparison(AnswerComparator, Runtime-only)
 |---|---|---|
 | WorldObservation（工具查询结果） | observation | 日志类：日志正文块；指标/健康度/配置：简短 Tool return 卡 |
 | TeachingClue（主动释放） | clue | 线索卡（维度标签 + 文本） |
-| AgentReply（final_reply） | assistant | 聊天正文（markdown） |
-| ToolResult 执行包 | 不属于 `PublicContent` 类型；作为 `tool_result` 事件的执行元数据外层，可选携带 observation/clue 的 `PublicContent` | 工具行显示状态、图标、耗时；正文仍只取 `content.markdown_ready` |
+| AgentReply（final_reply） | 独立 `assistant_delta` 回复流 | 聊天正文（`markdown_ready_delta`） |
+| ToolResult 执行包 | 不属于 `PublicContent` 类型；作为 `tool_result` 事件的执行元数据外层，可选携带 observation/clue 的 `PublicContent` | 工具行显示状态、图标、耗时；正文只取 `content.markdown_ready` |
 
-前端只渲染 markdown_ready；meta.kind 驱动图标（logs=文件、metrics=仪表、config=滑杆、database=库、dependency=链路）。
+前端只渲染 observation/clue 的 `markdown_ready` 与 assistant_delta 的 `markdown_ready_delta`；meta.tool_kind 驱动图标（logs=文件、metrics=仪表、config=滑杆、database=库、dependency=链路）。
 
 ## 9. 兼容迁移与回滚策略
 
