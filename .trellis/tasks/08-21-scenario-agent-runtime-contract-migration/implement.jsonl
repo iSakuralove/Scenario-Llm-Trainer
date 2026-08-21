@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/scenario-agent-contracts.md", "reason": "现有 Python↔Go↔前端 scenario 契约规范：Guard 禁词同步、stall 释放、流式字段首位、序号分离、MentorDeps 白名单、虚拟工具闭环——迁移时必须保持仍有效的边界并更新失效部分"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "本任务横跨 Python/Go/前端三层，需要跨层一致性思维指南"}
+{"file": ".trellis/tasks/08-21-scenario-agent-runtime-contract-migration/research/code-evidence.md", "reason": "规划阶段逐文件核对的代码证据（行号级），实现时对照旧结构定位"}
+{"file": ".trellis/tasks/08-21-scenario-agent-runtime-contract-migration/prd.md", "reason": "需求：已确认的十一条最终架构约束、功能要求、安全边界、验收标准、不做事项"}
+{"file": ".trellis/tasks/08-21-scenario-agent-runtime-contract-migration/design.md", "reason": "技术设计：四层边界、AgentContext/ScenarioContract 字段边界、RunEvent 判别联合、批次调度、StateReducer 数据流、迁移与回滚、旧协议删除顺序"}
