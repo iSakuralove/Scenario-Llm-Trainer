@@ -54,6 +54,19 @@ def test_guard_rejects_confirmation_before_evidence_completion(teaching_constrai
     assert caught.value.code == "premature_confirmation"
 
 
+def test_guard_rejects_implicit_next_direction(teaching_constraints) -> None:
+    action = mentor_action("已记录公开观察。链路中还有哪些环节可以进一步验证？")
+
+    with pytest.raises(GuardViolation) as caught:
+        Guard().validate(
+            action,
+            constraints=teaching_constraints,
+            context=GuardContext(),
+        )
+
+    assert caught.value.code == "reply_policy_violation"
+
+
 def test_guard_rejects_release_outside_approved_subset(teaching_constraints) -> None:
     action = mentor_action("可以继续核对变更记录。")
     action.requested_releases = ["E_DDL_DIFF"]

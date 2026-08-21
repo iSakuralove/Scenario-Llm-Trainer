@@ -55,6 +55,10 @@ _EXPLICIT_CONCLUSION_MARKERS = (
 _IMPLICIT_CONCLUSION_RE = re.compile(
     r"(?:可能|大概率|更可能|提示|说明)[^。！？!?；;]{0,24}(?:不在|出现在|来自|位于)"
 )
+_IMPLICIT_GUIDANCE_RE = re.compile(
+    r"(?:下一步|接下来|进一步|继续|还有哪些|哪些环节|从哪里|如何|怎么)[^。！？!?；;]{0,24}"
+    r"(?:验证|排查|查看|检查|确认|核对|观察|入手)"
+)
 
 
 class GuardViolation(ValueError):
@@ -117,6 +121,7 @@ class Guard:
         if (
             any(marker in reply for marker in (*_EXPLICIT_GUIDANCE_MARKERS, *_EXPLICIT_CONCLUSION_MARKERS))
             or _IMPLICIT_CONCLUSION_RE.search(reply) is not None
+            or _IMPLICIT_GUIDANCE_RE.search(reply) is not None
         ):
             raise GuardViolation(
                 "reply_policy_violation",
