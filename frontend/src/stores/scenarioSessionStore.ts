@@ -2,12 +2,14 @@ import { create } from 'zustand'
 import { api, ScenarioRunFailure } from '../api/client'
 import type { ScenarioMessageResponse } from '../api/client'
 import type { ScenarioMessage, ScenarioQuestion, ScenarioSession } from '../types'
-import type { ScenarioRunEvent } from '../types/agentRun'
+import type { ScenarioAllowedAction, ScenarioRunEventAny } from '../types/agentRun'
 
 interface ScenarioActiveRun {
   requestId: string
   userContent: string
-  events: ScenarioRunEvent[]
+  events: ScenarioRunEventAny[]
+  /** QuickAction 轮：结构化动作本身是用户输入，正文为空。 */
+  structuredAction?: ScenarioAllowedAction
 }
 
 interface PersistedScenarioRun extends ScenarioActiveRun {
@@ -27,7 +29,7 @@ interface ScenarioSessionState {
   isQuitting: boolean
   sendError: string
   activeRun: ScenarioActiveRun | null
-  completedRuns: Record<string, ScenarioRunEvent[]>
+  completedRuns: Record<string, ScenarioRunEventAny[]>
   _connectRun: (
     token: string,
     sessionId: string,
@@ -37,6 +39,7 @@ interface ScenarioSessionState {
   _applyRunResult: (sessionId: string, requestId: string, result: ScenarioMessageResponse) => void
   hydrate: (token: string, sessionId: string, optimistic?: { question?: ScenarioQuestion | null; session?: ScenarioSession | null }) => Promise<void>
   sendMessage: (token: string, sessionId: string, content: string) => Promise<void>
+  sendStructuredAction: (token: string, sessionId: string, action: ScenarioAllowedAction) => Promise<void>
   quit: (token: string, sessionId: string) => Promise<{ status: string; session: ScenarioSession }>
   clear: () => void
 }
@@ -52,7 +55,7 @@ function emptyState() {
     isQuitting: false,
     sendError: '',
     activeRun: null as ScenarioActiveRun | null,
-    completedRuns: {} as Record<string, ScenarioRunEvent[]>,
+    completedRuns: {} as Record<string, ScenarioRunEventAny[]>,
   }
 }
 
@@ -62,7 +65,7 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
   // Keep the request identity across a browser refresh. The server owns idempotency;
   // the client only stores public run events needed to resume the visible stream.
   _connectRun: async (token, sessionId, run, stateRevision) => {
-    const onRunEvent = (event: ScenarioRunEvent) => {
+    const onRunEvent = (event: ScenarioRunEventAny) => {
       let nextRun: ScenarioActiveRun | null = null
       set((state) => {
         if (state.activeRun?.requestId !== run.requestId) return state
@@ -75,16 +78,17 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
       if (nextRun) persistPendingRun(sessionId, nextRun, stateRevision)
     }
 
+    const basePayload = {
+      content: run.userContent,
+      requestId: run.requestId,
+      stateRevision,
+      structuredUserAction: run.structuredAction,
+    }
     try {
       return await api.sendScenarioMessageStream(
         token,
         sessionId,
-        {
-          content: run.userContent,
-          requestId: run.requestId,
-          stateRevision,
-          afterSequence: latestSequence(run.events),
-        },
+        { ...basePayload, afterSequence: latestSequence(run.events) },
         onRunEvent,
       )
     } catch (err) {
@@ -93,12 +97,7 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
       return api.sendScenarioMessageStream(
         token,
         sessionId,
-        {
-          content: run.userContent,
-          requestId: run.requestId,
-          stateRevision,
-          afterSequence,
-        },
+        { ...basePayload, afterSequence },
         onRunEvent,
       )
     }
@@ -216,6 +215,40 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
     }
   },
 
+  // QuickAction 点击：产生 StructuredUserAction 轮，与自然语言共用
+  // request_id / state_revision / 幂等与预算通道；正文为空字符串。
+  sendStructuredAction: async (token, sessionId, action) => {
+    if (get().isSending) return
+    set((state) => ({
+      ...state,
+      isSending: true,
+      sendError: '',
+      activeRun: {
+        requestId: createRequestId(),
+        userContent: '',
+        events: [],
+        structuredAction: action,
+      },
+    }))
+    const activeRun = get().activeRun
+    if (!activeRun) return
+    const requestId = activeRun.requestId
+    const stateRevision = get().session?.state_revision ?? 0
+    persistPendingRun(sessionId, activeRun, stateRevision)
+    try {
+      const result = await get()._connectRun(token, sessionId, activeRun, stateRevision)
+      get()._applyRunResult(sessionId, requestId, result)
+    } catch (err) {
+      if (err instanceof ScenarioRunFailure) clearPendingRun(sessionId, requestId)
+      set((state) => ({
+        ...state,
+        isSending: false,
+        sendError: err instanceof Error ? err.message : '快捷操作失败',
+      }))
+      throw err
+    }
+  },
+
   quit: async (token, sessionId) => {
     set((state) => ({ ...state, isQuitting: true, sendError: '' }))
     try {
@@ -244,20 +277,20 @@ function createRequestId() {
   return globalThis.crypto?.randomUUID?.() ?? `scenario-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-function appendRunEvent(events: ScenarioRunEvent[], event: ScenarioRunEvent) {
+function appendRunEvent(events: ScenarioRunEventAny[], event: ScenarioRunEventAny) {
   return normalizeRunEvents([
     ...events.filter((item) => !(item.request_id === event.request_id && item.sequence === event.sequence)),
     event,
   ])
 }
 
-function normalizeRunEvents(events: ScenarioRunEvent[]) {
-  const byKey = new Map<string, ScenarioRunEvent>()
+function normalizeRunEvents(events: ScenarioRunEventAny[]) {
+  const byKey = new Map<string, ScenarioRunEventAny>()
   for (const event of events) byKey.set(`${event.request_id}:${event.sequence}`, event)
   return [...byKey.values()].sort((left, right) => left.sequence - right.sequence)
 }
 
-function latestSequence(events: ScenarioRunEvent[]) {
+function latestSequence(events: ScenarioRunEventAny[]) {
   return events.reduce((latest, event) => Math.max(latest, event.sequence), 0)
 }
 
@@ -288,7 +321,8 @@ function readPendingRun(sessionId: string): PersistedScenarioRun | null {
     return {
       requestId: parsed.requestId,
       userContent: parsed.userContent,
-      events: normalizeRunEvents(parsed.events as ScenarioRunEvent[]),
+      events: normalizeRunEvents(parsed.events as ScenarioRunEventAny[]),
+      structuredAction: parsed.structuredAction,
       stateRevision: parsed.stateRevision,
       updatedAt: parsed.updatedAt,
     }

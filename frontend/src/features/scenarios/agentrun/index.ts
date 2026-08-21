@@ -1,1 +1,6 @@
 export { AgentRun } from './AgentRun'
+export { TaskList } from './TaskList'
+export { QuickActions } from './QuickActions'
+export { ToolKindIcon } from './ToolKindIcon'
+export { buildAgentRunViewModel, collectObservationReleases, dedupeRunEvents } from './LegacyEventAdapter'
+export type { AgentRunViewModel, ObservationRelease } from './LegacyEventAdapter'

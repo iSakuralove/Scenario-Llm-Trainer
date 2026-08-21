@@ -3,15 +3,16 @@ import type { CSSProperties, PointerEvent } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { CheckCircle2, ChevronDown, ChevronUp, FileText, Send } from 'lucide-react'
 import { api } from '../../api/client'
-import type { ScenarioMessage, ScenarioQuestion } from '../../types'
+import type { ScenarioQuestion } from '../../types'
 import { EmptyState, Loading } from '../../components/common'
 import { MarkdownComposer } from '../../components/common/MarkdownComposer'
 import { MermaidLoading } from '../../components/common/MermaidLoading'
 import { useToken } from '../../lib/auth'
 import { redactSensitiveText } from '../../lib/redaction'
 import { useScenarioSessionStore } from '../../stores/scenarioSessionStore'
-import { AgentRun } from './agentrun'
-import type { ScenarioRunEvent, ScenarioPublicObservation } from '../../types/agentRun'
+import { AgentRun, collectObservationReleases } from './agentrun'
+import type { ObservationRelease } from './agentrun'
+import type { ScenarioAllowedAction } from '../../types/agentRun'
 import './ScenarioSessionPage.css'
 
 const MermaidRenderer = lazy(() => import('../../components/common/MermaidRenderer').then((module) => ({ default: module.MermaidRenderer })))
@@ -38,6 +39,7 @@ export function ScenarioSessionPage() {
   const completedRuns = useScenarioSessionStore((store) => store.completedRuns)
   const hydrateSession = useScenarioSessionStore((store) => store.hydrate)
   const sendMessage = useScenarioSessionStore((store) => store.sendMessage)
+  const sendStructuredAction = useScenarioSessionStore((store) => store.sendStructuredAction)
   const quitScenarioSession = useScenarioSessionStore((store) => store.quit)
   const clearScenarioSession = useScenarioSessionStore((store) => store.clear)
   const [content, setContent] = useState('')
@@ -60,10 +62,10 @@ export function ScenarioSessionPage() {
 
   // 这些 Hooks 必须在加载态和已加载态都执行，避免 React 在恢复会话后改变
   // Hooks 数量。线索数据本身不依赖 question，可以安全地在条件渲染前聚合。
-  const clueReleases = useMemo(
-    () => collectClueReleases(messages, completedRuns, activeRun?.events ?? []),
-    [activeRun?.events, completedRuns, messages],
-  )
+  const clueReleases = useMemo(() => {
+    const runs = messages.flatMap((message) => completedRuns[message.id] ?? message.response_meta.run_events ?? [])
+    return collectObservationReleases([...runs, ...(activeRun?.events ?? [])])
+  }, [activeRun?.events, completedRuns, messages])
   const clueKeySignature = clueReleases.map((item) => item.key).join('|')
 
   useEffect(() => {
@@ -86,7 +88,20 @@ export function ScenarioSessionPage() {
   }
 
   if (!question) {
-    return <EmptyState title="缺少会话上下文" description="请从排查工坊选择题目后进入会话。" action={<Link className="primary-button" to="/scenarios">返回题目列表</Link>} />
+    // 深链直开会话时题目快照由 hydrate 从服务端补齐；走到这里说明补齐失败。
+    // sendError 携带真实原因（会话不存在 / 不属于当前账号 / 凭证失效），
+    // 不能用「请从排查工坊选择题目」掩盖跨账号复制会话链接的场景。
+    return (
+      <EmptyState
+        title={sendError ? '会话读取失败' : '缺少会话上下文'}
+        description={
+          sendError
+            ? `${sendError}。若这是从别处复制的会话链接，请先用创建该会话的账号登录。`
+            : '请从排查工坊选择题目后进入会话。'
+        }
+        action={<Link className="primary-button" to="/scenarios">返回题目列表</Link>}
+      />
+    )
   }
 
   async function send() {
@@ -98,6 +113,10 @@ export function ScenarioSessionPage() {
     } catch (err) {
       void err
     }
+  }
+
+  function handleQuickAction(action: ScenarioAllowedAction) {
+    void sendStructuredAction(token, id, action).catch(() => {})
   }
 
   async function submitAnswer() {
@@ -245,13 +264,17 @@ export function ScenarioSessionPage() {
               events={completedRuns[message.id] ?? message.response_meta.run_events ?? []}
               fallbackUser={message.user_content}
               fallbackReply={message.assistant_content}
+              onQuickAction={message.id === messages[messages.length - 1]?.id ? handleQuickAction : undefined}
+              quickActionDisabled={isSending || isQuitting}
             />
           ))}
           {activeRun && (
             <AgentRun
               events={activeRun.events}
-              fallbackUser={activeRun.userContent}
+              fallbackUser={activeRun.structuredAction?.title ?? activeRun.userContent}
               active={isSending}
+              onQuickAction={handleQuickAction}
+              quickActionDisabled={isSending || isQuitting}
             />
           )}
         </div>
@@ -342,33 +365,12 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
 }
 
-type ClueRelease = ScenarioPublicObservation & { key: string }
-
-function collectClueReleases(
-  messages: ScenarioMessage[],
-  completedRuns: Record<string, ScenarioRunEvent[]>,
-  activeEvents: ScenarioRunEvent[],
-): ClueRelease[] {
-  const seen = new Set<string>()
-  const releases: ClueRelease[] = []
-  const runs = messages.flatMap((message) => completedRuns[message.id] ?? message.response_meta.run_events ?? [])
-  for (const event of [...runs, ...activeEvents]) {
-    const observation = event.kind === 'observation_result' ? event.observation : null
-    if (!observation?.action || !observation.result) continue
-    const key = `${observation.action}::${observation.result}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    releases.push({ ...observation, key })
-  }
-  return releases
-}
-
 function ClueReleaseTimeline({
   clues,
   animatedKeys,
   snapshotText,
 }: {
-  clues: ClueRelease[]
+  clues: ObservationRelease[]
   animatedKeys: string[]
   snapshotText: (value?: string) => string
 }) {

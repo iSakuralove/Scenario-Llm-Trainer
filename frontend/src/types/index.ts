@@ -95,7 +95,6 @@ export interface ScenarioGenerationConstraints {
 export interface ScenarioContent {
   model_version?: string
   public_scenario?: PublicScenario
-  hidden_world?: HiddenWorld
   // 社区结构化预览仍使用这些字段；排查工坊 public projection 不返回它们。
   root_cause?: string
   root_cause_keywords?: string[]
@@ -116,28 +115,6 @@ export interface PublicScenario {
   initial_symptoms: string[]
   architecture_diagram: string
   architecture_diagram_spec?: ArchitectureDiagramSpec
-}
-
-export interface HiddenWorld {
-  root_cause: Record<string, unknown>
-  hypotheses: Array<Record<string, unknown>>
-  evidence_graph: Array<Record<string, unknown>>
-  observations: Array<Record<string, unknown>>
-  virtual_tools?: VirtualTool[]
-  solution_rubric: Record<string, unknown>
-  misconception_rules: Array<Record<string, unknown>>
-}
-
-export interface VirtualTool {
-  tool_id: string
-  kind: 'logs' | 'config' | 'metrics' | 'database' | 'dependency' | string
-  target: string
-  aliases: string[]
-  query_patterns: string[]
-  redacted_parameters: string[]
-  simulated_output: string
-  observation_action: string
-  evidence_ids: string[]
 }
 
 export interface ArchitectureDiagramSpec {

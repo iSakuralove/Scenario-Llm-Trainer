@@ -1,3 +1,11 @@
+// 排查工坊运行事件契约。
+//
+// v1（无 schema_version）：旧落库 trace 的只读兼容形状，经 LegacyEventAdapter
+// 适配进统一 ViewModel；v1 会话不回填、不重写。
+// v2（schema_version = "hiddenworld.v2"）：Go 独占生成的正式判别联合，
+// sequence / state_revision / schema_version 三者职责分离，前端只消费
+// PublicContent.markdown_ready 与 assistant_delta 的 markdown_ready_delta。
+
 export type ScenarioRunEventStatus = 'started' | 'running' | 'completed' | 'failed'
 
 export type ScenarioRunEventKind =
@@ -53,4 +61,97 @@ export interface ScenarioRunEvent {
   observation?: ScenarioPublicObservation
   tool?: ScenarioToolEventPayload
   error_code?: string
+}
+
+// ===== V2 正式事件（hiddenworld.v2，Go 唯一生成）=====
+
+export const SCENARIO_RUN_EVENT_SCHEMA_V2 = 'hiddenworld.v2'
+
+export type ToolCallState =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'unsupported'
+  | 'rejected'
+  | 'expired'
+  | 'already_completed'
+
+export type ToolResultStatus = 'succeeded' | 'failed' | 'timeout'
+
+/** observation / clue 的统一外发内容层；markdown_ready 是唯一渲染源。 */
+export interface ScenarioPublicContent {
+  content_type: 'observation' | 'clue'
+  markdown_ready: string
+  display_variant?: 'log' | 'tool_return' | 'clue'
+  meta?: {
+    tool_kind?: string
+    is_negative?: boolean
+  }
+}
+
+/** task_upserted 的负载：工具调用生命周期状态。 */
+export interface ScenarioTaskPayload {
+  task_id: string
+  call_id?: string
+  title: string
+  state: ToolCallState
+  tool_ref?: string
+  error_code?: string
+}
+
+/** tool_result 的负载：只表达执行终态，不含 pending/running。 */
+export interface ScenarioToolResultPayload {
+  call_id: string
+  tool_id: string
+  tool_kind: string
+  result_status: ToolResultStatus
+  duration_ms: number
+  content?: ScenarioPublicContent
+  error_code?: string
+}
+
+export interface ScenarioAllowedAction {
+  action_id: string
+  catalog_version: string
+  tool_kind: string
+  title: string
+}
+
+export interface ScenarioTeachingDimensionRef {
+  dimension_id: string
+  category: string
+  status: 'unexplored' | 'in_progress' | 'covered'
+  hint_level: 'none' | 'light' | 'direct'
+}
+
+export interface ScenarioCluePayload {
+  clue_id: string
+  content: ScenarioPublicContent
+  dimension?: ScenarioTeachingDimensionRef
+}
+
+interface RunEventV2Base {
+  request_id: string
+  sequence: number
+  schema_version: typeof SCENARIO_RUN_EVENT_SCHEMA_V2
+  state_revision: number
+}
+
+export type ScenarioRunEventV2 =
+  | (RunEventV2Base & { kind: 'turn_started'; payload: { turn_id?: string; task_summary?: string } })
+  | (RunEventV2Base & { kind: 'task_upserted'; payload: { task: ScenarioTaskPayload } })
+  | (RunEventV2Base & { kind: 'tool_result'; payload: { tool_result: ScenarioToolResultPayload } })
+  | (RunEventV2Base & { kind: 'clue_published'; payload: { clue: ScenarioCluePayload } })
+  | (RunEventV2Base & {
+      kind: 'assistant_delta'
+      payload: { phase: 'understanding' | 'replying'; markdown_ready_delta: string }
+    })
+  | (RunEventV2Base & { kind: 'turn_completed'; payload: { next_actions?: ScenarioAllowedAction[] } })
+  | (RunEventV2Base & { kind: 'turn_failed'; payload: { error_code?: string; retryable?: boolean } })
+
+export type ScenarioRunEventAny = ScenarioRunEvent | ScenarioRunEventV2
+
+export function isScenarioRunEventV2(event: ScenarioRunEventAny): event is ScenarioRunEventV2 {
+  return (event as ScenarioRunEventV2).schema_version === SCENARIO_RUN_EVENT_SCHEMA_V2
 }

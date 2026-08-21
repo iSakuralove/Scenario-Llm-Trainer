@@ -274,6 +274,146 @@
   white-space: pre-wrap;
 }
 
+/* Task List：Agent 流内嵌，处理中展开逐项状态，完成后只剩一行摘要。 */
+.taskList {
+  min-width: 0;
+  padding: 8px 0 2px 22px;
+  border-left: 1px solid rgba(142, 240, 219, 0.22);
+  animation: eventEnter 260ms ease both;
+}
+
+.taskListHeading {
+  color: rgba(220, 228, 238, 0.55);
+  font-size: 12px;
+}
+
+.taskListItems {
+  display: grid;
+  gap: 5px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.taskListItems li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: rgba(230, 237, 245, 0.78);
+  font-size: 12.5px;
+}
+
+.taskListItems li svg {
+  color: var(--run-accent);
+  flex: 0 0 auto;
+}
+
+.taskListItems li small {
+  margin-left: auto;
+  color: rgba(220, 228, 238, 0.42);
+  font-size: 11px;
+}
+
+.taskItemRunning {
+  color: rgba(235, 241, 248, 0.95);
+}
+
+.taskSpinner {
+  animation: taskSpin 1.1s linear infinite;
+}
+
+/* QuickActions：Runtime 下发的结构化动作按钮。 */
+.quickActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+  animation: eventEnter 260ms ease both;
+}
+
+.quickActionButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid rgba(142, 240, 219, 0.32);
+  border-radius: 999px;
+  background: rgba(142, 240, 219, 0.08);
+  color: rgba(235, 241, 248, 0.9);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.quickActionButton svg {
+  color: var(--run-accent);
+}
+
+.quickActionButton:hover:not(:disabled) {
+  background: rgba(142, 240, 219, 0.16);
+  border-color: rgba(142, 240, 219, 0.5);
+}
+
+.quickActionButton:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* 主动释放的线索卡：与工具查询结果区分，配维度感的灯泡标识。 */
+.clueCard {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 12px;
+  border: 1px dashed rgba(255, 209, 128, 0.38);
+  border-radius: 10px;
+  background: rgba(255, 209, 128, 0.07);
+  animation: eventEnter 260ms ease both;
+}
+
+.clueCard svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: #ffd180;
+}
+
+.clueCard p {
+  margin: 0;
+  color: rgba(240, 233, 220, 0.9);
+  font-size: 13px;
+  line-height: 1.62;
+  overflow-wrap: anywhere;
+}
+
+/* tool_return 风格：比日志块更轻，短返回值直接读。 */
+.toolReturn {
+  min-width: 0;
+  padding: 8px 12px;
+  border-left: 2px solid rgba(125, 150, 255, 0.5);
+  background: rgba(125, 150, 255, 0.08);
+  color: rgba(230, 237, 245, 0.86);
+}
+
+.toolReturn p {
+  margin: 4px 0 0;
+  color: rgba(220, 228, 238, 0.78);
+  font-size: 12.5px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.toolReturn[data-negative='true'] {
+  border-left-color: rgba(255, 177, 157, 0.5);
+  background: rgba(255, 177, 157, 0.06);
+}
+
+@keyframes taskSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+
 .streamChunk {
   animation: textReveal 260ms ease both;
   animation-delay: calc(var(--chunk-index, 0) * 22ms);

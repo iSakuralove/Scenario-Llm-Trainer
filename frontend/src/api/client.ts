@@ -56,10 +56,12 @@ import type {
   UserRole,
   InterviewSessionDetailResponse,
 } from '../types'
-import type { ScenarioRunEvent } from '../types/agentRun'
+import type { ScenarioRunEventAny, ScenarioAllowedAction } from '../types/agentRun'
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api/v1'
 const REQUEST_TIMEOUT_MS = 90000
+// 排查工坊一轮含两次 LLM 调用，经中转网关实测可达 2-3 分钟，SSE 轮次用独立长超时。
+const SCENARIO_TURN_TIMEOUT_MS = 330000
 
 export interface AuthResponse {
   user: User
@@ -85,7 +87,7 @@ export interface ScenarioMessageResponse {
   response_meta: ScenarioMessage['response_meta']
   session_status: string
   session: ScenarioSession
-  run_events?: ScenarioRunEvent[]
+  run_events?: ScenarioRunEventAny[]
 }
 
 export class ScenarioRunFailure extends Error {
@@ -389,12 +391,18 @@ async function requestStream<T>(
 async function requestScenarioMessageStream(
   token: string,
   sessionId: string,
-  payload: { content: string; requestId: string; stateRevision: number; afterSequence?: number },
-  onRunEvent: (event: ScenarioRunEvent) => void,
+  payload: {
+    content: string
+    requestId: string
+    stateRevision: number
+    afterSequence?: number
+    structuredUserAction?: ScenarioAllowedAction
+  },
+  onRunEvent: (event: ScenarioRunEventAny) => void,
   allowAuthRetry = true,
 ): Promise<ScenarioMessageResponse> {
   const controller = new AbortController()
-  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const timeout = window.setTimeout(() => controller.abort(), SCENARIO_TURN_TIMEOUT_MS)
   try {
     const response = await fetch(buildApiURL(`/scenarios/sessions/${sessionId}/messages`), {
       method: 'POST',
@@ -408,6 +416,14 @@ async function requestScenarioMessageStream(
         request_id: payload.requestId,
         state_revision: payload.stateRevision,
         after_sequence: payload.afterSequence ?? 0,
+        ...(payload.structuredUserAction
+          ? {
+              structured_user_action: {
+                action_id: payload.structuredUserAction.action_id,
+                catalog_version: payload.structuredUserAction.catalog_version,
+              },
+            }
+          : {}),
       }),
       signal: controller.signal,
     })
@@ -437,10 +453,13 @@ async function requestScenarioMessageStream(
         buffer = buffer.slice(boundary + 2)
         const parsed = parseSSEEvent(rawEvent)
         if (parsed.event === 'run_event') {
-          const event = JSON.parse(parsed.data) as ScenarioRunEvent
+          const event = JSON.parse(parsed.data) as ScenarioRunEventAny
           onRunEvent(event)
           if (event.kind === 'turn_failed') {
-            throw new ScenarioRunFailure(event.error_code || 'turn_failed', event.summary || '本轮处理失败')
+            const legacy = event as { error_code?: string; summary?: string }
+            const v2 = event as { payload?: { error_code?: string } }
+            const errorCode = v2.payload?.error_code || legacy.error_code || 'turn_failed'
+            throw new ScenarioRunFailure(errorCode, legacy.summary || '本轮处理失败')
           }
         }
         if (parsed.event === 'finish') {

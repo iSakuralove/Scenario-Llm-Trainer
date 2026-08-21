@@ -87,7 +87,6 @@ test('answer attempt shows the real compare_answer tool with public-only details
   const sessionId = 'e2e-answer-tool-session'
   const userContent = '我认为目前的证据还需要继续验证索引问题'
   const reply = '先补充一条能直接支撑该判断的公开观察。'
-  const attemptId = `answer-attempt-${'x'.repeat(80)}`
   const runEvents = [
     { request_id: 'run-answer-tool', sequence: 1, kind: 'user_message', status: 'completed', text: userContent },
     {
@@ -102,7 +101,7 @@ test('answer attempt shows the real compare_answer tool with public-only details
       sequence: 3,
       kind: 'tool_started',
       status: 'started',
-      tool: { name: 'compare_answer', redacted_arguments: { answer_attempt_id: attemptId }, duration_ms: 0 },
+      tool: { name: 'compare_answer', redacted_arguments: {}, duration_ms: 0 },
     },
     {
       request_id: 'run-answer-tool',
@@ -111,7 +110,7 @@ test('answer attempt shows the real compare_answer tool with public-only details
       status: 'completed',
       tool: {
         name: 'compare_answer',
-        redacted_arguments: { answer_attempt_id: attemptId },
+        redacted_arguments: {},
         duration_ms: 18,
         result: {
           tool: 'compare_answer',
@@ -129,7 +128,7 @@ test('answer attempt shows the real compare_answer tool with public-only details
       status: 'completed',
       tool: {
         name: 'compare_answer',
-        redacted_arguments: { answer_attempt_id: attemptId },
+        redacted_arguments: {},
         duration_ms: 18,
         result: {
           tool: 'compare_answer',
@@ -164,14 +163,14 @@ test('answer attempt shows the real compare_answer tool with public-only details
   await page.getByRole('button', { name: '发送' }).click()
 
   const run = page.getByTestId('scenario-agent-run')
-  const toolButton = run.getByRole('button', { name: /调用工具 compare_answer/ })
-  await expect(toolButton).toContainText('已完成')
+  const toolButton = run.getByRole('button', { name: /对比答案与已公开证据/ })
+  await expect(toolButton).toContainText('已返回')
   await toolButton.click()
-  await expect(run).toContainText('执行状态')
-  await expect(run).toContainText('已完成')
-  await expect(run).toContainText(`answer_attempt_id: ${attemptId}`)
+  await expect(run).toContainText('答案对比')
   await expect(run).toContainText('还需要更多直接观察')
   await expect(run).toContainText('继续补充能支撑这个结论的直接观察。')
+  // compare_answer 已无参数：界面不出现任何 answer_attempt_id 字样。
+  await expect(run).not.toContainText('answer_attempt_id')
   for (const forbidden of ['claim_alignment', 'completion_allowed', 'missing_evidence', 'correct', 'target']) {
     await expect(run).not.toContainText(forbidden)
   }
@@ -296,6 +295,83 @@ test('failed turn retracts reply text that already streamed to the screen', asyn
   const run = page.getByTestId('scenario-agent-run')
   await expect(run.getByTestId('agent-run-reply')).toHaveCount(0)
   await expect(page.locator('.message-thread')).not.toContainText('LEAKED_SECRET_VALUE')
+})
+
+test('v2 run events render task list, quick actions and argument-free tool results', async ({ page }) => {
+  const sessionId = 'e2e-v2-run-session'
+  const userContent = '我想先看网关日志'
+  const reply = '先从网关侧的公开观察入手。'
+  const v2 = (sequence: number, kind: string, payload: Record<string, unknown>) => ({
+    request_id: 'run-v2-e2e',
+    sequence,
+    kind,
+    schema_version: 'hiddenworld.v2',
+    state_revision: 1,
+    payload,
+  })
+  const runEvents = [
+    v2(1, 'turn_started', { turn_id: 'run-v2-e2e' }),
+    v2(2, 'assistant_delta', { phase: 'understanding', markdown_ready_delta: '你想先核对网关侧的访问日志。' }),
+    v2(3, 'task_upserted', { task: { task_id: 'task-logs', call_id: 'obs:inspect:logs.gateway', title: '查询网关访问日志', state: 'running', tool_ref: 'inspect:logs.gateway' } }),
+    v2(4, 'task_upserted', { task: { task_id: 'task-metrics', call_id: 'obs:inspect:metrics.gateway', title: '查询网关指标', state: 'running', tool_ref: 'inspect:metrics.gateway' } }),
+    v2(5, 'tool_result', { tool_result: { call_id: 'obs:inspect:logs.gateway', tool_id: 'inspect:logs.gateway', tool_kind: 'logs', result_status: 'succeeded', duration_ms: 14, content: { content_type: 'observation', markdown_ready: '10:00-10:20 网关 504 数量明显上升。', display_variant: 'log', meta: { tool_kind: 'logs' } } } }),
+    v2(6, 'task_upserted', { task: { task_id: 'task-logs', state: 'completed' } }),
+    v2(7, 'tool_result', { tool_result: { call_id: 'obs:inspect:metrics.gateway', tool_id: 'inspect:metrics.gateway', tool_kind: 'metrics', result_status: 'succeeded', duration_ms: 9, content: { content_type: 'observation', markdown_ready: '网关活跃连接数处于正常区间。', display_variant: 'tool_return', meta: { tool_kind: 'metrics', is_negative: true } } } }),
+    v2(8, 'task_upserted', { task: { task_id: 'task-metrics', state: 'completed' } }),
+    v2(9, 'assistant_delta', { phase: 'replying', markdown_ready_delta: reply }),
+    v2(10, 'turn_completed', { next_actions: [{ action_id: 'inspect:config.route_diff', catalog_version: 'catalog-v2', tool_kind: 'config', title: '查看网关路由配置' }] }),
+  ]
+  let quickActionBody: Record<string, unknown> | null = null
+  await setupScenarioEntry(page, sessionId)
+  await page.route(`**/api/v1/scenarios/sessions/${sessionId}/messages`, async (route) => {
+    const request = route.request()
+    if (request.method() === 'POST') {
+      const body = request.postDataJSON() as Record<string, unknown>
+      if (body.structured_user_action) {
+        quickActionBody = body
+        await fulfillSSE(route, [
+          ['run_event', v2(1, 'turn_started', { turn_id: 'run-v2-quick' })],
+          ['run_event', v2(2, 'tool_result', { tool_result: { call_id: 'obs:inspect:config.route_diff', tool_id: 'inspect:config.route_diff', tool_kind: 'config', result_status: 'succeeded', duration_ms: 8, content: { content_type: 'observation', markdown_ready: '路由配置里 canary 权重为 100。', display_variant: 'tool_return', meta: { tool_kind: 'config' } } } })],
+          ['run_event', v2(3, 'assistant_delta', { phase: 'replying', markdown_ready_delta: '已按你的选择查看了路由配置。' })],
+          ['run_event', v2(4, 'turn_completed', {})],
+        ])
+        return
+      }
+    }
+    await fulfillSSE(route, [
+      ...runEvents.map((event) => ['run_event', event] as [string, unknown]),
+      ['finish', scenarioFinishPayload(sessionId, userContent, reply, runEvents)],
+    ])
+  })
+
+  await loginAs(page, 'student')
+  await page.goto('/scenarios')
+  await page.getByRole('button', { name: '开始排查' }).click()
+  await page.getByPlaceholder('输入你的排查提问...').fill(userContent)
+  await page.getByRole('button', { name: '发送' }).click()
+
+  const run = page.getByTestId('scenario-agent-run')
+  // Task List：两个任务触发内嵌列表，完成后保留摘要。
+  await expect(run.getByTestId('agent-run-task-list')).toBeVisible()
+  await expect(run.getByTestId('agent-run-task-list')).toContainText('已完成 2 项检查')
+  // observation/clue 只渲染 markdown_ready。
+  await expect(run).toContainText('10:00-10:20 网关 504 数量明显上升。')
+  await expect(run).toContainText('网关活跃连接数处于正常区间。')
+  // QuickActions：turn_completed 下发结构化动作。
+  const quickAction = page.getByTestId('agent-run-quick-actions').getByRole('button', { name: '查看网关路由配置' })
+  await expect(quickAction).toBeVisible()
+  await quickAction.click()
+  // QuickAction 产生新一轮 run：断言落在最新一条上。
+  const latestRun = page.getByTestId('scenario-agent-run').last()
+  await expect(latestRun).toContainText('路由配置里 canary 权重为 100。')
+  // 点击产生 StructuredUserAction：空正文 + action_id + catalog_version。
+  expect(quickActionBody).not.toBeNull()
+  expect((quickActionBody as Record<string, unknown>).content).toBe('')
+  expect(((quickActionBody as Record<string, unknown>).structured_user_action as Record<string, unknown>).action_id).toBe('inspect:config.route_diff')
+  // 界面不出现身份文字与内部阶段事件。
+  for (const identity of ['排查导师', 'Mentor', 'guard_passed', 'mentor_buffered', 'proposal_approved']) {
+    await expect(page.locator('.message-thread')).not.toContainText(identity)
+  }
 })
 
 test('student can review interview history questions and reports from launchpad', async ({ page }) => {
