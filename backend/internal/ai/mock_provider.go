@@ -250,6 +250,16 @@ func mockHiddenWorld(variant mockScenarioVariant, req ScenarioGenerationRequest)
 			AcceptedHypotheses:     []string{"H_PRIMARY"},
 			SolutionRequirements:   requiredActions,
 		},
+		CanonicalAnswer: &domain.CanonicalAnswer{
+			CanonicalConclusion:     variant.RootCause,
+			RootCauseID:             "RC_MOCK_PRIMARY",
+			RequiredEvidenceIDs:     []string{"E_PRIMARY", "E_CONFIRM"},
+			RequiredCausalRelations: []string{"REL_PRIMARY_EVIDENCE_TO_ROOT_CAUSE", "REL_RELEASE_TO_DIFF"},
+			AcceptedEquivalents:     []string{},
+			SolutionRequirements:    append([]string{}, requiredActions...),
+			AnswerVersion:           "hiddenworld.v2",
+		},
+		DiagnosticRelations: []string{"REL_PRIMARY_EVIDENCE_TO_ROOT_CAUSE", "REL_RELEASE_TO_DIFF"},
 		Hypotheses: []domain.Hypothesis{
 			{HypothesisID: "H_PRIMARY", Label: primaryLabel},
 			{HypothesisID: "H_RESOURCE", Label: "资源压力"},

@@ -189,6 +189,19 @@ func validateHiddenWorldScenarioContent(content domain.ScenarioContent) error {
 		}
 	}
 	world := content.HiddenWorld
+	if world.CanonicalAnswer == nil {
+		return fmt.Errorf("hidden world canonical answer is required")
+	}
+	answer := world.CanonicalAnswer
+	if strings.TrimSpace(answer.CanonicalConclusion) == "" || strings.TrimSpace(answer.RootCauseID) == "" {
+		return fmt.Errorf("hidden world canonical answer identity is required")
+	}
+	if answer.AnswerVersion != "hiddenworld.v2" {
+		return fmt.Errorf("hidden world canonical answer version is invalid")
+	}
+	if answer.RootCauseID != world.RootCause.ID {
+		return fmt.Errorf("hidden world canonical answer root cause does not match")
+	}
 	if strings.TrimSpace(world.RootCause.Description) == "" {
 		return fmt.Errorf("hidden world root cause is required")
 	}
@@ -244,6 +257,17 @@ func validateHiddenWorldScenarioContent(content domain.ScenarioContent) error {
 	}
 
 	evidenceIDs := make(map[string]struct{}, len(world.EvidenceGraph))
+	causalRelations := make(map[string]struct{}, len(world.DiagnosticRelations))
+	for _, relation := range world.DiagnosticRelations {
+		if strings.TrimSpace(relation) != "" {
+			causalRelations[relation] = struct{}{}
+		}
+	}
+	for _, relation := range answer.RequiredCausalRelations {
+		if _, ok := causalRelations[relation]; !ok {
+			return fmt.Errorf("hidden world canonical answer references unknown causal relation: %s", relation)
+		}
+	}
 	prerequisiteGraph := make(map[string][]string, len(world.EvidenceGraph))
 	for _, node := range world.EvidenceGraph {
 		id := strings.TrimSpace(node.EvidenceID)
@@ -255,6 +279,14 @@ func validateHiddenWorldScenarioContent(content domain.ScenarioContent) error {
 		}
 		evidenceIDs[id] = struct{}{}
 		prerequisiteGraph[id] = append([]string{}, node.Prerequisites...)
+	}
+	for _, evidenceID := range answer.RequiredEvidenceIDs {
+		if _, ok := evidenceIDs[evidenceID]; !ok {
+			return fmt.Errorf("hidden world canonical answer references unknown evidence: %s", evidenceID)
+		}
+	}
+	if !setEqual(answer.SolutionRequirements, world.RootCause.SolutionRequirements) {
+		return fmt.Errorf("hidden world canonical answer solution requirements drift")
 	}
 	for id, prerequisites := range prerequisiteGraph {
 		for _, prerequisite := range prerequisites {
@@ -428,6 +460,26 @@ func hiddenWorldGraphHasCycle(graph map[string][]string) bool {
 		}
 	}
 	return false
+}
+
+func setEqual(left, right []string) bool {
+	leftSet := make(map[string]struct{}, len(left))
+	rightSet := make(map[string]struct{}, len(right))
+	for _, value := range left {
+		leftSet[strings.TrimSpace(value)] = struct{}{}
+	}
+	for _, value := range right {
+		rightSet[strings.TrimSpace(value)] = struct{}{}
+	}
+	if len(leftSet) != len(rightSet) {
+		return false
+	}
+	for value := range leftSet {
+		if _, ok := rightSet[value]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func ValidateInterviewFeedback(feedback InterviewFeedback, needFollowUp, needReport bool) error {

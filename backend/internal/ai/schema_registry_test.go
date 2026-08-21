@@ -94,6 +94,11 @@ func TestValidateJSONSchemasRejectInvalidSamples(t *testing.T) {
 	if err := ValidateScenarioQuestion(hidden); err == nil {
 		t.Fatal("expected empty evidence graph to fail domain validation")
 	}
+	hidden = validHiddenWorldQuestionSample()
+	hidden.Content.HiddenWorld.CanonicalAnswer = nil
+	if err := ValidateScenarioQuestion(hidden); err == nil {
+		t.Fatal("expected missing canonical answer to fail domain validation")
+	}
 	raw := openAICompatibleScenarioJSON("hiddenworld")
 	if err := ValidateJSONSchema(SchemaHiddenWorldQuestion, strings.Replace(raw, `"model_version":"hiddenworld.v1"`, `"model_version":"hiddenworld.v0"`, 1)); err == nil {
 		t.Fatal("expected invalid hiddenworld model_version to fail")
@@ -310,6 +315,16 @@ func validHiddenWorldQuestionSample() domain.ScenarioQuestion {
 					AcceptedHypotheses:     []string{"H_POOL"},
 					SolutionRequirements:   []string{"确认连接池容量并修复排队原因"},
 				},
+				CanonicalAnswer: &domain.CanonicalAnswer{
+					CanonicalConclusion:     "连接池排队导致请求等待。",
+					RootCauseID:             "RC_POOL",
+					RequiredEvidenceIDs:     []string{"E_SLOW", "E_POOL"},
+					RequiredCausalRelations: []string{"REL_POOL_TO_LATENCY", "REL_RELEASE_TO_CONFIG"},
+					AcceptedEquivalents:     []string{"连接池容量不足造成请求排队。"},
+					SolutionRequirements:    []string{"确认连接池容量并修复排队原因"},
+					AnswerVersion:           "hiddenworld.v2",
+				},
+				DiagnosticRelations: []string{"REL_POOL_TO_LATENCY", "REL_RELEASE_TO_CONFIG"},
 				Hypotheses: []domain.Hypothesis{
 					{HypothesisID: "H_POOL", Label: "连接池问题"},
 					{HypothesisID: "H_CPU", Label: "数据库资源压力"},
