@@ -299,10 +299,24 @@ def test_agent_output_envelope_ignores_provider_extra_fields() -> None:
     from hiddenworld.contracts import AgentOutputEnvelope
 
     output = AgentOutputEnvelope.model_validate(
-        {"kind": "final_reply", "reply": "可以继续判断。", "reasoning": "provider metadata"}
+        {
+            "kind": "final_reply",
+            "reply": "可以继续判断。",
+            "turn_assessment": {},
+            "teaching_decision": {},
+            "reasoning": "provider metadata",
+        }
     )
 
     assert output.to_contract().reply == "可以继续判断。"
+
+
+def test_agent_output_envelope_rejects_reply_without_semantic_decision() -> None:
+    from pydantic import ValidationError
+    from hiddenworld.contracts import AgentOutputEnvelope
+
+    with pytest.raises(ValidationError):
+        AgentOutputEnvelope.model_validate({"kind": "final_reply", "reply": "只能回复正文"})
 
 
 def test_agent_output_envelope_places_reply_before_tool_fields_for_streaming() -> None:
@@ -317,7 +331,16 @@ async def test_pydantic_scenario_agent_runner_returns_contract_union(public_scen
     from pydantic_ai.models.test import TestModel
 
     runner = create_scenario_agent_runner(
-        TestModel(custom_output_text=json.dumps({"kind": "final_reply", "reply": "ok"}))
+        TestModel(
+            custom_output_text=json.dumps(
+                {
+                    "kind": "final_reply",
+                    "reply": "ok",
+                    "turn_assessment": {},
+                    "teaching_decision": {},
+                }
+            )
+        )
     )
     output = await runner.run(_context(public_scenario))
 

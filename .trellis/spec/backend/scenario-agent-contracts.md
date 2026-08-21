@@ -141,6 +141,10 @@ case "release_evidence_on_stall":
 - `TurnAnalysis.public_summary` → 第 1 位（驱动 `reasoning_summary_delta`）
 - `MentorAction.rationale` → 排在 `reply` 之前
 
+单 Agent 的 `AgentOutputEnvelope` 还必须同时携带 `turn_assessment` 和
+`teaching_decision`。这两个对象不是可选元数据；缺失时必须让 PydanticAI
+触发有界结构化重试，不能由 Runtime 用默认 `chat/normal_diagnosis` 继续归约。
+
 `rationale` 在 `reply` 之后时模型会把它写成事后追认（实测退化为「用户需要信息」
 这类空短语），因为正文已经生成完毕，该字段写什么都不影响输出。
 

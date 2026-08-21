@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .assessment import TeachingDecision, TurnAssessment
-from .version import StudentAffect
+from .version import ReplyMode, StudentAffect
 
 
 class ToolCall(BaseModel):
@@ -39,6 +39,7 @@ class FinalReplyOutput(BaseModel):
     kind: Literal["final_reply"]
     public_summary: str | None = None
     reply: str = Field(min_length=1)
+    reply_mode: ReplyMode | None = None
     semantic: AgentSemanticDecision | None = None
     turn_assessment: TurnAssessment | None = None
     teaching_decision: TeachingDecision | None = None
@@ -66,9 +67,13 @@ class AgentOutputEnvelope(BaseModel):
     # 不必先等待 calls/public_summary 的可选字段全部生成。
     reply: str | None = None
     public_summary: str | None = None
+    reply_mode: ReplyMode | None = None
     calls: list[ToolCall] = Field(default_factory=list)
-    turn_assessment: TurnAssessment | None = None
-    teaching_decision: TeachingDecision | None = None
+    # 这两份对象是单 Agent 的语义大脑，不允许 provider 只返回 reply 后
+    # 由 Runtime 用默认值假装完成意图识别。缺失时让 PydanticAI 触发有界
+    # 结构化重试，而不是把空语义继续归约成 chat/normal_diagnosis。
+    turn_assessment: TurnAssessment = Field(...)
+    teaching_decision: TeachingDecision = Field(...)
     # 保持扁平字段，兼容 DeepSeek/GLM 的共同 JSON 输出能力；
     # 业务层再收敛成 AgentSemanticDecision，不把 CoT 引入传输契约。
     intent: str = "chat"
@@ -102,28 +107,7 @@ class AgentOutputEnvelope(BaseModel):
         return self
 
     def to_contract(self) -> AgentModelOutput:
-        assessment = self.turn_assessment or TurnAssessment(
-            intent=self.intent,
-            user_goal=self.user_goal,
-            requested_action=self.requested_action,
-            requested_action_raw=self.requested_action_raw,
-            clarification_target=self.clarification_target,
-            action_match_status=self.action_match_status,
-            actions=self.actions,
-            hypothesis_id=self.hypothesis_id,
-            hypothesis_raw=self.hypothesis_raw,
-            claim_type=self.claim_type,
-            made_claim=self.made_claim,
-            contains_answer_attempt=self.contains_answer_attempt,
-            answer_attempt_text=self.answer_attempt_text,
-            established_facts=self.established_facts,
-            progress_assessment=self.progress_assessment,
-            is_stuck=self.is_stuck,
-            is_off_topic=self.is_off_topic,
-            is_noise=self.is_noise,
-            student_affect=self.student_affect,
-            confidence=self.confidence,
-        )
+        assessment = self.turn_assessment
         semantic = AgentSemanticDecision.model_validate(assessment.model_dump())
         if self.kind == "tool_calls":
             return ToolCallsOutput(
@@ -138,6 +122,7 @@ class AgentOutputEnvelope(BaseModel):
             kind="final_reply",
             public_summary=self.public_summary,
             reply=self.reply or "",
+            reply_mode=self.reply_mode,
             semantic=semantic,
             turn_assessment=assessment,
             teaching_decision=self.teaching_decision,
