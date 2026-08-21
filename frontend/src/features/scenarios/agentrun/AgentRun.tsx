@@ -30,11 +30,26 @@ export function AgentRun({
   const model = useMemo(() => buildAgentRunViewModel(events), [events])
   const userText = model.userText || fallbackUser
   const isProcessing = active && !model.complete && !model.failure
+  const hasPublicObservation = model.toolResults.length > 0 || model.clues.length > 0
+  const historicalUnderstanding = model.understanding && !active
+    ? model.understanding.chunks.join('').trim()
+    : ''
+  const showUnderstanding = Boolean(
+    model.understanding
+    && (!historicalUnderstanding || !isTransientHistoricalStatus(historicalUnderstanding)),
+  )
+  const replyChunks = model.replyChunks.length > 0
+    ? model.replyChunks
+    : (fallbackReply ? [fallbackReply] : [])
+  const visibleReplyChunks = normalizeHistoricalReply(
+    replyChunks,
+    { active, hasPublicObservation },
+  )
   // 本轮失败时不渲染任何正文。turn_failed 意味着回复没通过安全校验或状态审批，
   // 此前流出的分片属于未获批内容，必须从屏幕上撤回而不是留在失败提示上方。
   const visibleReply = model.failure
     ? []
-    : (model.replyChunks.length > 0 ? model.replyChunks : (fallbackReply ? [fallbackReply] : []))
+    : visibleReplyChunks
   // Task List 阈值：单轮至少 2 个工具/任务才显示内嵌列表；单个工具走工具行。
   const showTaskList = model.tasks.length >= 2
   const soloTasks = model.tasks.length === 1 ? model.tasks : []
@@ -60,7 +75,7 @@ export function AgentRun({
         <div className={styles.agentFlow}>
           {isProcessing && shouldShowThinking(model) && <ThinkingState label={thinkingLabel(model)} />}
 
-          {model.understanding && (
+          {showUnderstanding && model.understanding && (
             <div className={styles.reasoningLine} aria-live="polite" data-testid="agent-run-understanding">
               <StreamingText
                 chunks={model.understanding.chunks}
@@ -108,6 +123,20 @@ export function AgentRun({
       </article>
     </div>
   )
+}
+
+function isTransientHistoricalStatus(text: string): boolean {
+  return /^(正在|帮你查询|为你查询|引导学生|已为你|正在为你)/.test(text)
+}
+
+function normalizeHistoricalReply(
+  chunks: string[],
+  options: { active: boolean; hasPublicObservation: boolean },
+): string[] {
+  if (options.active || options.hasPublicObservation || chunks.length === 0) return chunks
+  const joined = chunks.join('').trim()
+  if (!/^(已记录这轮信息|已记录本轮信息|已记录这轮信息。|已记录本轮信息。)$/.test(joined)) return chunks
+  return ['本轮没有形成新的公开观察。']
 }
 
 function ToolResultRow({ toolResult }: { toolResult: ScenarioToolResultPayload }) {
