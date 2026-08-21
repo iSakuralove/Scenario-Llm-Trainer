@@ -642,6 +642,38 @@ def test_single_agent_does_not_silently_drop_hypothesis_when_model_omits_id(
     assert analysis.hypothesis_raw == "超时可能与网关切换后的后端池变化有关"
 
 
+def test_single_agent_does_not_turn_observation_claim_into_other_hypothesis(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    request = AgentTurnRequest(
+        request_id="observation-claim-no-hypothesis",
+        session_id="session-1",
+        state_revision=1,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="我看到网关日志里的失败请求都停在 3 秒左右。",
+    )
+    output = FinalReplyOutput(
+        kind="final_reply",
+        reply="这是你从公开日志中读到的一个现象。",
+        semantic=AgentSemanticDecision(
+            intent="investigate",
+            claim_type="observation",
+            made_claim=True,
+            established_facts=["失败请求都停在 3 秒左右"],
+            confidence=0.9,
+        ),
+    )
+
+    analysis = _analysis_from_single_agent(request, output, [], [])
+
+    assert analysis.hypothesis_id == ""
+    assert analysis.hypothesis_raw == ""
+
+
 @pytest.mark.asyncio
 async def test_single_agent_does_not_emit_undeclared_hypothesis_proposal(
     hidden_world,

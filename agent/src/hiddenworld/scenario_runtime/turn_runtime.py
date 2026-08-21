@@ -541,7 +541,7 @@ def _normalize_hypothesis_for_world(request, assessment: TurnAssessment) -> Turn
         bool(hypothesis_raw)
         or assessment.intent in {"hypothesis", "answer", "answer_attempt"}
         or assessment.claim_type in {"hypothesis", "answer"}
-        or assessment.made_claim
+        or (assessment.contains_answer_attempt and bool(assessment.answer_attempt_text.strip()))
     )
     if hypothesis_signal and HYPOTHESIS_OTHER in declared_ids:
         return assessment.model_copy(
