@@ -52,6 +52,9 @@ _EXPLICIT_CONCLUSION_MARKERS = (
     "已经定位",
     "可以确定",
 )
+_IMPLICIT_CONCLUSION_RE = re.compile(
+    r"(?:可能|大概率|更可能|提示|说明)[^。！？!?；;]{0,24}(?:不在|出现在|来自|位于)"
+)
 
 
 class GuardViolation(ValueError):
@@ -111,7 +114,10 @@ class Guard:
                     "不可用证据必须按题目模拟数据边界表达，不能暴露内部工具或权限实现。",
                 )
         reply = action.reply.strip()
-        if any(marker in reply for marker in (*_EXPLICIT_GUIDANCE_MARKERS, *_EXPLICIT_CONCLUSION_MARKERS)):
+        if (
+            any(marker in reply for marker in (*_EXPLICIT_GUIDANCE_MARKERS, *_EXPLICIT_CONCLUSION_MARKERS))
+            or _IMPLICIT_CONCLUSION_RE.search(reply) is not None
+        ):
             raise GuardViolation(
                 "reply_policy_violation",
                 "回复包含明确排查路径或未获证据支持的结论，请由模型重新生成自然回复。",
