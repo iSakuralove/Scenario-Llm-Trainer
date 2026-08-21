@@ -7,14 +7,14 @@ Runtime 持有，模型只看到 AgentContext。
 
 from __future__ import annotations
 
-import re
 from time import perf_counter
-from collections.abc import Collection
 from typing import Any
 
 from hiddenworld.agents.scenario_agent import PydanticScenarioAgentRunner
 from hiddenworld.contracts import (
     AgentTurnRequest,
+    AgentToolResult,
+    EvidenceRequestView,
     AgentSemanticDecision,
     GuidanceState,
     TeachingDecision,
@@ -42,11 +42,10 @@ from hiddenworld.runtime import (
     TurnDeadlineExceeded,
     _coverage_label,
     _elapsed_ms,
-    _fallback_mentor_action,
     _first_release_category,
     _forbidden_entities,
+    _evidence_request_for_analysis,
     _new_items,
-    _normalize_mentor_reply,
     _observe_actions,
     _public_trace_after_mentor,
     _public_trace_before_mentor,
@@ -133,10 +132,13 @@ class SingleAgentRuntime:
             else:
                 final_output = await runner.run(model_context)
             if isinstance(final_output, ToolCallsOutput):
-                final_output = FinalReplyOutput(
-                    kind="final_reply",
-                    reply="该项公开检查的结果已返回。",
+                final_output = await _retry_final_reply(
+                    runner,
+                    model_context,
+                    feedback="tool_result_received_but_final_reply_missing",
                 )
+                if final_output is None:
+                    raise TurnDeadlineExceeded("agent did not produce a final reply after the authorized observation")
             events = [
                 AgentLoopEvent("tool_result", quick_result),
                 AgentLoopEvent("final_reply", final_output),
@@ -284,6 +286,7 @@ class SingleAgentRuntime:
         constraints = reduction.constraints
         guidance_state = reduction.guidance_state
         turn_control = reduction.turn_control
+        evidence_request = _evidence_request_for_analysis(analysis)
 
         public_trace = _public_trace_before_mentor(
             public_summary=analysis.public_summary,
@@ -295,53 +298,28 @@ class SingleAgentRuntime:
         )
         await _emit_trace(on_public_trace, public_trace)
 
-        reply = _normalize_single_agent_reply(
-            final_output.reply,
-            teaching_decision,
-            observations,
-            prior_actions=request.learner_state.actions_taken,
-            intent=assessment.intent,
+        guard_context = GuardContext(
+            forbidden_entities=_forbidden_entities(request, projected_state),
+            completion_allowed=verification.completion_allowed,
+            may_release=reduction.approved_releases,
+            evidence_request=evidence_request,
+            public_observation_texts=[item.result for item in observations],
         )
-        action = MentorAction(
-            rationale="single_agent_runtime",
-            reply=reply,
-            requested_releases=[],
-            confirms_hypothesis=False,
-            expected_effort="moderate",
-        )
+        action = _mentor_action_from_reply(final_output.reply, teaching_decision)
         try:
-            action = Guard().validate(
-                action,
-                constraints=constraints,
-                context=GuardContext(
-                    forbidden_entities=_forbidden_entities(request, projected_state),
-                    completion_allowed=verification.completion_allowed,
-                    may_release=reduction.approved_releases,
-                ),
+            action = Guard().validate(action, constraints=constraints, context=guard_context)
+        except ValueError as exc:
+            retry_context = _reply_retry_context(
+                context,
+                events,
+                feedback=getattr(exc, "code", "reply_guard_rejected"),
+                evidence_request=evidence_request,
             )
-        except ValueError:
-            action = _fallback_mentor_action(
-                request=request,
-                analysis=analysis,
-                observations=observations,
-                constraints=constraints,
-                guard_context=GuardContext(
-                    forbidden_entities=_forbidden_entities(request, projected_state),
-                    completion_allowed=verification.completion_allowed,
-                    may_release=reduction.approved_releases,
-                ),
-            )
-        action = action.model_copy(
-            update={
-                "reply": _normalize_single_agent_reply(
-                    action.reply,
-                    teaching_decision,
-                    observations,
-                    prior_actions=request.learner_state.actions_taken,
-                    intent=assessment.intent,
-                )
-            }
-        )
+            retry_output = await _retry_final_reply(runner, retry_context, feedback=retry_context.reply_feedback)
+            if retry_output is None:
+                raise TurnDeadlineExceeded("agent did not produce a reply accepted by the public boundary") from exc
+            action = _mentor_action_from_reply(retry_output.reply, teaching_decision)
+            action = Guard().validate(action, constraints=constraints, context=guard_context)
         final_trace = _public_trace_after_mentor(start_sequence=len(public_trace) + 1)
         public_trace.extend(final_trace)
         await _emit_trace(on_public_trace, final_trace)
@@ -525,147 +503,62 @@ def _teaching_decision_from_agent(
 def _normalize_single_agent_reply(
     reply: str,
     decision: TeachingDecision,
-    observations,
-    *,
-    prior_actions: Collection[str] = (),
-    # 兼容旧调用方；不能再据此把所有回复替换成固定确认。
-    has_prior_observations: bool = False,
-    intent: str = "",
+    observations=(),
+    **_,
 ) -> str:
-    """统一公开回复边界，保留安全的解释、澄清、求助和反思性回复。"""
+    """只做传输层空白归一化，不改写模型语义或替换成固定话术。"""
 
     if decision.reply_policy == "no_reply":
         return ""
+    return " ".join((reply or "").split())
 
-    text = (reply or "").strip()
-    if not text:
-        return "已记录这轮信息。"
-    if observations and decision.reply_policy in {"tool_result_only", "neutral_summary"}:
-        return "已完成这项公开观察。"
-    if observations and any(_is_complete_observation_restatement(text, item.result) for item in observations):
-        return "已完成这项公开观察。"
 
-    forbidden = (
-        "下一步",
-        "接下来",
-        "进一步排查",
-        "继续排查",
-        "继续查看",
-        "继续核对",
-        "需要排查",
-        "需要查看",
-        "需要确认",
-        "还需要",
-        "建议检查",
-        "建议查看",
-        "建议核对",
-        "排除范围",
-        "排除性观察",
-        "问题不在",
-        "根因在",
-        "没有对应的失败",
-        "根因是",
-        "原因是",
-        "问题来自",
-        "可以确定",
-        "已经定位",
-        "导致了",
+def _mentor_action_from_reply(reply: str, decision: TeachingDecision) -> MentorAction:
+    """把 Agent 的自然语言正文装入安全动作；不生成新的用户可见文案。"""
+
+    return MentorAction(
+        rationale="single_agent_runtime",
+        reply=_normalize_single_agent_reply(reply, decision),
+        requested_releases=[],
+        confirms_hypothesis=False,
+        expected_effort="moderate",
     )
-    text = _strip_forbidden_guidance(text, forbidden)
-    if not text:
-        return "已记录这轮信息。"
-    # 没有任何已公开观察时，不能凭空给出“没有异常”类结论；已有观察
-    # 的澄清则允许保留这类简短总结，具体未查询动作仍由下方标记拦截。
-    if not observations and not prior_actions and any(
-        term in text for term in ("未发现异常", "未显示异常", "没有异常", "本身未显示")
-    ):
-        return "已记录这轮信息。"
-    if not observations and _contains_unqueried_action_fact(text, prior_actions):
-        return "已记录这轮信息。"
-    text = _strip_prior_observation_detail(text, prior_actions)
-    return text or "已记录这轮信息。"
 
 
-def _strip_forbidden_guidance(text: str, forbidden: Collection[str]) -> str:
-    """保留安全事实/澄清句，移除同一回复里的下一步或结论引导句。"""
+def _reply_retry_context(context, events, *, feedback: str, evidence_request=None):
+    """把已经执行的公开工具结果回注给一次回复重生成。"""
 
-    if not any(term in text for term in forbidden):
-        return text
-    parts = [part for part in re.split(r"(?<=[。！？；!?])", text) if part.strip()]
-    safe_parts = [part for part in parts if not any(term in part for term in forbidden)]
-    return "".join(safe_parts).strip()
-
-
-_ACTION_FACT_MARKERS: dict[str, tuple[str, ...]] = {
-    "order_write": (
-        "99.98%",
-        "order_callback",
-        "锁等待",
-        "连接池",
-        "写入超时",
-        "返回码",
-        "401",
-    ),
-    "slow_query": (
-        "慢查询",
-        "慢日志",
-        "mysql",
-        "查询耗时",
-        "记录数",
-        "异常峰值",
-        "slow_query",
-    ),
-    "route_diff": (
-        "路由差异",
-        "路由清单",
-        "zone-b",
-        "回调服务目标",
-        "vip 后端",
-        "后端池",
-        "route_diff",
-    ),
-}
+    tool_results = [
+        item.payload
+        for item in events
+        if item.kind == "tool_result" and isinstance(item.payload, AgentToolResult)
+    ]
+    update = {
+        "authorized_actions": [],
+        "tool_results": [*context.tool_results, *tool_results],
+        "reply_feedback": f"reply_guard:{feedback}",
+    }
+    if evidence_request is not None:
+        update["evidence_request"] = EvidenceRequestView(
+            requested_text=evidence_request.requested_text,
+            availability=evidence_request.availability,
+        )
+    return context.model_copy(
+        update={
+            **update,
+        },
+        deep=True,
+    )
 
 
-def _is_complete_observation_restatement(text: str, result: str) -> bool:
-    """判断回复是否把某条当前工具结果整段搬回正文。"""
+async def _retry_final_reply(runner, context, *, feedback: str):
+    """在安全边界拒绝正文时请求一次新的 final_reply；不执行工具。"""
 
-    normalized_result = " ".join((result or "").split())
-    normalized_text = " ".join(text.split())
-    return bool(normalized_result) and len(normalized_result) >= 8 and normalized_result in normalized_text
-
-
-def _contains_unqueried_action_fact(text: str, prior_actions: Collection[str]) -> bool:
-    """拦截未执行动作对应的具体日志事实，避免模型凭记忆补写观察结果。"""
-
-    normalized_actions = {str(action).lower() for action in prior_actions}
-    normalized_text = text.lower()
-    for action_key, markers in _ACTION_FACT_MARKERS.items():
-        if not any(marker in normalized_text for marker in markers):
-            continue
-        if not any(action_key in action for action in normalized_actions):
-            return True
-    return False
-
-
-def _strip_prior_observation_detail(text: str, prior_actions: Collection[str]) -> str:
-    """历史观察只保留简短结论，不把日志数字和字段重新贴回回复。"""
-
-    normalized_actions = {str(action).lower() for action in prior_actions}
-    if not normalized_actions:
-        return text
-    parts = [part for part in re.split(r"(?<=[。！？；!?])|\n+", text) if part.strip()]
-    kept: list[str] = []
-    for part in parts:
-        normalized_part = part.lower()
-        dense_detail = False
-        for action_key, markers in _ACTION_FACT_MARKERS.items():
-            if not any(action_key in action for action in normalized_actions):
-                continue
-            matched = sum(1 for marker in markers if marker in normalized_part)
-            if matched >= 2:
-                dense_detail = True
-                break
-        if not dense_detail:
-            kept.append(part)
-    return "".join(kept).strip()
+    retry_context = context
+    if not retry_context.reply_feedback:
+        retry_context = retry_context.model_copy(
+            update={"reply_feedback": f"reply_guard:{feedback}"},
+            deep=True,
+        )
+    output = await runner.run(retry_context)
+    return output if isinstance(output, FinalReplyOutput) else None

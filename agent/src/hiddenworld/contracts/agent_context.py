@@ -15,6 +15,7 @@ from .authorization import AuthorizedActionRef
 from .assessment import GuidanceState
 from .dimensions import TeachingDimensionRef
 from .learner import LearnerStateView, Turn
+from .version import EvidenceAvailability
 from .world import PublicScenario
 
 
@@ -53,6 +54,15 @@ class AgentToolResult(BaseModel):
     error_code: str = ""
 
 
+class EvidenceRequestView(BaseModel):
+    """当前请求的证据可用性投影；不包含 HiddenWorld 内容。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    requested_text: str
+    availability: EvidenceAvailability
+
+
 class AgentBudgetView(BaseModel):
     """只读预算投影，帮助 Agent 主动收束，不暴露内部 deadline。"""
 
@@ -84,6 +94,10 @@ class AgentContext(BaseModel):
     public_scenario: PublicScenario
     transcript: list[Turn] = Field(default_factory=list)
     current_user_message: str = ""
+    # Runtime 只在模型需要重生成回复时写入内部校验反馈；它不携带答案、
+    # 未公开证据或实现细节，也不应被展示给学生。
+    reply_feedback: str = ""
+    evidence_request: EvidenceRequestView | None = None
     learner_summary: LearnerStateView
     teaching_navigation: list[TeachingDimensionRef] = Field(default_factory=list)
     action_catalog: list[ActionCatalogEntry] = Field(default_factory=list)

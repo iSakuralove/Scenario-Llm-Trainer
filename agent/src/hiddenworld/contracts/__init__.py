@@ -15,6 +15,7 @@ from .agent_context import (
     AgentContext,
     AgentToolResult,
     AgentTurnControlView,
+    EvidenceRequestView,
 )
 from .authorization import AuthorizedActionRef, StructuredUserAction, UserActionAuthorization
 from .debug_trace import DebugTraceEvent

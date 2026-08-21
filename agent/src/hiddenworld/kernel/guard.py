@@ -19,6 +19,36 @@ _IDENTIFIER = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_.:/-]{2,})(?![A
 _NUMBER = re.compile(r"(?<!\d)(\d+(?:[.,]\d+)*)(?!\d)")
 _NUMBER_ENTITY = re.compile(r"\d+(?:[.,]\d+)*")
 _CHINESE_COMPONENT = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]{1,8}(?:表|服务|接口|主库|从库|索引|字段)")
+_EXPLICIT_GUIDANCE_MARKERS = (
+    "下一步",
+    "接下来",
+    "建议检查",
+    "建议查看",
+    "建议核对",
+    "建议从",
+    "可以从",
+    "可从",
+    "可以先",
+    "先检查",
+    "先查看",
+    "首先检查",
+    "首先查看",
+    "开始排查",
+    "继续排查",
+    "进一步排查",
+    "继续排除",
+    "排除范围",
+    "排除性观察",
+)
+_EXPLICIT_CONCLUSION_MARKERS = (
+    "问题不在",
+    "根因在",
+    "根因是",
+    "原因是",
+    "问题来自",
+    "已经定位",
+    "可以确定",
+)
 
 
 class GuardViolation(ValueError):
@@ -56,11 +86,36 @@ class Guard:
                 "回复请求了尚未获批的信息，请只使用本轮允许释放的内容。",
             )
         if context.evidence_request is not None and context.evidence_request.availability == "UNAVAILABLE":
-            internal_framing = ("工具目录", "工具清单", "系统目录", "系统实现", "权限", "内部工具")
+            internal_framing = (
+                "工具目录",
+                "工具清单",
+                "系统目录",
+                "系统实现",
+                "权限",
+                "内部工具",
+                "环境不提供",
+                "系统不提供",
+                "工具不支持",
+                "无法获取",
+                "没有这个指标",
+            )
             if any(marker in action.reply for marker in internal_framing):
                 raise GuardViolation(
                     "unavailable_evidence_internal_framing",
                     "不可用证据必须按题目模拟数据边界表达，不能暴露内部工具或权限实现。",
+                )
+        reply = action.reply.strip()
+        if any(marker in reply for marker in (*_EXPLICIT_GUIDANCE_MARKERS, *_EXPLICIT_CONCLUSION_MARKERS)):
+            raise GuardViolation(
+                "reply_policy_violation",
+                "回复包含明确排查路径或未获证据支持的结论，请由模型重新生成自然回复。",
+            )
+        for observation in context.public_observation_texts:
+            normalized_observation = " ".join((observation or "").split())
+            if len(normalized_observation) >= 8 and normalized_observation in " ".join(reply.split()):
+                raise GuardViolation(
+                    "reply_repeats_observation",
+                    "回复重复了已公开观察的原文，请由模型改为自然承接。",
                 )
         return action
 

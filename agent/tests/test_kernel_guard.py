@@ -161,7 +161,7 @@ def test_guard_allows_root_component_when_publicly_named(
         public_scenario=public_scenario,
     )
     assert hidden_world.root_cause.component not in entities
-    action = mentor_action("可以先围绕 orders 表的公开现象继续观察。")
+    action = mentor_action("orders 表的公开现象已经可见。")
     assert Guard().validate(
         action,
         constraints=teaching_constraints,

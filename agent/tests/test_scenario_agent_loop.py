@@ -582,7 +582,7 @@ async def test_single_agent_runtime_keeps_transport_contract_with_one_model_runn
 
 
 @pytest.mark.asyncio
-async def test_single_agent_runtime_executes_tool_then_uses_second_model_round(
+async def test_single_agent_runtime_retries_reply_after_public_boundary_rejection(
     hidden_world,
     learner_state,
     public_scenario,
@@ -600,7 +600,9 @@ async def test_single_agent_runtime_executes_tool_then_uses_second_model_round(
                     calls=[ToolCall(call_id="cpu", tool_id="inspect:metrics.cpu")],
                 )
             assert context.tool_results[0].status == "succeeded"
-            return FinalReplyOutput(kind="final_reply", reply="CPU 观察结果已返回，可以继续排除其他方向。")
+            if self.calls == 2:
+                return FinalReplyOutput(kind="final_reply", reply="CPU 观察结果已返回，可以继续排除其他方向。")
+            return FinalReplyOutput(kind="final_reply", reply="这条观察已经提供了一个事实，你怎么理解它？")
 
     runner = ToolThenReplyRunner()
     runtime = SingleAgentRuntime(runner)
@@ -616,9 +618,10 @@ async def test_single_agent_runtime_executes_tool_then_uses_second_model_round(
 
     result = await runtime.run_turn(request)
 
-    assert runner.calls == 2
-    # 回复归一化禁止把工具结果扩展成明确的下一步/排除范围说明。
-    assert result.reply == "已完成这项公开观察。"
+    assert runner.calls == 3
+    # Guard 拒绝明确排除路径后，Runtime 让同一个 Agent 重生成，而不是替换成固定话术。
+    assert "继续排除" not in result.reply
+    assert result.reply == "这条观察已经提供了一个事实，你怎么理解它？"
     assert any(item.kind == "observation_result" for item in result.public_trace)
 
 

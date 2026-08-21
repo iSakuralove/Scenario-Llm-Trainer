@@ -63,6 +63,10 @@ class GuardContext:
     completion_allowed: bool = False
     may_release: list[str] = field(default_factory=list)
     evidence_request: EvidenceRequest | None = None
+    public_observation_texts: list[str] = field(
+        default_factory=list,
+        metadata={"why": "本轮已经公开的观察原文，仅用于拒绝回复重复整段工具结果"},
+    )
 
 
 @dataclass
