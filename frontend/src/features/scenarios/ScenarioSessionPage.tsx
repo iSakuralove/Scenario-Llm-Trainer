@@ -150,6 +150,7 @@ export function ScenarioSessionPage() {
     revealed_clue_ids: [],
     investigation_state: {
       current_focus: '',
+      current_hypothesis: '',
       has_current_hypothesis: false,
       collected_evidence_count: 0,
     },
@@ -426,6 +427,7 @@ function InvestigationStatePanel({
 }: {
   state?: {
     current_focus?: string
+    current_hypothesis?: string
     has_current_hypothesis: boolean
     collected_evidence_count: number
   }
@@ -433,6 +435,7 @@ function InvestigationStatePanel({
   observedCount: number
 }) {
   const focusLabel = scenarioFocusLabel(state?.current_focus)
+  const hypothesisLabel = state?.current_hypothesis?.trim() ?? ''
   const evidenceCount = Math.max(state?.collected_evidence_count ?? 0, clueCount, observedCount)
   return (
     <section className="investigation-state-panel" aria-label="当前调查状态" data-testid="investigation-state-panel">
@@ -451,7 +454,7 @@ function InvestigationStatePanel({
         </div>
         <div>
           <span>调查假设</span>
-          <strong>{state?.has_current_hypothesis ? '已形成' : '尚未形成'}</strong>
+          <strong>{hypothesisLabel || (state?.has_current_hypothesis ? '已形成' : '尚未形成')}</strong>
         </div>
       </div>
     </section>

@@ -176,6 +176,7 @@ export interface ScenarioSession {
  */
 export interface ScenarioInvestigationState {
   current_focus?: string
+  current_hypothesis?: string
   has_current_hypothesis: boolean
   collected_evidence_count: number
 }

@@ -685,6 +685,7 @@ function normalizeScenarioSession(session: ScenarioSession): ScenarioSession {
     revealed_clue_ids: session.revealed_clue_ids ?? [],
     investigation_state: {
       current_focus: session.investigation_state?.current_focus ?? '',
+      current_hypothesis: session.investigation_state?.current_hypothesis ?? '',
       has_current_hypothesis: session.investigation_state?.has_current_hypothesis ?? false,
       collected_evidence_count: session.investigation_state?.collected_evidence_count ?? 0,
     },

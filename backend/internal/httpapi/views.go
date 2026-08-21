@@ -115,6 +115,7 @@ type scenarioSessionResponse struct {
 // 形成了多少条证据，不应看到隐藏答案、排除项或具体下一步动作。
 type scenarioInvestigationState struct {
 	CurrentFocus           string `json:"current_focus,omitempty"`
+	CurrentHypothesis      string `json:"current_hypothesis,omitempty"`
 	HasCurrentHypothesis   bool   `json:"has_current_hypothesis"`
 	CollectedEvidenceCount int    `json:"collected_evidence_count"`
 }
@@ -133,6 +134,7 @@ func scenarioSessionView(session *domain.ScenarioSession) scenarioSessionRespons
 		RevealedClueIDs: append([]string{}, session.RevealedClueIDs...),
 		InvestigationState: scenarioInvestigationState{
 			CurrentFocus:           session.LearnerState.CurrentFocus,
+			CurrentHypothesis:      safeScenarioHypothesisLabel(session),
 			HasCurrentHypothesis:   strings.TrimSpace(session.LearnerState.CurrentHypothesis) != "",
 			CollectedEvidenceCount: len(session.LearnerState.CollectedEvidence),
 		},
@@ -146,6 +148,66 @@ func scenarioSessionView(session *domain.ScenarioSession) scenarioSessionRespons
 		EndedAt:          session.EndedAt,
 	}
 }
+
+func safeScenarioHypothesisLabel(session *domain.ScenarioSession) string {
+	if session == nil || session.QuestionSnapshot.Content.HiddenWorld == nil ||
+		strings.TrimSpace(session.LearnerState.CurrentHypothesis) == "" ||
+		session.QuestionSnapshot.Content.PublicScenario == nil {
+		return ""
+	}
+	world := session.QuestionSnapshot.Content.HiddenWorld
+	for _, hypothesis := range world.Hypotheses {
+		if hypothesis.HypothesisID != session.LearnerState.CurrentHypothesis {
+			continue
+		}
+		label := strings.TrimSpace(hypothesis.Label)
+		if label == "" {
+			return ""
+		}
+		if !scenarioHypothesisLabelIsSafe(label, world, session.QuestionSnapshot.Content.PublicScenario, session.LearnerState) {
+			return ""
+		}
+		if err := validateScenarioReply(
+			label,
+			world,
+			session.QuestionSnapshot.Content.PublicScenario,
+			session.LearnerState,
+		); err != nil {
+			return ""
+		}
+		return label
+	}
+	return ""
+}
+
+func scenarioHypothesisLabelIsSafe(
+	label string,
+	world *domain.HiddenWorld,
+	publicScenario *domain.PublicScenario,
+	state domain.ScenarioLearnerState,
+) bool {
+	publicText := strings.Join(scenarioPublicScenarioSources(publicScenario), "\n")
+	hiddenSources := []string{world.RootCause.ID, world.RootCause.Component, world.RootCause.Description}
+	if world.CanonicalAnswer != nil {
+		hiddenSources = append(hiddenSources,
+			world.CanonicalAnswer.CanonicalConclusion,
+			world.CanonicalAnswer.RootCauseID,
+		)
+	}
+	released := stringSet(state.CollectedEvidence)
+	for _, node := range world.EvidenceGraph {
+		if !released[node.EvidenceID] {
+			hiddenSources = append(hiddenSources, node.Content)
+		}
+	}
+	for _, source := range hiddenSources {
+		if scenarioReplyContainsEntity(source, label) && !scenarioReplyContainsEntity(publicText, label) {
+			return false
+		}
+	}
+	return true
+}
+
 func scenarioSessionViews(sessions []domain.ScenarioSession) []scenarioSessionResponse {
 	views := make([]scenarioSessionResponse, 0, len(sessions))
 	for i := range sessions {

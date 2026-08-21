@@ -377,6 +377,7 @@ Python 侧给 `TurnAnalysis` / `AgentTurnResult` 任何一层加字段而 Go 结
 学生会话响应中的 `investigation_state` 只允许包含：
 
 - `current_focus`：Go 已校验的公开维度（`logs|metrics|config|change|dependency|data|resource`）；
+- `current_hypothesis`：可选的、通过回复 Guard 的学生假设标签；不返回假设 ID，敏感或未公开标签必须为空；
 - `has_current_hypothesis`：是否已经形成当前假设的布尔值；
 - `collected_evidence_count`：已归约证据数量，不返回证据 ID 或原文。
 

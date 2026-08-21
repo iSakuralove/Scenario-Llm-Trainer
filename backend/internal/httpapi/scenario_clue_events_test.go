@@ -69,3 +69,31 @@ func TestScenarioFillCurrentFocusUsesLatestApprovedEvidence(t *testing.T) {
 		t.Fatalf("explicit focus should remain unchanged, got %+v", kept)
 	}
 }
+
+func TestSafeScenarioHypothesisLabelNeverPublishesHiddenEntity(t *testing.T) {
+	world := &domain.HiddenWorld{
+		RootCause: domain.RootCause{Description: "内部根因 root-secret"},
+		Hypotheses: []domain.Hypothesis{
+			{HypothesisID: "H_PUBLIC", Label: "网关等待时间过短"},
+			{HypothesisID: "H_PRIVATE", Label: "root-secret"},
+		},
+		EvidenceGraph: []domain.EvidenceNode{{EvidenceID: "E_PRIVATE", Content: "隐藏证据 hidden-marker", Category: "config"}},
+	}
+	publicScenario := &domain.PublicScenario{Title: "公开题目", Description: "公开现象"}
+
+	publicSession := &domain.ScenarioSession{
+		QuestionSnapshot: domain.ScenarioQuestion{Content: domain.ScenarioContent{PublicScenario: publicScenario, HiddenWorld: world}},
+		LearnerState:     domain.ScenarioLearnerState{CurrentHypothesis: "H_PUBLIC"},
+	}
+	if label := safeScenarioHypothesisLabel(publicSession); label != "网关等待时间过短" {
+		t.Fatalf("expected safe hypothesis label, got %q", label)
+	}
+
+	privateSession := &domain.ScenarioSession{
+		QuestionSnapshot: domain.ScenarioQuestion{Content: domain.ScenarioContent{PublicScenario: publicScenario, HiddenWorld: world}},
+		LearnerState:     domain.ScenarioLearnerState{CurrentHypothesis: "H_PRIVATE"},
+	}
+	if label := safeScenarioHypothesisLabel(privateSession); label != "" {
+		t.Fatalf("hidden hypothesis label must stay private, got %q", label)
+	}
+}
