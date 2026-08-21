@@ -16,6 +16,7 @@ from .agent_context import (
     AgentToolResult,
     AgentTurnControlView,
     EvidenceRequestView,
+    HypothesisCatalogEntry,
 )
 from .authorization import AuthorizedActionRef, StructuredUserAction, UserActionAuthorization
 from .debug_trace import DebugTraceEvent
@@ -169,6 +170,7 @@ __all__ = [
     "ActionCatalogEntry",
     "AgentBudgetView",
     "AgentContext",
+    "HypothesisCatalogEntry",
     "AgentToolResult",
     "AgentTurnControlView",
     "AuthorizedActionRef",

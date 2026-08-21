@@ -17,6 +17,7 @@ from hiddenworld.contracts import (
     AgentTurnControlView,
     AuthorizedActionRef,
     GuidanceState,
+    HypothesisCatalogEntry,
     LearnerStateView,
     TurnControl,
 )
@@ -65,6 +66,12 @@ def project_agent_context(
             if _is_public_observation_action_id(item.action)
         ]
 
+    hypothesis_catalog = [
+        HypothesisCatalogEntry(hypothesis_id=item.hypothesis_id, label=item.label)
+        for item in request.hidden_world.hypotheses
+        if item.hypothesis_id.strip() and item.label.strip()
+    ]
+
     authorized = _project_authorized_actions(request)
     labels = {item.hypothesis_id: item.label for item in request.hidden_world.hypotheses}
     learner = request.learner_state
@@ -101,6 +108,7 @@ def project_agent_context(
         current_user_message=request.user_message,
         learner_summary=learner_summary,
         action_catalog=catalog,
+        hypothesis_catalog=hypothesis_catalog,
         authorized_actions=authorized,
         budget=AgentBudgetView(
             remaining_model_rounds=11,

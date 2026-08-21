@@ -513,20 +513,45 @@ def _assessment_from_single_agent(request, final_output, events, successful_acti
 
 
 def _normalize_hypothesis_for_world(request, assessment: TurnAssessment) -> TurnAssessment:
-    """把模型自造的假设 ID 收束为空，避免污染权威状态。
+    """把模型的假设连接收束到题目声明的 ID，不用字符串猜测替代语义判断。
 
-    模型仍可通过 ``hypothesis_raw`` 表达学生提出的自由假设；但只有题目声明
-    的 ID 才能进入 LearnerState。题目若要表达“其它”方向，应由模型显式输出
-    合法的 ``H_OTHER``；对任意自造 ID 不擅自替换成一个真实候选，避免一轮本可
-    继续的观察被整轮拒绝，也避免把错误解析伪装成学生已经选了“其他”。
+    ``hypothesis_catalog`` 已经作为未标注候选表提供给模型。正常路径是模型直接
+    返回精确候选 ID；这里只处理契约边界上的两类安全归约：
+
+    - 自由假设或模型漏填 ID：归入题目声明的 ``H_OTHER``，保留学生自己的说法；
+    - 模型自造 ID 且没有形成假设信号：清空，避免污染权威状态。
+
+    绝不把自由文本按关键词强行映射到某个真实候选，更不根据候选顺序推断正确性。
     """
 
     hypothesis_id = assessment.hypothesis_id.strip()
-    if not hypothesis_id or hypothesis_id == HYPOTHESIS_OTHER:
-        return assessment
-    if hypothesis_id in request.hidden_world.hypothesis_ids():
-        return assessment
-    return assessment.model_copy(update={"hypothesis_id": ""})
+    hypothesis_raw = assessment.hypothesis_raw.strip()
+    declared_ids = request.hidden_world.hypothesis_ids()
+    if hypothesis_id in declared_ids:
+        if hypothesis_id == HYPOTHESIS_OTHER and not hypothesis_raw:
+            hypothesis_raw = request.user_message.strip()
+        return assessment.model_copy(
+            update={
+                "hypothesis_id": hypothesis_id,
+                "hypothesis_raw": hypothesis_raw if hypothesis_id == HYPOTHESIS_OTHER else "",
+            }
+        )
+
+    hypothesis_signal = (
+        bool(hypothesis_raw)
+        or assessment.intent in {"hypothesis", "answer", "answer_attempt"}
+        or assessment.claim_type in {"hypothesis", "answer"}
+        or assessment.made_claim
+    )
+    if hypothesis_signal and HYPOTHESIS_OTHER in declared_ids:
+        return assessment.model_copy(
+            update={
+                "hypothesis_id": HYPOTHESIS_OTHER,
+                "hypothesis_raw": hypothesis_raw or request.user_message.strip(),
+            }
+        )
+
+    return assessment.model_copy(update={"hypothesis_id": "", "hypothesis_raw": ""})
 
 
 def _analysis_from_single_agent(

@@ -368,9 +368,40 @@ def test_project_agent_context_is_a_safe_whitelist_projection(
     assert context.current_user_message == "先看看 CPU"
     assert any(item.tool_id == "inspect:metrics.cpu" for item in context.action_catalog)
     assert any(item.action_ref == "inspect:metrics.cpu" for item in context.authorized_actions)
+    assert {item.hypothesis_id for item in context.hypothesis_catalog} == {
+        "H_INDEX",
+        "H_CPU_BOUND",
+        "H_POOL",
+        "H_CACHE",
+        "H_OTHER",
+    }
+    assert "索引问题" in build_scenario_agent_prompt(context)
+    assert "H_OTHER" in build_scenario_agent_prompt(context)
     assert "hidden_world" not in dumped
     assert "canonical_answer" not in dumped
     assert "root_cause" not in dumped
+
+
+def test_project_agent_context_hypothesis_catalog_has_no_answer_markers(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    request = AgentTurnRequest(
+        request_id="project-hypothesis-catalog",
+        session_id="session-1",
+        state_revision=3,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="我怀疑是索引问题",
+    )
+
+    context = project_agent_context(request)
+    prompt = build_scenario_agent_prompt(context)
+    assert "accepted_hypotheses" not in prompt
+    assert hidden_world.root_cause.description not in prompt
+    assert all(not hasattr(item, "is_correct") for item in context.hypothesis_catalog)
 
 
 def test_project_agent_context_keeps_order_log_alias_for_legacy_session_snapshot(
@@ -574,8 +605,41 @@ def test_single_agent_normalizes_undeclared_hypothesis_id(
 
     analysis = _analysis_from_single_agent(request, output, [], [])
 
-    assert analysis.hypothesis_id == ""
+    assert analysis.hypothesis_id == "H_OTHER"
     assert analysis.hypothesis_raw == "一个题目没有列出的组件问题"
+
+
+def test_single_agent_does_not_silently_drop_hypothesis_when_model_omits_id(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    request = AgentTurnRequest(
+        request_id="missing-hypothesis-id-normalization",
+        session_id="session-1",
+        state_revision=1,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="我猜超时可能与网关切换后的后端池变化有关。",
+    )
+    output = FinalReplyOutput(
+        kind="final_reply",
+        reply="这个方向可以先保留下来继续理解。",
+        semantic=AgentSemanticDecision(
+            intent="hypothesis",
+            hypothesis_id="",
+            hypothesis_raw="超时可能与网关切换后的后端池变化有关",
+            claim_type="hypothesis",
+            made_claim=True,
+            confidence=0.8,
+        ),
+    )
+
+    analysis = _analysis_from_single_agent(request, output, [], [])
+
+    assert analysis.hypothesis_id == "H_OTHER"
+    assert analysis.hypothesis_raw == "超时可能与网关切换后的后端池变化有关"
 
 
 @pytest.mark.asyncio
@@ -611,8 +675,11 @@ async def test_single_agent_does_not_emit_undeclared_hypothesis_proposal(
 
     result = await SingleAgentRuntime(InvalidHypothesisRunner()).run_turn(request)
 
-    assert result.turn_analysis.hypothesis_id == ""
-    assert all(item.kind != "set_current_hypothesis" for item in result.proposals)
+    assert result.turn_analysis.hypothesis_id == "H_OTHER"
+    assert any(
+        item.kind == "set_current_hypothesis" and item.hypothesis_id == "H_OTHER"
+        for item in result.proposals
+    )
 
 
 @pytest.mark.asyncio

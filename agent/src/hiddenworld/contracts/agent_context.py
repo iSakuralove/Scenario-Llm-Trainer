@@ -31,6 +31,15 @@ class ActionCatalogEntry(BaseModel):
     aliases: list[str] = Field(default_factory=list)
 
 
+class HypothesisCatalogEntry(BaseModel):
+    """单 Agent 可见的未标注假设候选。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    hypothesis_id: str
+    label: str
+
+
 ToolResultStatus = Literal[
     "succeeded",
     "failed",
@@ -101,6 +110,7 @@ class AgentContext(BaseModel):
     learner_summary: LearnerStateView
     teaching_navigation: list[TeachingDimensionRef] = Field(default_factory=list)
     action_catalog: list[ActionCatalogEntry] = Field(default_factory=list)
+    hypothesis_catalog: list[HypothesisCatalogEntry] = Field(default_factory=list)
     authorized_actions: list[AuthorizedActionRef] = Field(default_factory=list)
     tool_results: list[AgentToolResult] = Field(default_factory=list)
     budget: AgentBudgetView
