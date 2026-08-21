@@ -91,6 +91,23 @@ def build_glm_model(*, api_key: str | None = None) -> ZaiModel:
     )
 
 
+def build_routed_model(*, timeout: float = 120.0):
+    """按 config/llm_routes.yaml 的声明顺序在站点间故障转移。
+
+    第一个有 key 的站点是默认主站；任一站点失败自动切下一站。
+    与 Go 侧 backend/internal/ai/llm_routes.go 共用同一份配置文件。
+    """
+
+    from ..llm_routes import OrderedFallbackRouter, load_llm_routes
+
+    candidates = load_llm_routes()
+    router = OrderedFallbackRouter(candidates, timeout=timeout)
+    return OpenAIChatModel(
+        candidates[0].model,
+        provider=OpenAIProvider(openai_client=router),  # type: ignore[arg-type]
+    )
+
+
 def build_litellm_model(
     *,
     api_key: str | None = None,

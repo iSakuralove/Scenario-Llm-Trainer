@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -20,8 +21,8 @@ const (
 	ProviderERNIE            = "ernie"
 	ProviderGLM              = "glm"
 
-	defaultDeepSeekBaseURL  = "https://api.deepseek.com"
-	defaultDeepSeekModel    = "deepseek-v4-flash"
+	defaultDeepSeekBaseURL = "https://api.deepseek.com"
+	defaultDeepSeekModel   = "deepseek-v4-flash"
 	// HiddenWorld 架构的生题输出大 JSON（public_scenario + hidden_world 全量结构），
 	// glm-4.7 关思考后实测仍需 90s+；上限提到 150s，job 外层用 180s。
 	scenarioGenerateTimeout = 150 * time.Second
@@ -48,6 +49,11 @@ type Config struct {
 	StreamEnabled    bool
 	StreamConfigured bool
 	ProviderConfigs  map[string]Config
+	// OrderedChain 来自 llm_routes.yaml 的声明顺序；非空时优先于各任务
+	// 策略里的静态 fallback_chain，请求按此顺序在站点间故障转移。
+	OrderedChain []string
+	// ExtraHeaders 是 llm_routes.yaml 声明的站点专属请求头。
+	ExtraHeaders map[string]string
 }
 
 type ProviderInfo struct {
@@ -232,9 +238,18 @@ type Router struct {
 	telemetry     *routerTelemetryStore
 	health        *providerHealthStore
 	rateLimiter   *providerRateLimiter
+	// orderedChain 来自 llm_routes.yaml；非空时优先于任务策略静态链。
+	orderedChain []string
 }
 
 func ConfigFromEnv() Config {
+	// llm_routes.yaml（LLM_ROUTES_FILE 或工作目录默认路径）存在时接管全部
+	// LLM 路由：第一个条目是主站点，其余按声明顺序作为故障转移链。
+	if routes, err := LoadLLMRoutes(os.Getenv("LLM_ROUTES_FILE")); err != nil {
+		log.Printf("[llm-routes] config file ignored, falling back to env providers: %v", err)
+	} else if len(routes) > 0 {
+		return configFromLLMRoutes(routes)
+	}
 	timeoutSeconds := parseInt(os.Getenv("LLM_TIMEOUT_SECONDS"), 30)
 	temperature := parseFloat(os.Getenv("LLM_TEMPERATURE"), 0.2)
 	topP := parseFloat(os.Getenv("LLM_TOP_P"), 0)
@@ -476,10 +491,15 @@ func NormalizeConfig(cfg Config) Config {
 			cfg.Model = ProviderMock
 		}
 	default:
-		cfg.Provider = ProviderMock
-		cfg.BaseURL = ""
-		cfg.APIKey = ""
-		cfg.Model = ProviderMock
+		// llm_routes.yaml 的自定义站点名（glm-official 等）走到这里：
+		// 字段完整的一律按 OpenAI 兼容协议放行；缺 base_url/key 的残缺
+		// 配置仍然打成 mock，保持对垃圾配置的防御。
+		if strings.TrimSpace(cfg.BaseURL) == "" || strings.TrimSpace(cfg.APIKey) == "" {
+			cfg.Provider = ProviderMock
+			cfg.BaseURL = ""
+			cfg.APIKey = ""
+			cfg.Model = ProviderMock
+		}
 	}
 	if len(nested) > 0 {
 		cfg.ProviderConfigs = make(map[string]Config, len(nested))
@@ -506,7 +526,7 @@ func autoProvider(cfg Config) string {
 func NewRouter(cfg Config) *Router {
 	cfg = NormalizeConfig(cfg)
 	fallback := NewMockProvider()
-	router := &Router{fallback: fallback, providers: map[string]Provider{ProviderMock: fallback}, streamEnabled: cfg.StreamEnabled, telemetry: newRouterTelemetryStore(), health: newProviderHealthStore(), rateLimiter: newProviderRateLimiter(8)}
+	router := &Router{fallback: fallback, providers: map[string]Provider{ProviderMock: fallback}, streamEnabled: cfg.StreamEnabled, telemetry: newRouterTelemetryStore(), health: newProviderHealthStore(), rateLimiter: newProviderRateLimiter(8), orderedChain: append([]string{}, cfg.OrderedChain...)}
 	router.primaryInfo = ProviderInfo{
 		Provider: cfg.Provider,
 		Model:    cfg.Model,
@@ -887,6 +907,7 @@ func providerWithTaskModel(provider Provider, req RouterRequest) Provider {
 			APIKey:           typed.apiKey,
 			Model:            defaultString(overrideModel, typed.model),
 			Timeout:          overrideTimeout,
+			ExtraHeaders:     typed.extraHeaders,
 			Temperature:      typed.temperature,
 			TopP:             typed.topP,
 			TopK:             typed.topK,
@@ -1017,26 +1038,26 @@ func (r *Router) call(ctx context.Context, req RouterRequest, fn func(Provider) 
 			meta.LatencyMS = decision.LatencyMS
 			return nil, meta, err
 		}
-	attempt := fallbackAttempt(info, attemptStarted, time.Now(), err, firstErr)
-	attempts = append(attempts, attempt)
-	r.recordProviderHealth(info.Provider, err)
-	if firstErr == nil {
-		firstErr = err
+		attempt := fallbackAttempt(info, attemptStarted, time.Now(), err, firstErr)
+		attempts = append(attempts, attempt)
+		r.recordProviderHealth(info.Provider, err)
+		if firstErr == nil {
+			firstErr = err
+		}
+		// 即将切换到链上下一个 provider：实时通知观察者（如生题任务用它更新 job 状态）。
+		if index < len(providers)-1 {
+			fallbackObserver.OnProviderFallback(FallbackEvent{
+				Task:            req.Task,
+				FromProvider:    info.Provider,
+				FromModel:       info.Model,
+				FromErrorType:   classifyRouterError(err),
+				ToProvider:      providers[index+1].Info().Provider,
+				ToModel:         providers[index+1].Info().Model,
+				AttemptIndex:    index,
+				FailedLatencyMS: time.Since(attemptStarted).Milliseconds(),
+			})
+		}
 	}
-	// 即将切换到链上下一个 provider：实时通知观察者（如生题任务用它更新 job 状态）。
-	if index < len(providers)-1 {
-		fallbackObserver.OnProviderFallback(FallbackEvent{
-			Task:            req.Task,
-			FromProvider:    info.Provider,
-			FromModel:       info.Model,
-			FromErrorType:   classifyRouterError(err),
-			ToProvider:      providers[index+1].Info().Provider,
-			ToModel:         providers[index+1].Info().Model,
-			AttemptIndex:    index,
-			FailedLatencyMS: time.Since(attemptStarted).Milliseconds(),
-		})
-	}
-}
 	lastInfo := providers[len(providers)-1].Info()
 	callErr := fmt.Errorf("llm provider failed")
 	meta := CallMeta{Provider: lastInfo.Provider, Model: lastInfo.Model, FallbackUsed: len(attempts) > 1, TraceID: traceID, Task: req.Task, ErrorType: classifyRouterError(firstErr)}
@@ -1055,7 +1076,13 @@ func (r *Router) executableProviders(req RouterRequest) []Provider {
 	}
 	seen := map[string]bool{}
 	providers := []Provider{}
-	for _, providerName := range req.FallbackChain {
+	// llm_routes.yaml 的声明顺序优先：主站点失败后按文件顺序切下一站，
+	// 之后才轮到任务策略里的静态兜底链。
+	chain := r.orderedChain
+	if len(chain) == 0 {
+		chain = req.FallbackChain
+	}
+	for _, providerName := range chain {
 		providerName = strings.ToLower(strings.TrimSpace(providerName))
 		if providerName == "" || seen[providerName] {
 			continue
@@ -1399,6 +1426,9 @@ func (r *Router) providerPoolSnapshot(info ProviderInfo) ProviderPoolSnapshot {
 		activeProvider = telemetry.LastDecision.Provider
 	}
 	order := providerFallbackOrder()
+	if r != nil && len(r.orderedChain) > 0 {
+		order = r.orderedChain
+	}
 	providers := make([]ProviderPoolProvider, 0, len(order))
 	degraded := 0
 	for _, providerName := range order {

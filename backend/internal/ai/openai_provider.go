@@ -15,16 +15,17 @@ import (
 )
 
 type OpenAICompatibleProvider struct {
-	baseURL     string
-	apiKey      string
-	model       string
-	temperature float64
-	topP        float64
-	topK        int
-	maxTokens   int
-	stream      bool
-	client      *http.Client
-	name        string
+	baseURL      string
+	apiKey       string
+	model        string
+	temperature  float64
+	topP         float64
+	topK         int
+	maxTokens    int
+	stream       bool
+	client       *http.Client
+	name         string
+	extraHeaders map[string]string
 }
 
 type chatMessage struct {
@@ -101,16 +102,17 @@ func NewOpenAICompatibleProvider(cfg Config) *OpenAICompatibleProvider {
 		name = ProviderOpenAICompatible
 	}
 	return &OpenAICompatibleProvider{
-		baseURL:     chatCompletionsBaseURL(cfg.BaseURL, cfg.Provider),
-		apiKey:      cfg.APIKey,
-		model:       cfg.Model,
-		temperature: cfg.Temperature,
-		topP:        cfg.TopP,
-		topK:        cfg.TopK,
-		maxTokens:   cfg.MaxTokens,
-		stream:      cfg.StreamEnabled,
-		client:      &http.Client{Timeout: cfg.Timeout},
-		name:        name,
+		baseURL:      chatCompletionsBaseURL(cfg.BaseURL, cfg.Provider),
+		apiKey:       cfg.APIKey,
+		extraHeaders: cfg.ExtraHeaders,
+		model:        cfg.Model,
+		temperature:  cfg.Temperature,
+		topP:         cfg.TopP,
+		topK:         cfg.TopK,
+		maxTokens:    cfg.MaxTokens,
+		stream:       cfg.StreamEnabled,
+		client:       &http.Client{Timeout: cfg.Timeout},
+		name:         name,
 	}
 }
 
@@ -439,6 +441,7 @@ func (p *OpenAICompatibleProvider) completeJSON(ctx context.Context, prompt stri
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+p.apiKey)
+	applyExtraHeaders(request, p.extraHeaders)
 	response, err := p.client.Do(request)
 	if err != nil {
 		return err
@@ -496,6 +499,7 @@ func (p *OpenAICompatibleProvider) completeJSONStream(ctx context.Context, promp
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "text/event-stream")
 	request.Header.Set("Authorization", "Bearer "+p.apiKey)
+	applyExtraHeaders(request, p.extraHeaders)
 	response, err := p.client.Do(request)
 	if err != nil {
 		return err

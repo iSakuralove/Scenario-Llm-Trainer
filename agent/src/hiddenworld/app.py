@@ -19,6 +19,7 @@ from hiddenworld.agents.models import (
     build_deepseek_model,
     build_glm_model,
     build_litellm_model,
+    build_routed_model,
     build_xuan_model,
 )
 from hiddenworld.contracts import AgentTurnRequest, AgentTurnResult, ContractVersionMismatch
@@ -156,6 +157,8 @@ def _model_for_provider(env_name: str):
     # LITELLM_MENTOR_MODEL（缺省落 LITELLM_MODEL → mentor-default）。
     role = env_name.removeprefix("HIDDENWORLD_").removesuffix("_PROVIDER")
     role_model = os.getenv(f"LITELLM_{role}_MODEL") or os.getenv("LITELLM_MODEL")
+    if provider in {"routes", "router", "llm_routes"}:
+        return build_routed_model()
     if provider == "deepseek":
         return build_deepseek_model()
     if provider in {"glm", "zai"}:
