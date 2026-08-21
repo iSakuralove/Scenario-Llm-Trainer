@@ -1,4 +1,4 @@
-import { Bot, ChevronDown, Clock3, FileText, Lightbulb, UserRound, XCircle } from 'lucide-react'
+import { Bot, ChevronDown, Clock3, FileText, UserRound, XCircle } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { ScenarioAllowedAction, ScenarioRunEventAny, ScenarioToolResultPayload } from '../../../types/agentRun'
 import { buildAgentRunViewModel } from './LegacyEventAdapter'
@@ -94,13 +94,6 @@ export function AgentRun({
 
           {soloTasks.map((task) => (
             <SoloTaskLine key={task.task_id} title={task.title} state={task.state} />
-          ))}
-
-          {model.clues.map((clue) => (
-            <div key={clue.clueId} className={styles.clueCard} data-testid="agent-run-clue">
-              <Lightbulb size={15} aria-hidden="true" />
-              <p>{clue.content.markdown_ready}</p>
-            </div>
           ))}
 
           {visibleReply.length > 0 && (

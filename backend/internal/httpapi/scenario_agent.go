@@ -1563,6 +1563,7 @@ func buildScenarioRunEvents(
 	reply string,
 	stateRevision int,
 	world *domain.HiddenWorld,
+	previousState domain.ScenarioLearnerState,
 	state domain.ScenarioLearnerState,
 	catalogVersion string,
 	streamedChunks []string,
@@ -1583,7 +1584,7 @@ func buildScenarioRunEvents(
 	}
 	// 序号统一在组装时分配：trace 投影事件保持 Python 到达顺序，
 	// reply 分片插入 tracesBeforeReply 分割点，与实时流出顺序逐位一致。
-	return insertReplyChunksAndComplete(events, requestID, stateRevision, chunks, tracesBeforeReply, state, world, catalogVersion)
+	return insertReplyChunksAndComplete(events, requestID, stateRevision, chunks, tracesBeforeReply, previousState, state, world, catalogVersion)
 }
 
 // insertReplyChunksAndComplete 把 reply 分片插入 trace 投影事件的正确位置并
@@ -1595,6 +1596,7 @@ func insertReplyChunksAndComplete(
 	stateRevision int,
 	chunks []string,
 	tracesBeforeReply int,
+	previousState domain.ScenarioLearnerState,
 	state domain.ScenarioLearnerState,
 	world *domain.HiddenWorld,
 	catalogVersion string,
@@ -1618,11 +1620,63 @@ func insertReplyChunksAndComplete(
 		out = append(out, scenarioAssistantDeltaEvent(requestID, stateRevision, 0, "replying", chunk))
 	}
 	out = append(out, after...)
+	for _, clue := range scenarioReleasedClueEvents(requestID, stateRevision, previousState, state, world) {
+		out = append(out, clue)
+	}
 	out = append(out, scenarioTurnCompletedEvent(requestID, stateRevision, 0, scenarioAllowedActions(world, state, catalogVersion)))
 	for i := range out {
 		out[i].Sequence = i + 1
 	}
 	return out
+}
+
+// scenarioReleasedClueEvents 将本轮新归约的证据投影为学生可见的常驻线索。
+// 只处理 previousState 中尚未存在的证据，避免重复请求/历史回放重复显示。
+// 内容来自已通过 Go 提议审批的 EvidenceNode；未批准的题目内部证据不会进入事件流。
+func scenarioReleasedClueEvents(
+	requestID string,
+	stateRevision int,
+	previousState domain.ScenarioLearnerState,
+	state domain.ScenarioLearnerState,
+	world *domain.HiddenWorld,
+) []domain.ScenarioRunEvent {
+	if world == nil {
+		return nil
+	}
+	previous := stringSet(previousState.CollectedEvidence)
+	events := make([]domain.ScenarioRunEvent, 0)
+	for _, evidenceID := range state.CollectedEvidence {
+		if previous[evidenceID] {
+			continue
+		}
+		for _, node := range world.EvidenceGraph {
+			if node.EvidenceID != evidenceID || strings.TrimSpace(node.Content) == "" {
+				continue
+			}
+			content := domain.ScenarioPublicContent{
+				ContentType:    "clue",
+				MarkdownReady:  scenarioPublicObservationMarkdown(node.Content),
+				DisplayVariant: "clue",
+				Meta: &domain.ScenarioPublicContentMeta{
+					ToolKind: node.Category,
+				},
+			}
+			events = append(events, domain.ScenarioRunEvent{
+				RequestID:     requestID,
+				SchemaVersion: domain.ScenarioRunEventSchemaV2,
+				StateRevision: stateRevision,
+				Kind:          "clue_published",
+				Payload: &domain.ScenarioRunEventPayload{
+					Clue: &domain.ScenarioCluePayload{
+						ClueID:  evidenceID,
+						Content: content,
+					},
+				},
+			})
+			break
+		}
+	}
+	return events
 }
 
 func marshalAgentAudit(value any) json.RawMessage {

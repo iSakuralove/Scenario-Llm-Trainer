@@ -567,7 +567,7 @@ func TestScenarioRunEventsExposeOnlyPublicCompareAnswerResult(t *testing.T) {
 			},
 		},
 	}
-	events := buildScenarioRunEvents("request-tool", result, "继续验证。", 1, &domain.HiddenWorld{}, domain.ScenarioLearnerState{}, "catalog-test", nil, -1)
+	events := buildScenarioRunEvents("request-tool", result, "继续验证。", 1, &domain.HiddenWorld{}, domain.ScenarioLearnerState{}, domain.ScenarioLearnerState{}, "catalog-test", nil, -1)
 	raw, err := json.Marshal(events)
 	if err != nil {
 		t.Fatal(err)

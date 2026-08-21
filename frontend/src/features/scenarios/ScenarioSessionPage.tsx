@@ -472,7 +472,7 @@ function scenarioFocusLabel(focus?: string) {
 }
 
 function clueLabel(action: string) {
-  if (action.startsWith('clue:')) return '主动线索'
+  if (action.startsWith('clue:')) return '重要线索'
   const labels: Record<string, string> = {
     'inspect:logs.callback_timeout': '回调访问日志',
     'inspect:config.route_diff': '网关路由配置',
