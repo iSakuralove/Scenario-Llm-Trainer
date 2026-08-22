@@ -605,6 +605,56 @@ func TestScenarioRunEventsExposeOnlyPublicCompareAnswerResult(t *testing.T) {
 	}
 }
 
+func TestScenarioRunEventsExposeSafeObservationDetails(t *testing.T) {
+
+	world := &domain.HiddenWorld{
+		VirtualTools: []domain.VirtualTool{
+			{ObservationAction: "inspect:logs.callback_timeout", Kind: "logs", Target: "回调访问日志"},
+		},
+	}
+	trace := agentclient.PublicObservation{
+		Action:     "inspect:logs.callback_timeout",
+		Result:     "Gateway 在 3 秒处返回 504。",
+		IsNegative: false,
+	}
+	event := scenarioObservationToolResultEvent(
+		"request-observation-details",
+		7,
+		world,
+		&trace,
+		"call-observation-1",
+		1,
+		23,
+	)
+	raw, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	detailsRaw, err := json.Marshal(event.Payload.ToolResult.Content.Details)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detailsText := string(detailsRaw)
+	for _, expected := range []string{
+		`"tool_id":"inspect:logs.callback_timeout"`,
+		`"tool_kind":"logs"`,
+		`"result_status":"succeeded"`,
+		`"duration_ms":23`,
+		`"source_kind":"teaching_simulation"`,
+		`"source_label":"教学模拟"`,
+	} {
+		if !strings.Contains(detailsText, expected) {
+			t.Fatalf("missing safe observation detail %q: %s", expected, text)
+		}
+	}
+	for _, forbidden := range []string{"canonical_answer", "evidence_id", "authorization_id", "chain_of_thought", "request_id"} {
+		if strings.Contains(detailsText, forbidden) {
+			t.Fatalf("observation details leaked %q: %s", forbidden, detailsText)
+		}
+	}
+}
+
 func TestScenarioMessageRejectsPythonReplyDeltaInPublicTrace(t *testing.T) {
 	// 过程事件闸门在 V2 迁移窗口默认 log（坏过程事件只记审计、由投影丢弃）；
 	// 本用例验证 strict 档位仍然整轮拒绝伪造 trace。
