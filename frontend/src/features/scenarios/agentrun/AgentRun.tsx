@@ -131,9 +131,6 @@ export function AgentRun({
               <XCircle size={15} aria-hidden="true" />
               <span>
                 {model.failure}
-                {model.failureCode && model.failureCode !== 'turn_failed' && (
-                  <small data-testid="agent-run-failure-code"> · {model.failureCode}</small>
-                )}
               </span>
             </div>
           )}
