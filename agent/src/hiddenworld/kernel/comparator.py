@@ -81,6 +81,7 @@ _ACTION_MARKERS = (
     "隔离",
     "纳入",
     "加进",
+    "加入",
     "前置",
     "排查",
     "配置",
@@ -219,8 +220,8 @@ def _classify_solution_requirement(requirement: str) -> SolutionBehavior:
         return "generic"
     if _contains_any(value, ("tenant_id", "租户", "cache_key", "缓存键", "键隔离")):
         return "cache_validation" if _requirement_is_verification(value) else "cache_key"
-    if _contains_any(value, ("临时存储", "临时盘", "临时文件", "ephemeral", "emptydir")):
-        return "eviction_monitoring" if _contains_any(value, ("eviction", "驱逐", "threshold", "使用率", "监控")) else "temp_storage"
+    if _contains_any(value, ("临时存储", "临时盘", "临时文件", "中间文件", "日志目录", "ephemeral", "emptydir")):
+        return "eviction_monitoring" if _contains_any(value, ("eviction", "驱逐", "threshold", "使用率", "使用量", "监控")) else "temp_storage"
     if _contains_any(value, ("慢查询", "slow_query", "slowquery")):
         return "slow_query"
     if _contains_any(value, ("explain", "索引校验", "索引", "index", "检查清单")):
@@ -285,7 +286,7 @@ def _behavior_targets(behavior: SolutionBehavior) -> tuple[str, ...]:
         "cache_key": ("tenant_id", "租户", "cache_key", "缓存键", "键隔离"),
         "cache_validation": ("tenant_id", "租户", "cache_key", "缓存键", "键隔离", "串数据"),
         "temp_storage": ("临时存储", "临时盘", "临时文件", "ephemeral", "emptydir"),
-        "eviction_monitoring": ("eviction", "驱逐", "threshold", "使用率", "临时盘", "临时存储"),
+        "eviction_monitoring": ("eviction", "驱逐", "threshold", "使用率", "使用量", "中间文件", "日志目录", "临时盘", "临时存储"),
         "slow_query": ("慢查询", "slow_query", "slowquery"),
         "verification": (),
         "generic": (),
@@ -318,8 +319,8 @@ def _matches_verification_requirement(requirement: str, answer: str) -> bool:
         groups.append(("慢查询", "slow_query", "slowquery"))
     if _contains_any(requirement, ("租户", "tenant_id", "cache_key", "缓存键", "键隔离", "串数据")):
         groups.append(("租户", "tenant_id", "cache_key", "缓存键", "键隔离", "串数据"))
-    if _contains_any(requirement, ("驱逐", "eviction", "threshold", "使用率", "临时盘", "临时存储")):
-        groups.append(("驱逐", "eviction", "threshold", "使用率", "临时盘", "临时存储"))
+    if _contains_any(requirement, ("驱逐", "eviction", "threshold", "使用率", "使用量", "中间文件", "日志目录", "临时盘", "临时存储")):
+        groups.append(("驱逐", "eviction", "threshold", "使用率", "使用量", "中间文件", "日志目录", "临时盘", "临时存储"))
     if not groups:
         return requirement in answer and not _clause_has_negation(answer, (requirement,))
     for group in groups:
