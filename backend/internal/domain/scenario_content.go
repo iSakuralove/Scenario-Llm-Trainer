@@ -6,6 +6,7 @@ import (
 )
 
 const HiddenWorldContractVersion = "hiddenworld.v1"
+const ScenarioV3ContractVersion = "scenario.v3"
 
 // MarshalJSON 保证 hiddenworld.v1 的持久化形状只有
 // model_version + public_scenario + hidden_world。
@@ -13,13 +14,17 @@ const HiddenWorldContractVersion = "hiddenworld.v1"
 func (content ScenarioContent) MarshalJSON() ([]byte, error) {
 	if content.ModelVersion == HiddenWorldContractVersion {
 		return json.Marshal(struct {
-			ModelVersion   string          `json:"model_version"`
-			PublicScenario *PublicScenario `json:"public_scenario,omitempty"`
-			HiddenWorld    *HiddenWorld    `json:"hidden_world,omitempty"`
+			ModelVersion     string          `json:"model_version"`
+			ContractVersion  string          `json:"contract_version,omitempty"`
+			ContractChecksum string          `json:"contract_checksum,omitempty"`
+			PublicScenario   *PublicScenario `json:"public_scenario,omitempty"`
+			HiddenWorld      *HiddenWorld    `json:"hidden_world,omitempty"`
 		}{
-			ModelVersion:   content.ModelVersion,
-			PublicScenario: content.PublicScenario,
-			HiddenWorld:    content.HiddenWorld,
+			ModelVersion:     content.ModelVersion,
+			ContractVersion:  content.ContractVersion,
+			ContractChecksum: content.ContractChecksum,
+			PublicScenario:   content.PublicScenario,
+			HiddenWorld:      content.HiddenWorld,
 		})
 	}
 	type plainScenarioContent ScenarioContent

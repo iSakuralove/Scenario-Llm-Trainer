@@ -190,9 +190,11 @@ type ScenarioQuestionView struct {
 }
 
 type ScenarioContent struct {
-	ModelVersion   string          `json:"model_version,omitempty"`
-	PublicScenario *PublicScenario `json:"public_scenario,omitempty"`
-	HiddenWorld    *HiddenWorld    `json:"hidden_world,omitempty"`
+	ModelVersion     string          `json:"model_version,omitempty"`
+	ContractVersion  string          `json:"contract_version,omitempty"`
+	ContractChecksum string          `json:"contract_checksum,omitempty"`
+	PublicScenario   *PublicScenario `json:"public_scenario,omitempty"`
+	HiddenWorld      *HiddenWorld    `json:"hidden_world,omitempty"`
 	// 以下字段仅用于旧题目迁移期。hiddenworld.v1 题目以
 	// PublicScenario + HiddenWorld 为唯一权威内容。
 	RootCause               string               `json:"root_cause,omitempty"`
@@ -246,8 +248,8 @@ type CanonicalAnswer struct {
 	SolutionRequirements    []string `json:"solution_requirements"`
 	DirectTrigger           string   `json:"direct_trigger,omitempty"`
 	LatentIssues            []string `json:"latent_issues,omitempty"`
-	Phenomenon               string   `json:"phenomenon,omitempty"`
-	DerivedRisks             []string `json:"derived_risks,omitempty"`
+	Phenomenon              string   `json:"phenomenon,omitempty"`
+	DerivedRisks            []string `json:"derived_risks,omitempty"`
 	AnswerVersion           string   `json:"answer_version"`
 }
 
@@ -257,7 +259,7 @@ type TeachingModel struct {
 	MentorPersona             MentorPersona              `json:"mentor_persona"`
 	Concepts                  []ConceptDefinition        `json:"concepts"`
 	EvidenceAvailabilityRules []EvidenceAvailabilityRule `json:"evidence_availability_rules"`
-	HintLadder                []HintStep                  `json:"hint_ladder"`
+	HintLadder                []HintStep                 `json:"hint_ladder"`
 }
 
 type MentorPersona struct {
@@ -320,14 +322,14 @@ type Hypothesis struct {
 }
 
 type EvidenceNode struct {
-	EvidenceID      string   `json:"evidence_id"`
-	Content         string   `json:"content"`
-	Category        string   `json:"category"`
-	Prerequisites   []string `json:"prerequisites"`
-	ObtainedBy      []string `json:"obtained_by"`
-	ClueImportance  string   `json:"clue_importance,omitempty"`
-	PublicTitle     string   `json:"public_title,omitempty"`
-	DiagnosticRole  string   `json:"diagnostic_role,omitempty"`
+	EvidenceID     string   `json:"evidence_id"`
+	Content        string   `json:"content"`
+	Category       string   `json:"category"`
+	Prerequisites  []string `json:"prerequisites"`
+	ObtainedBy     []string `json:"obtained_by"`
+	ClueImportance string   `json:"clue_importance,omitempty"`
+	PublicTitle    string   `json:"public_title,omitempty"`
+	DiagnosticRole string   `json:"diagnostic_role,omitempty"`
 }
 
 type Observation struct {

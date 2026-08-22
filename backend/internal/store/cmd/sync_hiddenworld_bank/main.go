@@ -20,28 +20,39 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	destinationDir := filepath.Join(workingDir, "fixed_hiddenworld")
+	bankRoot := filepath.Clean(filepath.Join(
+		workingDir,
+		"..", "..", "..",
+		"agent", "src", "hiddenworld", "bank",
+	))
+	syncBank(filepath.Join(bankRoot, "fixed"), filepath.Join(workingDir, "fixed_hiddenworld"), fixedBankIDs)
+	syncBank(filepath.Join(bankRoot, "fixed_v3"), filepath.Join(workingDir, "fixed_scenario_v3"), fixedBankIDs)
+	syncFile(
+		filepath.Join(bankRoot, "fixed_v3", "manifest.json"),
+		filepath.Join(workingDir, "fixed_scenario_v3", "manifest.json"),
+	)
+}
+
+func syncBank(sourceDir, destinationDir string, ids []string) {
 	if err := os.MkdirAll(destinationDir, 0o755); err != nil {
-		panic(fmt.Errorf("create generated bank directory: %w", err))
+		panic(fmt.Errorf("create generated bank directory %s: %w", destinationDir, err))
 	}
-	for _, id := range fixedBankIDs {
-		source := filepath.Clean(filepath.Join(
-			workingDir,
-			"..", "..", "..",
-			"agent", "src", "hiddenworld", "bank", "fixed", id+".json",
-		))
-		destination := filepath.Join(destinationDir, id+".json")
-		raw, err := os.ReadFile(source)
-		if err != nil {
-			panic(fmt.Errorf("read source bank file %s: %w", id, err))
-		}
-		if !json.Valid(raw) {
-			panic(fmt.Errorf("source bank file is not valid JSON: %s", source))
-		}
-		raw = append(bytes.TrimSpace(raw), '\n')
-		if err := os.WriteFile(destination, raw, 0o644); err != nil {
-			panic(fmt.Errorf("write generated bank file %s: %w", id, err))
-		}
-		fmt.Printf("synced %s -> %s\n", source, destination)
+	for _, id := range ids {
+		syncFile(filepath.Join(sourceDir, id+".json"), filepath.Join(destinationDir, id+".json"))
 	}
+}
+
+func syncFile(source, destination string) {
+	raw, err := os.ReadFile(source)
+	if err != nil {
+		panic(fmt.Errorf("read source bank file %s: %w", source, err))
+	}
+	if !json.Valid(raw) {
+		panic(fmt.Errorf("source bank file is not valid JSON: %s", source))
+	}
+	raw = append(bytes.TrimSpace(raw), '\n')
+	if err := os.WriteFile(destination, raw, 0o644); err != nil {
+		panic(fmt.Errorf("write generated bank file %s: %w", destination, err))
+	}
+	fmt.Printf("synced %s -> %s\n", source, destination)
 }

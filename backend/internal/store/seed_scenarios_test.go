@@ -38,6 +38,33 @@ func TestGeneratedFixedHiddenWorldAssetMatchesAgentSource(t *testing.T) {
 	}
 }
 
+func TestGeneratedScenarioV3AssetsMatchAgentSource(t *testing.T) {
+	_, testFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve seed_scenarios_test.go path")
+	}
+	ids := []string{"hw-db-index-001", "hw-network-vip-001", "hw-k8s-io-001", "hw-cache-key-001"}
+	for _, id := range ids {
+		sourcePath := filepath.Join(
+			filepath.Dir(testFile),
+			"..", "..", "..",
+			"agent", "src", "hiddenworld", "bank", "fixed_v3", id+".json",
+		)
+		source, err := os.ReadFile(sourcePath)
+		if err != nil {
+			t.Fatalf("read Agent scenario.v3 source %s: %v", id, err)
+		}
+		generated, err := fixedScenarioV3Assets.ReadFile("fixed_scenario_v3/" + id + ".json")
+		if err != nil {
+			t.Fatalf("read generated scenario.v3 asset %s: %v", id, err)
+		}
+		want := append(bytes.TrimSpace(source), '\n')
+		if !bytes.Equal(generated, want) {
+			t.Fatalf("generated scenario.v3 asset %s drifted from Agent source; run go generate ./internal/store", id)
+		}
+	}
+}
+
 func TestSeedScenariosLoadTheFixedHiddenWorldBank(t *testing.T) {
 	items := seedDiagnosticScenarios(time.Date(2026, 5, 4, 9, 0, 0, 0, time.UTC))
 	if len(items) != 4 {
@@ -57,7 +84,7 @@ func TestSeedScenariosLoadTheFixedHiddenWorldBank(t *testing.T) {
 		if item.ScenarioType != "troubleshooting" && item.ScenarioType != "performance" {
 			t.Fatalf("fixed HiddenWorld question must use a supported troubleshooting type, got %q for %s", item.ScenarioType, item.ID)
 		}
-		if item.CreatedBy != "user-admin" || item.Content.ModelVersion != "hiddenworld.v1" {
+		if item.CreatedBy != "user-admin" || item.Content.ModelVersion != "hiddenworld.v1" || item.Content.ContractVersion != domain.ScenarioV3ContractVersion {
 			t.Fatalf("unexpected fixed question ownership/version: %+v", item)
 		}
 		if item.Content.PublicScenario == nil || item.Content.HiddenWorld == nil {
