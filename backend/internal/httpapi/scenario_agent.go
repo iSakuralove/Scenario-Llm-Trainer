@@ -258,7 +258,25 @@ func scenarioMessageError(err error) (int, string, string) {
 	if errors.As(err, &requestErr) {
 		return http.StatusConflict, "request_id_conflict", "该请求标识已被其他内容使用"
 	}
-	return http.StatusBadRequest, "invalid_request", err.Error()
+	switch err.Error() {
+	case "content is required":
+		return http.StatusBadRequest, "invalid_request", "请输入排查内容"
+	case "request_id is invalid":
+		return http.StatusBadRequest, "invalid_request", "本轮请求标识无效，请重新发送"
+	case "session not found":
+		return http.StatusNotFound, "session_not_found", "排查会话不存在或已失效"
+	case "session is abandoned":
+		return http.StatusBadRequest, "session_abandoned", "排查会话已结束，请重新开始"
+	case "session is not active":
+		return http.StatusBadRequest, "session_inactive", "排查会话已结束，请重新开始"
+	case "max turns reached, please submit an answer":
+		return http.StatusBadRequest, "max_turns_reached", "本轮次已用完，请提交排查结论"
+	default:
+		// 未分类错误只写服务端日志，公共边界使用稳定文案，避免把
+		// 数据库、网络、文件系统和第三方 SDK 的内部错误直接外泄。
+		log.Printf("[scenario-error] unclassified_public_error type=%T error=%v", err, err)
+		return http.StatusBadGateway, "scenario_turn_failed", "本轮处理失败，请重试"
+	}
 }
 
 func approveScenarioProposals(

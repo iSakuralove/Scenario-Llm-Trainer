@@ -445,7 +445,10 @@ async function requestScenarioMessageStream(
     if (!response.ok) {
       // HTTP 业务错误已经是服务端的终态，不应被 _connectRun 当成断线
       // 自动再次提交；用户可以在界面上用新的 request_id 主动重试。
-      throw new ScenarioRunFailure('http_error', await readErrorMessage(response, '流式消息请求失败'))
+      throw new ScenarioRunFailure(
+        'http_error',
+        sanitizeScenarioErrorMessage(await readErrorMessage(response, '本轮处理失败，请重试。')),
+      )
     }
     if (!response.body) {
       throw new ScenarioRunFailure('stream_unavailable', '浏览器不支持流式响应')
@@ -470,7 +473,7 @@ async function requestScenarioMessageStream(
             const legacy = event as { error_code?: string; summary?: string }
             const v2 = event as { payload?: { error_code?: string } }
             const errorCode = v2.payload?.error_code || legacy.error_code || 'turn_failed'
-            throw new ScenarioRunFailure(errorCode, legacy.summary || '本轮处理失败')
+            throw new ScenarioRunFailure(errorCode, sanitizeScenarioErrorMessage(legacy.summary || '本轮处理失败'))
           }
         } catch (err) {
           if (err instanceof ScenarioRunFailure) throw err
@@ -498,7 +501,7 @@ async function requestScenarioMessageStream(
         } catch {
           // 保留稳定失败文案；错误事件本身不能阻止清理失败轮次。
         }
-        throw new ScenarioRunFailure(code, message)
+        throw new ScenarioRunFailure(code, sanitizeScenarioErrorMessage(message))
       }
       if (parsed.event === 'finish') {
         // finish 是正式完成契约，损坏时必须让调用方感知，而不是把
@@ -639,6 +642,16 @@ function normalizeFetchError(err: unknown): Error {
     return new Error('无法连接后端 API，请确认服务已启动后刷新页面重试', { cause: err })
   }
   return err instanceof Error ? err : new Error('请求失败')
+}
+
+function sanitizeScenarioErrorMessage(message: string): string {
+  const normalized = message.trim()
+  if (!normalized) return '本轮处理失败，请重试。'
+  // 公共学生界面不显示数据库连接串、主机解析、驱动和堆栈细节。
+  if (/(postgres|postgresql|mysql|redis|sqlstate|dial tcp|hostname|lookup .*127\.0\.0\.1|connection refused|stack trace|panic)/i.test(normalized)) {
+    return '本轮处理失败，请重试。'
+  }
+  return normalized
 }
 
 function isScenarioMessageResponseShape(value: unknown): value is ScenarioMessageResponse {

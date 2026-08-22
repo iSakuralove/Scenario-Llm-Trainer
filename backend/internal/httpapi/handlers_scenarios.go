@@ -944,7 +944,14 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 		if input.Diagnostics != nil {
 			input.Diagnostics.setPhase("session_commit_failed")
 		}
-		return domain.ScenarioMessage{}, nil, err
+		// 数据库/存储错误不能沿用通用 err.Error() 回传，否则会把
+		// PostgreSQL 主机、连接串或驱动细节暴露给学生。外层仍只发
+		// turn_failed，用户可用新的 request_id 重试。
+		return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
+			Status:  http.StatusBadGateway,
+			Code:    "scenario_commit_failed",
+			Message: "本轮未能保存，请重试",
+		}
 	}
 	committedSession := commitResult.Record.SessionSnapshot
 	return commitResult.Record.Message, &committedSession, nil
