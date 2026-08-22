@@ -218,7 +218,9 @@ class Guard:
                 "reply_claims_observation_without_result",
                 "本轮没有形成公开观察，回复不能声称已记录动作、已完成检查或已得到结果。",
             )
-        contains_guidance = any(marker in reply for marker in _EXPLICIT_GUIDANCE_MARKERS)
+        contains_guidance = any(marker in reply for marker in _EXPLICIT_GUIDANCE_MARKERS) or (
+            _IMPLICIT_GUIDANCE_RE.search(reply) is not None
+        )
         contains_explicit_action_guidance = _EXPLICIT_ACTION_GUIDANCE_RE.search(reply) is not None
         contains_conclusion = (
             any(marker in reply for marker in _EXPLICIT_CONCLUSION_MARKERS)

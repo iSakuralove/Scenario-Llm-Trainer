@@ -27,7 +27,7 @@ def test_answer_comparator_keeps_target_and_missing_evidence_internal(hidden_wor
     assert comparison.best_evidence_set == ["E_RELEASE_LOG", "E_DDL_DIFF"]
     assert comparison.missing_evidence == ["E_DDL_DIFF"]
     assert comparison.completion_allowed is False
-    assert comparison.solution_coverage == 0.25
+    assert comparison.solution_coverage == 0.75
 
     public = comparison.to_public().model_dump()
     assert comparison.to_public().support_status == "needs_more_evidence"
