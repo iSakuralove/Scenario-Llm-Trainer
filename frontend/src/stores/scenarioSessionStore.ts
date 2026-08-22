@@ -409,7 +409,10 @@ function appendRunEvent(events: ScenarioRunEventAny[], event: ScenarioRunEventAn
 
 function normalizeRunEvents(events: ScenarioRunEventAny[]) {
   const byKey = new Map<string, ScenarioRunEventAny>()
-  for (const event of events) byKey.set(`${event.request_id}:${event.sequence}`, event)
+  for (const event of events) {
+    if (!isPublicScenarioRunEvent(event)) continue
+    byKey.set(`${event.request_id}:${event.sequence}`, event)
+  }
   return [...byKey.values()].sort((left, right) => left.sequence - right.sequence)
 }
 
