@@ -3,7 +3,7 @@ import type { CSSProperties, PointerEvent } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { CheckCircle2, ChevronDown, ChevronUp, FileText, Send } from 'lucide-react'
 import { api } from '../../api/client'
-import type { ScenarioQuestion } from '../../types'
+import type { ScenarioInvestigationState, ScenarioQuestion } from '../../types'
 import { EmptyState, Loading } from '../../components/common'
 import { MarkdownComposer } from '../../components/common/MarkdownComposer'
 import { MermaidLoading } from '../../components/common/MermaidLoading'
@@ -18,9 +18,17 @@ import './ScenarioSessionPage.css'
 const MermaidRenderer = lazy(() => import('../../components/common/MermaidRenderer').then((module) => ({ default: module.MermaidRenderer })))
 
 const CONTEXT_WIDTH_MIN = 280
-const CONTEXT_WIDTH_MAX = 560
+// 快照面板可以拉到很宽以看清架构图；实际拖拽时再按窗口宽度动态收口，
+// 给右侧对话区至少保留 CHAT_PANE_MIN 的空间。
+const CONTEXT_WIDTH_MAX = 1280
+const CHAT_PANE_MIN = 460
 const ANSWER_HEIGHT_MIN = 220
 const ANSWER_HEIGHT_MAX = 540
+
+function contextWidthCeiling(): number {
+  if (typeof window === 'undefined') return CONTEXT_WIDTH_MAX
+  return Math.min(CONTEXT_WIDTH_MAX, Math.max(window.innerWidth - CHAT_PANE_MIN, CONTEXT_WIDTH_MIN))
+}
 
 export function ScenarioSessionPage() {
   const token = useToken()
@@ -57,6 +65,9 @@ export function ScenarioSessionPage() {
   const hasDebugReasoning = Boolean(
     (activeRun?.reasoningChunks.length ?? 0) > 0
     || Object.values(completedDebugReasoning).some((chunks) => chunks.length > 0),
+  )
+  const isTurnInFlight = isSending || Boolean(
+    activeRun && !activeRun.events.some((event) => event.kind === 'turn_failed'),
   )
 
   useEffect(() => {
@@ -112,7 +123,7 @@ export function ScenarioSessionPage() {
 
   async function send() {
     const userContent = content.trim()
-    if (!userContent) return
+    if (!userContent || isSubmittingAnswer) return
     setContent('')
     try {
       await sendMessage(token, id, userContent)
@@ -122,26 +133,28 @@ export function ScenarioSessionPage() {
   }
 
   function handleQuickAction(action: ScenarioAllowedAction) {
+    if (isSubmittingAnswer) return
     void sendStructuredAction(token, id, action).catch(() => {})
   }
 
   async function submitAnswer() {
-    if (!answer.trim()) return
+    if (!answer.trim() || isTurnInFlight || isQuitting) return
     setSubmittingAnswer(true)
     setAnswerError('')
-    setAnswerStatus('提交最终答案中')
+    setAnswerStatus('正在提交排查结论')
     try {
       await api.submitScenarioAnswer(token, id, answer)
       navigate(`/scenarios/session/${id}/review`)
     } catch (err) {
-      setAnswerError(err instanceof Error ? err.message : '提交答案失败')
-      setAnswerStatus('提交答案失败')
+      setAnswerError(err instanceof Error ? err.message : '排查结论提交失败')
+      setAnswerStatus('排查结论提交失败')
     } finally {
       setSubmittingAnswer(false)
     }
   }
 
   async function quitSession() {
+    if (isTurnInFlight || isSubmittingAnswer) return
     try {
       await quitScenarioSession(token, id)
       navigate('/scenarios', { replace: true })
@@ -153,16 +166,21 @@ export function ScenarioSessionPage() {
   const activeSession = session ?? {
     current_turn: 0,
     max_turns: 50,
-    revealed_clue_ids: [],
+    revealed_clue_count: 0,
     investigation_state: {
       current_focus: '',
       current_hypothesis: '',
       has_current_hypothesis: false,
       collected_evidence_count: 0,
+      established_facts: [],
+      ruled_out_labels: [],
+      hint_level: 0,
     },
     state_revision: 0,
     status: 'active',
   }
+  const establishedEvidenceCount = activeSession.investigation_state?.collected_evidence_count ?? 0
+  const importantClueCount = Math.max(activeSession.revealed_clue_count ?? 0, clueReleases.length)
   const snapshotText = (value = '') => question.is_sanitized ? redactSensitiveText(value) : value
   const publicScenario = question.content.public_scenario
   const diagramCode = publicScenario?.architecture_diagram ?? question.content.architecture_diagram ?? ''
@@ -179,7 +197,7 @@ export function ScenarioSessionPage() {
     event.currentTarget.setPointerCapture(pointerId)
 
     const onPointerMove = (moveEvent: globalThis.PointerEvent) => {
-      const nextWidth = clamp(startWidth + moveEvent.clientX - startX, CONTEXT_WIDTH_MIN, CONTEXT_WIDTH_MAX)
+      const nextWidth = clamp(startWidth + moveEvent.clientX - startX, CONTEXT_WIDTH_MIN, contextWidthCeiling())
       setContextWidth(nextWidth)
     }
     const stopResize = () => {
@@ -243,14 +261,10 @@ export function ScenarioSessionPage() {
           </Suspense>
           <div className="clue-status">
             <span>轮次 {activeSession.current_turn}/{activeSession.max_turns}</span>
-            <span>状态版本 {activeSession.state_revision}</span>
-            <span>已验证观察 {(activeSession.revealed_clue_ids ?? []).length}</span>
+            <span>已形成证据 {establishedEvidenceCount}</span>
+            <span>重要线索 {importantClueCount}</span>
           </div>
-          <InvestigationStatePanel
-            state={activeSession.investigation_state}
-            clueCount={clueReleases.length}
-            observedCount={(activeSession.revealed_clue_ids ?? []).length}
-          />
+          <InvestigationStatePanel state={activeSession.investigation_state} />
           <ClueReleaseTimeline clues={clueReleases} animatedKeys={animatedClueKeys} snapshotText={snapshotText} />
         </div>
       </aside>
@@ -270,11 +284,16 @@ export function ScenarioSessionPage() {
             </div>
             <span>
               {hasDebugReasoning
-                ? '仅依据已公开信息回应；测试调试流单独展示，不写入历史。'
-                : '仅依据已公开信息回应，不展示隐藏答案或原始思维链。'}
+                ? '导师只依据已公开信息回应；调试内容不会计入会话记录。'
+                : '导师只依据已公开信息回应，不提前展示隐藏答案。'}
             </span>
           </div>
-          <button className="ghost-button compact" type="button" onClick={() => void quitSession()} disabled={isQuitting}>
+          <button
+            className="ghost-button compact"
+            type="button"
+            onClick={() => void quitSession()}
+            disabled={isQuitting || isTurnInFlight || isSubmittingAnswer}
+          >
             {isQuitting ? '放弃中' : '放弃会话'}
           </button>
         </div>
@@ -291,7 +310,7 @@ export function ScenarioSessionPage() {
               )}
               fallbackReply={message.assistant_content}
               onQuickAction={message.id === messages[messages.length - 1]?.id ? handleQuickAction : undefined}
-              quickActionDisabled={isSending || isQuitting}
+              quickActionDisabled={isSending || isQuitting || isSubmittingAnswer}
             />
           ))}
           {activeRun && (
@@ -308,14 +327,14 @@ export function ScenarioSessionPage() {
               )}
               active={isSending}
               onQuickAction={handleQuickAction}
-              quickActionDisabled={isSending || isQuitting}
+              quickActionDisabled={isSending || isQuitting || isSubmittingAnswer}
             />
           )}
         </div>
         {sendError && <div className="inline-error chat-error">{sendError}</div>}
         <div className="composer">
-          <textarea value={content} onChange={(event) => setContent(event.target.value)} placeholder="输入你的排查提问..." disabled={isSending || isQuitting} />
-          <button className="icon-button filled" onClick={() => void send()} disabled={isSending || isQuitting} title="发送">
+          <textarea value={content} onChange={(event) => setContent(event.target.value)} placeholder="输入你的排查提问..." disabled={isSending || isQuitting || isSubmittingAnswer} />
+          <button className="icon-button filled" onClick={() => void send()} disabled={isSending || isQuitting || isSubmittingAnswer} title="发送">
             <Send size={18} />
           </button>
         </div>
@@ -326,14 +345,14 @@ export function ScenarioSessionPage() {
               type="button"
               data-testid="scenario-answer-resizer"
               onPointerDown={resizeAnswer}
-              aria-label="拖拽调整最终答案区高度"
-              title="拖拽调整最终答案区高度"
+              aria-label="拖拽调整排查结论区高度"
+              title="拖拽调整排查结论区高度"
             />
           )}
           <div className="scenario-answer-heading">
             <div>
-              <strong>最终根因答案</strong>
-              <span>{isAnswerOpen ? '支持 Markdown 结构化记录根因、证据、命令和修复验证。' : '默认收起，先把空间留给排查对话。'}</span>
+              <strong>提交排查结论</strong>
+              <span>{isAnswerOpen ? '按直接触发、潜在问题、证据链、风险、修复和验证组织结论。' : '先完成调查，需要提交时再展开。'}</span>
             </div>
             <div className="scenario-answer-actions">
               <button
@@ -344,16 +363,16 @@ export function ScenarioSessionPage() {
                 aria-controls="scenario-answer-editor-region"
               >
                 {isAnswerOpen ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
-                {isAnswerOpen ? '收起答案区' : '展开最终答案区'}
+                {isAnswerOpen ? '收起结论区' : '展开结论区'}
               </button>
               <button
                 className="primary-button compact"
                 onClick={() => void submitAnswer()}
-                disabled={isQuitting || isSubmittingAnswer || !answer.trim()}
+                disabled={isQuitting || isSubmittingAnswer || isTurnInFlight || !answer.trim()}
                 aria-busy={isSubmittingAnswer}
                 data-testid="submit-scenario-answer"
               >
-                <CheckCircle2 size={16} />{isSubmittingAnswer ? '提交中' : '提交答案'}
+                <CheckCircle2 size={16} />{isSubmittingAnswer ? '提交中' : '提交排查结论'}
               </button>
             </div>
           </div>
@@ -364,17 +383,17 @@ export function ScenarioSessionPage() {
                 onChange={(value) => {
                   setAnswer(value)
                   setAnswerError('')
-                  if (answerStatus === '提交答案失败') {
+                  if (answerStatus === '排查结论提交失败') {
                     setAnswerStatus('')
                   }
                 }}
-                disabled={isQuitting || isSubmittingAnswer}
-                placeholder="用 Markdown 记录最终根因：现象、关键证据、验证命令、修复方案和回滚观察..."
-                editorLabel="Markdown 最终答案"
+                disabled={isQuitting || isSubmittingAnswer || isTurnInFlight}
+                placeholder="建议按以下结构填写：直接触发、潜在问题、证据链、衍生风险、修复方案、验证与回滚观察。"
+                editorLabel="Markdown 排查结论"
                 editorTestId="scenario-answer-editor"
                 fileInputTestId="scenario-answer-markdown-file-input"
-                previewEmptyText="预览区：输入最终答案后会显示 Markdown 排版效果。"
-                previewNote="这是 Markdown 渲染预览，提交时仍会使用原始最终答案内容。"
+                previewEmptyText="预览区：输入排查结论后会显示 Markdown 排版效果。"
+                previewNote="这是 Markdown 渲染预览，提交时仍会使用原始结论内容。"
                 onImportStatus={setAnswerStatus}
                 onImportError={(message) => {
                   setAnswerError(message)
@@ -385,7 +404,7 @@ export function ScenarioSessionPage() {
           )}
           {(answerStatus || answerError) && (
             <div className={`stream-status scenario-answer-status ${answerError ? 'error' : ''}`} role="status" aria-live="polite">
-              <strong>{answerStatus || '最终答案状态'}</strong>
+              <strong>{answerStatus || '排查结论状态'}</strong>
               {answerError && <span>{answerError}</span>}
             </div>
           )}
@@ -420,36 +439,24 @@ function ClueReleaseTimeline({
           {clues.map((clue) => (
             <article className={`clue-release-card ${animated.has(clue.key) ? 'is-new' : ''}`} key={clue.key}>
               <div className="clue-release-card-header">
-                <strong>{clueLabel(clue.action)}</strong>
+                <strong>{snapshotText(clue.title?.trim() || clueLabel(clue.action))}</strong>
               </div>
               <p>{snapshotText(clue.result)}</p>
             </article>
           ))}
         </div>
       ) : (
-        <p className="clue-release-empty">关键线索会在形成后固定显示在这里。</p>
+        <p className="clue-release-empty">重要线索会在你通过调查获得后显示在这里。</p>
       )}
     </section>
   )
 }
 
-function InvestigationStatePanel({
-  state,
-  clueCount,
-  observedCount,
-}: {
-  state?: {
-    current_focus?: string
-    current_hypothesis?: string
-    has_current_hypothesis: boolean
-    collected_evidence_count: number
-  }
-  clueCount: number
-  observedCount: number
-}) {
+function InvestigationStatePanel({ state }: { state?: ScenarioInvestigationState }) {
   const focusLabel = scenarioFocusLabel(state?.current_focus)
   const hypothesisLabel = state?.current_hypothesis?.trim() ?? ''
-  const evidenceCount = Math.max(state?.collected_evidence_count ?? 0, clueCount, observedCount)
+  const establishedFacts = state?.established_facts ?? []
+  const ruledOutLabels = state?.ruled_out_labels ?? []
   return (
     <section className="investigation-state-panel" aria-label="当前调查状态" data-testid="investigation-state-panel">
       <div className="investigation-state-heading">
@@ -462,12 +469,20 @@ function InvestigationStatePanel({
           <strong>{focusLabel || '等待公开证据'}</strong>
         </div>
         <div>
-          <span>已形成证据</span>
-          <strong>{evidenceCount} 条</strong>
+          <span>当前假设</span>
+          <strong>{hypothesisLabel || (state?.has_current_hypothesis ? '已有方向，待补充描述' : '尚未形成')}</strong>
         </div>
         <div>
-          <span>调查假设</span>
-          <strong>{hypothesisLabel || (state?.has_current_hypothesis ? '已形成' : '尚未形成')}</strong>
+          <span>已形成事实</span>
+          <strong>{establishedFacts.length > 0 ? establishedFacts.join('；') : '尚未形成'}</strong>
+        </div>
+        <div>
+          <span>已降低优先级</span>
+          <strong>{ruledOutLabels.length > 0 ? ruledOutLabels.join('；') : '暂无'}</strong>
+        </div>
+        <div>
+          <span>提示进度</span>
+          <strong>{hintLevelLabel(state?.hint_level ?? 0)}</strong>
         </div>
       </div>
     </section>
@@ -484,7 +499,22 @@ function scenarioFocusLabel(focus?: string) {
     data: '数据',
     resource: '资源',
   }
-  return focus ? labels[focus] ?? '' : ''
+  return focus ? labels[focus] ?? focus : ''
+}
+
+function hintLevelLabel(level: number) {
+  switch (Math.max(0, Math.min(4, level))) {
+    case 1:
+      return '已提醒变化点'
+    case 2:
+      return '已提示排查方向'
+    case 3:
+      return '已收窄检查范围'
+    case 4:
+      return '已给出可验证事实'
+    default:
+      return '尚未使用教学提示'
+  }
 }
 
 function clueLabel(action: string) {

@@ -41,6 +41,8 @@ RunEventKind = Literal[
     "tool_started",
     "tool_result",
     "tool_completed",
+    "agent_tool_started",
+    "agent_tool_result",
     "response_summary",
     "mentor_buffered",
     "guard_passed",

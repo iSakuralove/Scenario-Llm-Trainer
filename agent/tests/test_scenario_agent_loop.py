@@ -20,6 +20,7 @@ from hiddenworld.contracts import (
     AgentToolResult,
     AgentOutputEnvelope,
     AuthorizedActionRef,
+    ConceptDefinition,
     FinalReplyOutput,
     LearnerStateView,
     PublicScenario,
@@ -216,7 +217,7 @@ async def test_agent_loop_enforces_model_round_budget(public_scenario) -> None:
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_caps_logical_tool_calls_at_ten(public_scenario) -> None:
+async def test_agent_loop_caps_logical_tool_calls_at_default_budget(public_scenario) -> None:
     context = _context(public_scenario).model_copy(
         update={
             "authorized_actions": [
@@ -257,6 +258,34 @@ def test_agent_context_prompt_keeps_current_message_and_excludes_hidden_fields(p
     assert "hidden_world" not in prompt
     assert "canonical_answer" not in prompt
     assert "completion_allowed" not in prompt
+
+
+def test_response_brief_marks_only_concepts_explicitly_named_by_student(public_scenario) -> None:
+    context = _context(public_scenario).model_copy(
+        update={
+            "current_user_message": "支付回调是什么？",
+            "concept_catalog": [
+                ConceptDefinition(
+                    concept_id="callback",
+                    label="支付回调",
+                    summary="支付平台通知业务系统处理结果的请求。",
+                    aliases=["回调"],
+                ),
+                ConceptDefinition(
+                    concept_id="gateway",
+                    label="Gateway",
+                    summary="请求进入后端前的入口层。",
+                    aliases=["网关"],
+                ),
+            ],
+        }
+    )
+
+    prompt = build_scenario_agent_prompt(context)
+
+    assert '"primary_task": "explain_concept"' in prompt
+    assert '"explain_concepts": ["支付回调"]' in prompt
+    assert '"known_concepts": []' in prompt
 
 
 def test_structured_action_model_prompt_is_non_empty_without_fabricating_user_message(public_scenario) -> None:
@@ -530,6 +559,30 @@ def test_fixed_vip_bank_natural_language_route_diff_request_resolves_unique_acti
     ) == ["inspect:config.route_diff"]
 
 
+def test_fixed_vip_bank_natural_language_can_authorize_related_log_pair(
+    learner_state,
+    public_scenario,
+) -> None:
+    path = Path(__file__).parents[1] / "src" / "hiddenworld" / "bank" / "fixed" / "hw-network-vip-001.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    request = AgentTurnRequest(
+        request_id="fixed-bank-log-pair",
+        session_id="session-1",
+        state_revision=1,
+        public_scenario=payload["public_scenario"],
+        hidden_world=payload["hidden_world"],
+        learner_state=learner_state,
+        user_message="按同一个 request_id 对比 Gateway 和 Nginx 的完成时间，看看为什么会超时",
+    )
+
+    context = project_agent_context(request)
+
+    assert [item.action_ref for item in context.authorized_actions] == [
+        "inspect:logs.callback_timeout",
+        "inspect:logs.nginx_callback",
+    ]
+
+
 def test_database_status_question_does_not_resolve_as_observation_request() -> None:
     path = Path(__file__).parents[1] / "src" / "hiddenworld" / "bank" / "fixed" / "hw-network-vip-001.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -694,6 +747,87 @@ def test_single_agent_does_not_turn_observation_claim_into_other_hypothesis(
     assert analysis.hypothesis_raw == ""
 
 
+def test_single_agent_repairs_contradictory_claim_semantics(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    """claim_type 表明有主张而 made_claim=false 时，以枚举为准回填布尔。
+
+    Go 侧 validateScenarioAssessmentConsistency 会把这个组合判成整轮失败；
+    模型对"学生隐含方向但未明确断言"的输入会系统性输出该组合。
+    """
+
+    request = AgentTurnRequest(
+        request_id="claim-semantic-repair",
+        session_id="session-1",
+        state_revision=1,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="订单服务前面是Nginx网关服务，所以我想看看NGINX网关服务日志，健康度怎么样",
+    )
+    output = FinalReplyOutput(
+        kind="final_reply",
+        reply="这个请求目前没有对应的公开题面证据。",
+        semantic=AgentSemanticDecision(
+            intent="probe_plan",
+            claim_type="hypothesis",
+            made_claim=False,
+            confidence=0.8,
+        ),
+    )
+
+    analysis = _analysis_from_single_agent(request, output, [], [])
+
+    assert analysis.made_claim is True
+
+
+def test_single_agent_repairs_contradictory_answer_attempt(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    """answer_attempt 布尔与文本矛盾时，以是否存在非空文本为准。"""
+
+    request = AgentTurnRequest(
+        request_id="answer-attempt-repair",
+        session_id="session-1",
+        state_revision=1,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="我感觉就是网关超时配置改短了。",
+    )
+    output = FinalReplyOutput(
+        kind="final_reply",
+        reply="这个方向先记录为你的当前假设。",
+        semantic=AgentSemanticDecision(
+            intent="answer_attempt",
+            contains_answer_attempt=False,
+            answer_attempt_text="网关超时配置改短了",
+            confidence=0.7,
+        ),
+    )
+
+    analysis = _analysis_from_single_agent(request, output, [], [])
+
+    assert analysis.contains_answer_attempt is True
+
+    empty_text_output = FinalReplyOutput(
+        kind="final_reply",
+        reply="这个方向先记录为你的当前假设。",
+        semantic=AgentSemanticDecision(
+            intent="answer_attempt",
+            contains_answer_attempt=True,
+            answer_attempt_text="  ",
+            confidence=0.7,
+        ),
+    )
+    empty_analysis = _analysis_from_single_agent(request, empty_text_output, [], [])
+    assert empty_analysis.contains_answer_attempt is False
+
+
 @pytest.mark.asyncio
 async def test_single_agent_does_not_emit_undeclared_hypothesis_proposal(
     hidden_world,
@@ -834,7 +968,13 @@ async def test_single_agent_runtime_retries_reply_after_public_boundary_rejectio
     # Guard 拒绝明确排除路径后，Runtime 让同一个 Agent 重生成，而不是替换成固定话术。
     assert "继续排除" not in result.reply
     assert result.reply == "这条观察已经提供了一个事实，你怎么理解它？"
-    assert any(item.kind == "observation_result" for item in result.public_trace)
+    # 循环内旁路先发 agent_tool_result(含 observation 负载)，收尾不再重复；
+    # 断言观察以任一形态进入公开 trace。
+    assert any(
+        item.kind == "observation_result"
+        or (item.kind == "agent_tool_result" and item.observation is not None)
+        for item in result.public_trace
+    )
 
 
 @pytest.mark.asyncio
@@ -874,7 +1014,7 @@ async def test_single_agent_runtime_forwards_streaming_reply_deltas(
 
 
 @pytest.mark.asyncio
-async def test_quick_action_executes_locally_before_one_final_agent_call(
+async def test_quick_action_is_planned_by_agent_before_runtime_executes_tool(
     hidden_world,
     learner_state,
     public_scenario,
@@ -883,11 +1023,21 @@ async def test_quick_action_executes_locally_before_one_final_agent_call(
         def __init__(self):
             self.calls = 0
             self.seen_tool_results = []
+            self.order = []
 
         async def run(self, context):
             self.calls += 1
             self.seen_tool_results = list(context.tool_results)
-            return FinalReplyOutput(kind="final_reply", reply="快捷检查结果已经返回。")
+            self.order.append("model")
+            if self.calls == 1:
+                return ToolCallsOutput(
+                    kind="tool_calls",
+                    public_summary="执行学生点击的观察。",
+                    calls=[ToolCall(call_id="quick-tool", tool_id=action)],
+                )
+            assert len(context.tool_results) == 1
+            assert context.tool_results[0].status == "succeeded"
+            return FinalReplyOutput(kind="final_reply", reply="模型已读取快捷检查结果。")
 
     action = "inspect:metrics.cpu"
     runner = CountingRunner()
@@ -908,12 +1058,152 @@ async def test_quick_action_executes_locally_before_one_final_agent_call(
         },
     )
 
-    result = await runtime.run_turn(request)
+    async def on_trace(event) -> None:
+        if event.kind in {"agent_tool_started", "agent_tool_result"}:
+            runner.order.append("tool")
 
-    assert runner.calls == 1
-    assert len(runner.seen_tool_results) == 1
+    result = await runtime.run_turn(request, on_public_trace=on_trace)
+
+    assert runner.calls == 2
+    assert runner.order.index("model") < runner.order.index("tool")
     assert runner.seen_tool_results[0].status == "succeeded"
+    assert result.reply == "模型已读取快捷检查结果。"
     assert result.turn_assessment is not None
     assert result.turn_assessment.requested_action == action
     assert result.turn_assessment.requested_action_raw == action
-    assert any(item.kind == "observation_result" for item in result.public_trace)
+    # 循环内旁路先发 agent_tool_result(含 observation 负载)，收尾不再重复；
+    # 断言观察以任一形态进入公开 trace。
+    assert any(
+        item.kind == "observation_result"
+        or (item.kind == "agent_tool_result" and item.observation is not None)
+        for item in result.public_trace
+    )
+
+
+@pytest.mark.asyncio
+async def test_quick_action_retries_when_first_model_round_returns_reply_without_tool_call(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    """模型首轮误收束时只允许受控重试，Runtime 不得直接替它执行动作。"""
+
+    action = "inspect:metrics.cpu"
+
+    class RetryRunner:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.tool_results_seen: list[int] = []
+            self.order: list[str] = []
+
+        async def run(self, context):
+            return await self.run_stream(context)
+
+        async def run_stream(self, context, *, on_reply_delta=None, on_reasoning_delta=None):
+            del on_reasoning_delta
+            self.calls += 1
+            self.tool_results_seen.append(len(context.tool_results))
+            self.order.append("model")
+            if self.calls == 1:
+                if on_reply_delta is not None:
+                    await on_reply_delta("首轮误输出")
+                return FinalReplyOutput(kind="final_reply", reply="首轮误输出")
+            if self.calls == 2:
+                return ToolCallsOutput(
+                    kind="tool_calls",
+                    public_summary="按快捷动作检查 CPU。",
+                    calls=[ToolCall(call_id="quick-retry", tool_id=action)],
+                )
+            assert context.tool_results[0].status == "succeeded"
+            if on_reply_delta is not None:
+                await on_reply_delta("重试后已读取 CPU。")
+            return FinalReplyOutput(kind="final_reply", reply="重试后已读取 CPU。")
+
+    runner = RetryRunner()
+    runtime = SingleAgentRuntime(runner)
+    request = AgentTurnRequest(
+        request_id="quick-action-retry",
+        session_id="session-1",
+        state_revision=3,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="",
+        structured_user_action={
+            "action_id": action,
+            "catalog_version": "catalog-test",
+            "state_revision": 3,
+            "normalized_scope": action,
+        },
+    )
+
+    streamed_reply: list[str] = []
+
+    async def collect_reply(text: str) -> None:
+        streamed_reply.append(text)
+
+    result = await runtime.run_turn(request, on_reply_delta=collect_reply)
+
+    assert runner.calls == 3
+    assert runner.tool_results_seen == [0, 0, 1]
+    assert result.reply == "重试后已读取 CPU。"
+    assert streamed_reply == ["重试后已读取 CPU。"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_streams_tool_activity_during_the_loop(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    """循环内工具活动实时外发：开始→带观察的结果→收尾摘要，序号连续不重复。"""
+
+    class ToolThenReplyRunner:
+        async def run(self, context):
+            if not context.tool_results:
+                return ToolCallsOutput(
+                    kind="tool_calls",
+                    public_summary="你想先确认数据库 CPU。",
+                    calls=[ToolCall(call_id="call-1", tool_id="inspect:metrics.cpu")],
+                )
+            return FinalReplyOutput(kind="final_reply", reply="CPU 没有异常，可以换个方向看。")
+
+    streamed: list[PublicTraceEvent] = []
+
+    async def on_trace(event) -> None:
+        streamed.append(event)
+
+    runtime = SingleAgentRuntime(ToolThenReplyRunner())
+    request = AgentTurnRequest(
+        request_id="loop-stream-1",
+        session_id="session-1",
+        state_revision=3,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="先看看 CPU",
+    )
+
+    result = await runtime.run_turn(request, on_public_trace=on_trace)
+
+    kinds = [item.kind for item in streamed]
+    assert kinds.index("agent_tool_started") < kinds.index("agent_tool_result")
+    tool_result_event = next(item for item in streamed if item.kind == "agent_tool_result")
+    assert tool_result_event.observation is not None
+    assert tool_result_event.observation.action == "inspect:metrics.cpu"
+    # 序号严格递增：循环旁路 1..k，收尾事件接着续编。
+    sequences = [item.sequence for item in streamed]
+    assert sequences == sorted(sequences)
+    assert len(set(sequences)) == len(sequences)
+    # 已实时外发的观察不再以 observation_result 重复出现。
+    assert not any(
+        item.kind == "observation_result"
+        and item.observation is not None
+        and item.observation.action == "inspect:metrics.cpu"
+        for item in streamed
+    )
+    # 落库 trace 完整包含旁路事件，且与流式顺序一致。
+    assert result.public_trace[: len(streamed) - 0][0].kind == "agent_tool_started"
+    assert [item.sequence for item in result.public_trace] == list(
+        range(1, len(result.public_trace) + 1)
+    )

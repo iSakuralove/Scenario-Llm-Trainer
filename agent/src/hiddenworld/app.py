@@ -6,6 +6,7 @@ import logging
 import os
 from asyncio import Queue, create_task
 from functools import lru_cache
+from time import perf_counter
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -26,10 +27,60 @@ from hiddenworld.agents.models import (
 )
 from hiddenworld.agents.scenario_agent import create_scenario_agent_runner
 from hiddenworld.contracts import AgentTurnRequest, AgentTurnResult, ContractVersionMismatch
-from hiddenworld.runtime import HiddenWorldRuntime, TurnDeadlineExceeded
+from hiddenworld.runtime import HiddenWorldRuntime, PublicBoundaryRejected, TurnDeadlineExceeded
 from hiddenworld.scenario_runtime import SingleAgentRuntime
 
 logger = logging.getLogger("hiddenworld.app")
+
+
+def _structured_action_id(request: AgentTurnRequest) -> str:
+    action = request.structured_user_action
+    return action.action_id if action is not None else ""
+
+
+def _quick_action(request: AgentTurnRequest) -> bool:
+    return request.structured_user_action is not None and not request.user_message.strip()
+
+
+def _log_turn_outcome(
+    request: AgentTurnRequest,
+    *,
+    started_at: float,
+    phase: str,
+    outcome: str,
+    error_code: str = "",
+    error: BaseException | None = None,
+    events_sent: int = 0,
+    result_seen: bool = False,
+    last_event: str = "",
+    event_counts: dict[str, int] | None = None,
+) -> None:
+    detail = "" if error is None else str(error).replace("\n", " ")
+    log_method = logger.info if outcome == "success" else logger.error
+    log_method(
+        "[hiddenworld-turn] request_id=%s session_id=%s state_revision=%s "
+        "action_id=%s structured_action=%s quick_action=%s phase=%s outcome=%s "
+        "elapsed_ms=%d budget_deadline_ms=%s events_sent=%d result_seen=%s "
+        "last_event=%s event_counts=%s error_code=%s error_type=%s detail=%s",
+        request.request_id,
+        request.session_id,
+        request.state_revision,
+        _structured_action_id(request),
+        request.structured_user_action is not None,
+        _quick_action(request),
+        phase,
+        outcome,
+        int((perf_counter() - started_at) * 1000),
+        request.budget.deadline_ms,
+        events_sent,
+        result_seen,
+        last_event,
+        event_counts or {},
+        error_code,
+        type(error).__name__ if error is not None else "",
+        detail,
+        exc_info=(type(error), error, error.__traceback__) if error is not None else None,
+    )
 
 
 def create_app(runtime: HiddenWorldRuntime | None = None) -> FastAPI:
@@ -41,24 +92,82 @@ def create_app(runtime: HiddenWorldRuntime | None = None) -> FastAPI:
 
     @app.post("/turn", response_model=AgentTurnResult)
     async def run_turn(request: AgentTurnRequest) -> AgentTurnResult:
+        started_at = perf_counter()
+        phase = "runtime_init"
         try:
             active_runtime = runtime if runtime is not None else _runtime_from_env()
-            return await active_runtime.run_turn(request)
+            phase = "runtime_run_turn"
+            result = await active_runtime.run_turn(request)
+            _log_turn_outcome(
+                request,
+                started_at=started_at,
+                phase=phase,
+                outcome="success",
+                result_seen=True,
+            )
+            return result
         except ContractVersionMismatch as exc:
+            _log_turn_outcome(
+                request,
+                started_at=started_at,
+                phase=phase,
+                outcome="failed",
+                error_code="contract_version_mismatch",
+                error=exc,
+            )
             raise HTTPException(
                 status_code=409,
                 detail={"code": "contract_version_mismatch", "message": str(exc)},
             ) from exc
         except ModelConfigurationError as exc:
+            _log_turn_outcome(
+                request,
+                started_at=started_at,
+                phase=phase,
+                outcome="failed",
+                error_code="model_not_configured",
+                error=exc,
+            )
             raise HTTPException(
                 status_code=503,
                 detail={"code": "model_not_configured", "message": str(exc)},
             ) from exc
         except TurnDeadlineExceeded as exc:
+            _log_turn_outcome(
+                request,
+                started_at=started_at,
+                phase=phase,
+                outcome="failed",
+                error_code="turn_deadline_exceeded",
+                error=exc,
+            )
             raise HTTPException(
                 status_code=504,
                 detail={"code": "turn_deadline_exceeded", "message": str(exc)},
             ) from exc
+        except PublicBoundaryRejected as exc:
+            _log_turn_outcome(
+                request,
+                started_at=started_at,
+                phase=phase,
+                outcome="failed",
+                error_code="public_boundary_rejected",
+                error=exc,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail={"code": "public_boundary_rejected", "message": str(exc)},
+            ) from exc
+        except Exception as exc:
+            _log_turn_outcome(
+                request,
+                started_at=started_at,
+                phase=phase,
+                outcome="failed",
+                error_code="agent_internal_error",
+                error=exc,
+            )
+            raise
 
     @app.post("/turn/stream")
     async def stream_turn(request: AgentTurnRequest) -> StreamingResponse:
@@ -66,25 +175,43 @@ def create_app(runtime: HiddenWorldRuntime | None = None) -> FastAPI:
 
         async def event_stream():
             queue: Queue[tuple[str, Any]] = Queue(maxsize=512)
+            started_at = perf_counter()
+            phase = "stream_init"
+            outcome = "cancelled"
+            error_code = ""
+            error: BaseException | None = None
+            events_sent = 0
+            result_seen = False
+            last_event = ""
+            event_counts: dict[str, int] = {}
+
+            async def emit(name: str, payload: Any) -> None:
+                nonlocal events_sent, last_event
+                await queue.put((name, payload))
+                events_sent += 1
+                last_event = name
+                event_counts[name] = event_counts.get(name, 0) + 1
 
             async def on_analysis(analysis) -> None:
-                await queue.put(("turn_analysis", analysis.model_dump(mode="json")))
+                await emit("turn_analysis", analysis.model_dump(mode="json"))
 
             async def on_trace(event) -> None:
-                await queue.put(("public_trace", event.model_dump(mode="json")))
+                await emit("public_trace", event.model_dump(mode="json"))
 
             async def on_reply_delta(piece: str) -> None:
-                await queue.put(("reply_delta", {"text": piece}))
+                await emit("reply_delta", {"text": piece})
 
             async def on_reasoning_delta(piece: str) -> None:
                 # 这是测试专用调试事件：Go 客户端会忽略它，Python 直连测试可以
                 # 观察模型原始 ThinkingPartDelta；它不属于正式 RunEvent，也不会
                 # 写入 AgentTurnResult.public_trace 或会话历史。
                 if _raw_reasoning_stream_enabled() and piece:
-                    await queue.put(("reasoning_raw_delta", {"text": piece}))
+                    await emit("reasoning_raw_delta", {"text": piece})
 
             async def produce() -> None:
+                nonlocal error, error_code, outcome, phase, result_seen
                 try:
+                    phase = "runtime_run_turn"
                     run_kwargs = {
                         "on_turn_analysis": on_analysis,
                         "on_public_trace": on_trace,
@@ -93,25 +220,59 @@ def create_app(runtime: HiddenWorldRuntime | None = None) -> FastAPI:
                     if _raw_reasoning_stream_enabled():
                         run_kwargs["on_reasoning_delta"] = on_reasoning_delta
                     result = await active_runtime.run_turn(request, **run_kwargs)
-                    await queue.put(("result", result.model_dump(mode="json")))
+                    result_seen = True
+                    phase = "result_enqueued"
+                    await emit("result", result.model_dump(mode="json"))
+                    outcome = "success"
                 except ContractVersionMismatch as exc:
-                    await queue.put(("error", _stream_error("contract_version_mismatch", str(exc))))
+                    error = exc
+                    error_code = "contract_version_mismatch"
+                    phase = "runtime_run_turn"
+                    outcome = "failed"
+                    await emit("error", _stream_error(error_code, str(exc)))
                 except ModelConfigurationError as exc:
-                    await queue.put(("error", _stream_error("model_not_configured", str(exc))))
+                    error = exc
+                    error_code = "model_not_configured"
+                    phase = "runtime_run_turn"
+                    outcome = "failed"
+                    await emit("error", _stream_error(error_code, str(exc)))
                 except TurnDeadlineExceeded as exc:
-                    await queue.put(("error", _stream_error("turn_deadline_exceeded", str(exc))))
+                    error = exc
+                    error_code = "turn_deadline_exceeded"
+                    phase = "runtime_run_turn"
+                    outcome = "failed"
+                    await emit("error", _stream_error(error_code, str(exc)))
+                except PublicBoundaryRejected as exc:
+                    error = exc
+                    error_code = "public_boundary_rejected"
+                    phase = "runtime_run_turn"
+                    outcome = "failed"
+                    await emit("error", _stream_error(error_code, str(exc)))
                 except Exception as exc:
-                    logger.exception("agent turn failed: request_id=%s", request.request_id)
-                    await queue.put(
-                        (
-                            "error",
-                            _stream_error(
-                                "agent_internal_error",
-                                f"HiddenWorld Agent 本轮处理失败：{type(exc).__name__}",
-                            ),
-                        )
+                    error = exc
+                    error_code = "agent_internal_error"
+                    phase = "runtime_run_turn"
+                    outcome = "failed"
+                    await emit(
+                        "error",
+                        _stream_error(
+                            error_code,
+                            f"HiddenWorld Agent 本轮处理失败：{type(exc).__name__}",
+                        ),
                     )
                 finally:
+                    _log_turn_outcome(
+                        request,
+                        started_at=started_at,
+                        phase=phase,
+                        outcome=outcome,
+                        error_code=error_code,
+                        error=error,
+                        events_sent=events_sent,
+                        result_seen=result_seen,
+                        last_event=last_event,
+                        event_counts=event_counts,
+                    )
                     await queue.put(("done", None))
 
             producer = create_task(produce())

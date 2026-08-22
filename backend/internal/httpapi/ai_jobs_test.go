@@ -1045,7 +1045,7 @@ func TestScenarioContextCompressionAfterTenTurns(t *testing.T) {
 	if session.ConversationSummary == "" {
 		t.Fatal("expected conversation summary after more than ten turns")
 	}
-	if !strings.Contains(session.ConversationSummary, "已压缩前") {
+	if !strings.Contains(session.ConversationSummary, "已讨论主题") {
 		t.Fatalf("unexpected conversation summary: %s", session.ConversationSummary)
 	}
 	if len([]rune(session.ConversationSummary)) > 1800 {

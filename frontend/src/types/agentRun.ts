@@ -42,7 +42,26 @@ export interface ScenarioPublicObservation {
   is_negative: boolean
 }
 
+/**
+ * Python V2 的公开答案对比投影。
+ *
+ * 这五个字段是跨语言契约的判定维度；它们在新事件中始终存在，不能
+ * 用旧 v1 的 support_status/next_action 替代。旧事件由下方的
+ * ScenarioLegacyPublicAnswerComparison 只读适配。
+ */
 export interface ScenarioPublicAnswerComparison {
+  tool: 'compare_answer' | string
+  status: string
+  user_points: string[]
+  conclusion_status: 'none' | 'partial' | 'supported' | 'contradictory'
+  evidence_status: 'none' | 'insufficient' | 'partial' | 'sufficient'
+  causal_status: 'missing' | 'partial' | 'sufficient'
+  missing_dimensions: Array<'conclusion' | 'evidence' | 'causal_link' | 'consistency'>
+  contradictions: string[]
+}
+
+/** 存量 v1 事件的只读形状；新写入不得使用这两个字段。 */
+export interface ScenarioLegacyPublicAnswerComparison {
   tool: 'compare_answer' | string
   status: string
   user_points: string[]
@@ -50,11 +69,16 @@ export interface ScenarioPublicAnswerComparison {
   next_action: string
 }
 
+/** SSE/历史适配层同时接受新 V2 与存量 V1，业务组件只生成 V2。 */
+export type ScenarioPublicAnswerComparisonPayload =
+  | ScenarioPublicAnswerComparison
+  | ScenarioLegacyPublicAnswerComparison
+
 export interface ScenarioToolEventPayload {
   name: string
   redacted_arguments: Record<string, string>
   duration_ms: number
-  result?: ScenarioPublicAnswerComparison
+  result?: ScenarioPublicAnswerComparisonPayload
 }
 
 export interface ScenarioRunEvent {
@@ -86,15 +110,20 @@ export type ToolCallState =
 
 export type ToolResultStatus = 'succeeded' | 'failed' | 'timeout'
 
-/** observation / clue 的统一外发内容层；markdown_ready 是唯一渲染源。 */
+export interface ScenarioPublicContentMeta {
+  tool_kind?: string
+  is_negative?: boolean
+  source_kind?: string
+  source_label?: string
+  title?: string
+}
+
+/** observation / clue / hint 的统一外发内容层；markdown_ready 是唯一渲染源。 */
 export interface ScenarioPublicContent {
-  content_type: 'observation' | 'clue'
+  content_type: 'observation' | 'clue' | 'hint'
   markdown_ready: string
-  display_variant?: 'log' | 'tool_return' | 'clue'
-  meta?: {
-    tool_kind?: string
-    is_negative?: boolean
-  }
+  display_variant?: 'log' | 'tool_return' | 'clue' | 'hint'
+  meta?: ScenarioPublicContentMeta
 }
 
 /** task_upserted 的负载：工具调用生命周期状态。 */
@@ -138,6 +167,12 @@ export interface ScenarioCluePayload {
   dimension?: ScenarioTeachingDimensionRef
 }
 
+export interface ScenarioHintPayload {
+  hint_id: string
+  level: number
+  content: ScenarioPublicContent
+}
+
 interface RunEventV2Base {
   request_id: string
   sequence: number
@@ -150,6 +185,7 @@ export type ScenarioRunEventV2 =
   | (RunEventV2Base & { kind: 'task_upserted'; payload: { task: ScenarioTaskPayload } })
   | (RunEventV2Base & { kind: 'tool_result'; payload: { tool_result: ScenarioToolResultPayload } })
   | (RunEventV2Base & { kind: 'clue_published'; payload: { clue: ScenarioCluePayload } })
+  | (RunEventV2Base & { kind: 'hint_published'; payload: { hint: ScenarioHintPayload } })
   | (RunEventV2Base & {
       kind: 'assistant_delta'
       payload: { phase: 'understanding' | 'replying'; markdown_ready_delta: string }

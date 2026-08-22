@@ -66,12 +66,14 @@ CREATE TABLE IF NOT EXISTS scenario_sessions (
     score JSONB,
 	question_snapshot JSONB NOT NULL,
 	state_revision INT NOT NULL DEFAULT 0,
-	learner_state JSONB NOT NULL DEFAULT '{"collected_evidence":[],"ruled_out_hypotheses":[],"established_facts":[],"actions_taken":[],"recent_openings":[],"current_focus":"","effective_turns":0,"stalled_turns":0}',
+	learner_state JSONB NOT NULL DEFAULT '{"collected_evidence":[],"ruled_out_hypotheses":[],"established_facts":[],"actions_taken":[],"recent_openings":[],"current_focus":"","effective_turns":0,"stalled_turns":0,"concept_mastery":{},"skill_mastery":{},"explanation_preferences":{"detail":"balanced","analogy":"medium","directness":"medium"},"hint_level":0,"last_hint":""}',
 	conversation_summary TEXT DEFAULT '',
     started_at TIMESTAMPTZ DEFAULT NOW(),
     last_active_at TIMESTAMPTZ DEFAULT NOW(),
     ended_at TIMESTAMPTZ
 );
+
+ALTER TABLE IF EXISTS scenario_sessions ALTER COLUMN learner_state SET DEFAULT '{"collected_evidence":[],"ruled_out_hypotheses":[],"established_facts":[],"actions_taken":[],"recent_openings":[],"current_focus":"","effective_turns":0,"stalled_turns":0,"concept_mastery":{},"skill_mastery":{},"explanation_preferences":{"detail":"balanced","analogy":"medium","directness":"medium"},"hint_level":0,"last_hint":""}';
 
 CREATE TABLE IF NOT EXISTS scenario_messages (
     id TEXT PRIMARY KEY,

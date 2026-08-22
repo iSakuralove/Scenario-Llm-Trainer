@@ -231,6 +231,7 @@ type HiddenWorld struct {
 	VirtualTools        []VirtualTool       `json:"virtual_tools,omitempty"`
 	SolutionRubric      SolutionRubric      `json:"solution_rubric"`
 	MisconceptionRules  []MisconceptionRule `json:"misconception_rules"`
+	TeachingModel       *TeachingModel      `json:"teaching_model,omitempty"`
 }
 
 // CanonicalAnswer 与 agent/src/hiddenworld/contracts/answer.py 的 CanonicalAnswer
@@ -243,7 +244,50 @@ type CanonicalAnswer struct {
 	RequiredCausalRelations []string `json:"required_causal_relations"`
 	AcceptedEquivalents     []string `json:"accepted_equivalents"`
 	SolutionRequirements    []string `json:"solution_requirements"`
+	DirectTrigger           string   `json:"direct_trigger,omitempty"`
+	LatentIssues            []string `json:"latent_issues,omitempty"`
+	Phenomenon               string   `json:"phenomenon,omitempty"`
+	DerivedRisks             []string `json:"derived_risks,omitempty"`
 	AnswerVersion           string   `json:"answer_version"`
+}
+
+// TeachingModel 只描述教学表达、概念目录和证据可用性。
+// 其中安全字段可投影给 ScenarioAgent；提示阶梯仍由 Runtime 按状态选择。
+type TeachingModel struct {
+	MentorPersona             MentorPersona              `json:"mentor_persona"`
+	Concepts                  []ConceptDefinition        `json:"concepts"`
+	EvidenceAvailabilityRules []EvidenceAvailabilityRule `json:"evidence_availability_rules"`
+	HintLadder                []HintStep                  `json:"hint_ladder"`
+}
+
+type MentorPersona struct {
+	StyleName         string  `json:"style_name"`
+	Tone              string  `json:"tone"`
+	Detail            string  `json:"detail"`
+	Directness        float64 `json:"directness"`
+	Humor             float64 `json:"humor"`
+	TimelineFocus     float64 `json:"timeline_focus"`
+	QuestionFrequency float64 `json:"question_frequency"`
+}
+
+type ConceptDefinition struct {
+	ConceptID string   `json:"concept_id"`
+	Label     string   `json:"label"`
+	Summary   string   `json:"summary"`
+	Aliases   []string `json:"aliases"`
+}
+
+type EvidenceAvailabilityRule struct {
+	RequestPatterns []string `json:"request_patterns"`
+	Availability    string   `json:"availability"`
+	PublicMessage   string   `json:"public_message"`
+	ActionIDs       []string `json:"action_ids"`
+}
+
+type HintStep struct {
+	Level          int      `json:"level"`
+	PublicHint     string   `json:"public_hint"`
+	FocusActionIDs []string `json:"focus_action_ids"`
 }
 
 // VirtualTool 描述题目自带的只读模拟查询入口。查询文本仅用于意图匹配，
@@ -276,11 +320,14 @@ type Hypothesis struct {
 }
 
 type EvidenceNode struct {
-	EvidenceID    string   `json:"evidence_id"`
-	Content       string   `json:"content"`
-	Category      string   `json:"category"`
-	Prerequisites []string `json:"prerequisites"`
-	ObtainedBy    []string `json:"obtained_by"`
+	EvidenceID      string   `json:"evidence_id"`
+	Content         string   `json:"content"`
+	Category        string   `json:"category"`
+	Prerequisites   []string `json:"prerequisites"`
+	ObtainedBy      []string `json:"obtained_by"`
+	ClueImportance  string   `json:"clue_importance,omitempty"`
+	PublicTitle     string   `json:"public_title,omitempty"`
+	DiagnosticRole  string   `json:"diagnostic_role,omitempty"`
 }
 
 type Observation struct {

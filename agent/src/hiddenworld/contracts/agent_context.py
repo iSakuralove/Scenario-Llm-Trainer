@@ -16,7 +16,7 @@ from .assessment import GuidanceState
 from .dimensions import TeachingDimensionRef
 from .learner import LearnerStateView, Turn
 from .version import EvidenceAvailability
-from .world import PublicScenario
+from .world import ConceptDefinition, MentorPersona, PublicScenario
 
 
 class ActionCatalogEntry(BaseModel):
@@ -70,6 +70,7 @@ class EvidenceRequestView(BaseModel):
 
     requested_text: str
     availability: EvidenceAvailability
+    public_message: str = ""
 
 
 class AgentBudgetView(BaseModel):
@@ -101,6 +102,7 @@ class AgentContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     public_scenario: PublicScenario
+    conversation_summary: str = ""
     transcript: list[Turn] = Field(default_factory=list)
     current_user_message: str = ""
     # Runtime 只在模型需要重生成回复时写入内部校验反馈；它不携带答案、
@@ -108,6 +110,8 @@ class AgentContext(BaseModel):
     reply_feedback: str = ""
     evidence_request: EvidenceRequestView | None = None
     learner_summary: LearnerStateView
+    mentor_persona: MentorPersona = Field(default_factory=MentorPersona)
+    concept_catalog: list[ConceptDefinition] = Field(default_factory=list)
     teaching_navigation: list[TeachingDimensionRef] = Field(default_factory=list)
     action_catalog: list[ActionCatalogEntry] = Field(default_factory=list)
     hypothesis_catalog: list[HypothesisCatalogEntry] = Field(default_factory=list)

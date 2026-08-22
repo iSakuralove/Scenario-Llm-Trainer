@@ -8,15 +8,16 @@ import (
 	"situational-teaching/backend/internal/domain"
 )
 
-// scenarioValidationMode 决定排查工坊 Go 侧三组校验器（proposal 审批、
-// 回复防剧透 guard、公开 trace 协议校验）的执行方式：
+// scenarioValidationMode 决定排查工坊 Go 侧业务闸门（proposal 审批、
+// 回复防剧透 guard）的执行方式。公开 trace 是可丢弃旁路，见
+// scenarioPublicTraceValidationMode，不再以单条过程事件阻断整轮：
 //
-//   - strict：默认。任一校验失败即拒绝整轮（502 + 错误码），与历史行为一致。
+//   - strict：默认。业务闸门任一校验失败即拒绝整轮（502 + 错误码），与历史行为一致。
 //   - log：影子模式。校验失败只记审计与日志，不拦截整轮。用于观察
 //     「Python Guard 放行、Go 校验更严」的真实分歧面，避免演示现场整轮报废。
 //   - off：跳过全部闸门，直接信任 Python 侧结果。仅限本地联调。
 //
-// 注意：revision 校验、request_id 幂等、CommitScenarioAgentTurn 原子提交
+// 注意：公开 trace 只记录并过滤，不论 strict/log；revision 校验、request_id 幂等、CommitScenarioAgentTurn 原子提交
 // 不属于这三组校验器，任何模式下都必须原样执行——它们是会话一致性的根基，
 // 见 docs/wayfinder/003-go-state-audit-seam.md。
 type scenarioValidationMode string
@@ -44,10 +45,10 @@ func scenarioValidationModeFromEnv() scenarioValidationMode {
 	}
 }
 
-// scenarioPublicTraceValidationModeFromEnv 解析过程事件专用闸门。
+// scenarioPublicTraceValidationModeFromEnv 解析过程事件专用过滤档位。
 // V2 迁移窗口默认使用 log，让不兼容的旧过程事件被记录并丢弃，而不是把已经
-// 可以展示的正文一起截断；需要恢复严格过程事件复核时设置
-// SCENARIO_PUBLIC_TRACE_VALIDATION_MODE=strict。
+// 可以展示的正文一起截断。strict 仅保留给审计/兼容配置，不会恢复“单条 trace
+// 阻断正文”的行为；过程事件始终是可丢弃旁路。
 func scenarioPublicTraceValidationModeFromEnv() scenarioValidationMode {
 	raw := strings.ToLower(strings.TrimSpace(getenvValue("SCENARIO_PUBLIC_TRACE_VALIDATION_MODE")))
 	if raw == "" {

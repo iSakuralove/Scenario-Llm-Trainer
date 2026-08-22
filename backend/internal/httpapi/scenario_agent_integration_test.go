@@ -43,17 +43,26 @@ func TestScenarioMessageCommitsApprovedAgentTurnAndKeepsPrivateAuditPrivate(t *t
 			ExpectedRevision: request.StateRevision,
 			Reply:            reply,
 			TurnAssessment: &agentclient.TurnAssessment{
-				Intent:             "probe_plan",
-				ClaimType:          "none",
-				StudentAffect:      "engaged",
-				ProgressAssessment: "partial",
-				Actions:            []string{action},
-				EstablishedFacts:   []string{},
-				Confidence:         0.95,
+				Intent:                "probe_plan",
+				ClaimType:             "none",
+				StudentAffect:         "engaged",
+				ProgressAssessment:    "partial",
+				Actions:               []string{action},
+				EstablishedFacts:      []string{},
+				Confidence:            0.95,
+				ConceptMasterySignals: map[string]int{},
+				SkillMasterySignals:   map[string]int{},
+				PreferenceSignals:     map[string]string{},
+				HumorLevel:            "none",
+				FrustrationLevel:      "none",
+				ConfusionLevel:        "none",
+				ConfidenceLevel:       "low",
+				UrgencyLevel:          "low",
 			},
 			TeachingDecision: &agentclient.TeachingDecision{
 				TeachingState: "normal_diagnosis",
 				Strategy:      "observe",
+				PrimaryTask:   "interpret_evidence",
 				ReplyPolicy:   "neutral_summary",
 			},
 			GuidanceState: agentclient.GuidanceState{
@@ -559,11 +568,14 @@ func TestScenarioRunEventsExposeOnlyPublicCompareAnswerResult(t *testing.T) {
 					RedactedArguments: map[string]string{},
 					DurationMS:        12,
 					Result: &agentclient.PublicAnswerComparison{
-						Tool:          "compare_answer",
-						Status:        "completed",
-						UserPoints:    []string{"索引可能缺失"},
-						SupportStatus: "needs_more_evidence",
-						NextAction:    "继续补充直接观察。",
+						Tool:              "compare_answer",
+						Status:            "completed",
+						UserPoints:        []string{"索引可能缺失"},
+						ConclusionStatus:  "partial",
+						EvidenceStatus:    "insufficient",
+						CausalStatus:      "missing",
+						MissingDimensions: []string{"evidence", "causal_link"},
+						Contradictions:    []string{},
 					},
 				},
 			},
@@ -585,7 +597,7 @@ func TestScenarioRunEventsExposeOnlyPublicCompareAnswerResult(t *testing.T) {
 	if !strings.Contains(text, `"tool_id":"compare_answer"`) {
 		t.Fatalf("missing public compare_answer tool_result: %s", text)
 	}
-	if !strings.Contains(text, "还需要更多直接观察") || !strings.Contains(text, "索引可能缺失") {
+	if !strings.Contains(text, "证据：现有观察不足") || !strings.Contains(text, "索引可能缺失") {
 		t.Fatalf("missing public compare_answer signal in markdown_ready: %s", text)
 	}
 	if strings.Contains(text, "answer_attempt_id") {
@@ -626,11 +638,17 @@ func TestScenarioMessageRejectsPythonReplyDeltaInPublicTrace(t *testing.T) {
 	handler.ServeHTTP(recorder, req)
 
 	raw := recorder.Body.String()
-	if strings.Contains(raw, "UNSAFE_TRACE_REPLY") || !strings.Contains(raw, "public_trace_rejected") {
-		t.Fatalf("unsafe Python trace must be rejected before publication: %s", raw)
+	// V2 迁移后的正式语义：坏过程事件只丢弃并记审计，不截断正文。
+	// 安全线是“伪造内容绝不外发”，而不是“整轮失败”。
+	if strings.Contains(raw, "UNSAFE_TRACE_REPLY") {
+		t.Fatalf("unsafe Python trace content must never be published: %s", raw)
 	}
-	if len(dataStore.ListScenarioMessages(sessionID)) != 0 {
-		t.Fatal("rejected public trace must not write a scenario message")
+	if !strings.Contains(raw, "turn_completed") || !strings.Contains(raw, "安全的最终回复") {
+		t.Fatalf("dropped process trace must not truncate the reply stream: %s", raw)
+	}
+	messages := dataStore.ListScenarioMessages(sessionID)
+	if len(messages) != 1 || strings.Contains(messages[0].AssistantContent, "UNSAFE_TRACE_REPLY") {
+		t.Fatalf("history must keep the sanitized turn only: %+v", messages)
 	}
 }
 
@@ -668,11 +686,15 @@ func TestScenarioMessageRejectsFabricatedToolTraceOnOrdinaryTurn(t *testing.T) {
 	status, env := requestJSON(t, handler, http.MethodPost, "/api/v1/scenarios/sessions/"+sessionID+"/messages", token, map[string]any{
 		"content": "先看看公开现象", "request_id": "request-fake-tool", "state_revision": 0,
 	})
-	if status != http.StatusBadGateway || !strings.Contains(string(env.Data), "public_trace_rejected") {
-		t.Fatalf("ordinary turn must reject fabricated tool trace, status=%d env=%+v", status, env)
+	// 坏过程事件丢弃不截断：轮次成功，但伪造的 compare_answer 卡片绝不出现。
+	if status != http.StatusOK {
+		t.Fatalf("dropped fabricated trace must not fail the turn, status=%d env=%+v", status, env)
 	}
-	if len(dataStore.ListScenarioMessages(sessionID)) != 0 {
-		t.Fatal("fabricated tool trace must not write a scenario message")
+	if strings.Contains(string(env.Data), "compare-answer") || strings.Contains(string(env.Data), "对比答案") {
+		t.Fatalf("fabricated compare_answer card must not be published: %s", env.Data)
+	}
+	if len(dataStore.ListScenarioMessages(sessionID)) != 1 {
+		t.Fatal("sanitized turn must be written exactly once")
 	}
 }
 
@@ -689,11 +711,14 @@ func TestValidateScenarioPublicTraceAcceptsBoundCompareAnswerLifecycle(t *testin
 		RedactedArguments: map[string]string{},
 		DurationMS:        12,
 		Result: &agentclient.PublicAnswerComparison{
-			Tool:          "compare_answer",
-			Status:        "completed",
-			UserPoints:    []string{"我认为目前的证据还需要继续验证索引问题"},
-			SupportStatus: "needs_more_evidence",
-			NextAction:    "继续补充能支撑这个结论的直接观察。",
+			Tool:              "compare_answer",
+			Status:            "completed",
+			UserPoints:        []string{"我认为目前的证据还需要继续验证索引问题"},
+			ConclusionStatus:  "partial",
+			EvidenceStatus:    "insufficient",
+			CausalStatus:      "missing",
+			MissingDimensions: []string{"evidence", "causal_link"},
+			Contradictions:    []string{},
 		},
 	}
 	result := agentclient.TurnResult{
@@ -746,17 +771,26 @@ func noProgressTurnResult(request agentclient.TurnRequest, reply string) agentcl
 		ExpectedRevision: request.StateRevision,
 		Reply:            reply,
 		TurnAssessment: &agentclient.TurnAssessment{
-			Intent:             "investigate",
-			ClaimType:          "none",
-			StudentAffect:      "engaged",
-			ProgressAssessment: "no_progress",
-			Actions:            []string{},
-			EstablishedFacts:   []string{},
-			Confidence:         0.9,
+			Intent:                "investigate",
+			ClaimType:             "none",
+			StudentAffect:         "engaged",
+			ProgressAssessment:    "no_progress",
+			Actions:               []string{},
+			EstablishedFacts:      []string{},
+			Confidence:            0.9,
+			ConceptMasterySignals: map[string]int{},
+			SkillMasterySignals:   map[string]int{},
+			PreferenceSignals:     map[string]string{},
+			HumorLevel:            "none",
+			FrustrationLevel:      "none",
+			ConfusionLevel:        "none",
+			ConfidenceLevel:       "low",
+			UrgencyLevel:          "low",
 		},
 		TeachingDecision: &agentclient.TeachingDecision{
 			TeachingState: "normal_diagnosis",
 			Strategy:      "acknowledge",
+			PrimaryTask:   "acknowledge_progress",
 			ReplyPolicy:   "acknowledgement",
 		},
 		GuidanceState: agentclient.GuidanceState{
@@ -909,11 +943,12 @@ func TestScenarioV2RunEventsCarrySchemaRevisionAndStableSequence(t *testing.T) {
 }
 
 func TestScenarioPublicObservationMarkdownStripsImplementationPrefix(t *testing.T) {
+	// V2：正文不再改写，只做空白归一；“教学模拟”的来源标注由
+	// content.meta.source_label 承载，不重复剥前缀。
 	cases := map[string]string{
-		"模拟回调访问日志（10:00-10:20）：10:05 后 zone-b 出现超时。": "回调访问日志（10:00-10:20）：10:05 后 zone-b 出现超时。",
-		"  模拟订单库写入日志：出现慢插入  ":                        "订单库写入日志：出现慢插入",
+		"模拟回调访问日志（10:00-10:20）：10:05 后 zone-b 出现超时。": "模拟回调访问日志（10:00-10:20）：10:05 后 zone-b 出现超时。",
+		"  模拟订单库写入日志：出现慢插入  ":                        "模拟订单库写入日志：出现慢插入",
 		"服务 Pod 资源平稳。":                               "服务 Pod 资源平稳。",
-		"模拟数据里的模拟只剥离开头一次":                            "数据里的模拟只剥离开头一次",
 	}
 	for input, expected := range cases {
 		if got := scenarioPublicObservationMarkdown(input); got != expected {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"unicode"
 
 	"situational-teaching/backend/internal/ai"
 	"situational-teaching/backend/internal/domain"
@@ -26,6 +27,8 @@ func scoreScenarioWithEvidenceChain(input scenarioScoringInput) (*domain.Scenari
 		return &domain.ScenarioScore{}, &domain.ScenarioScoringReport{}, nil
 	}
 	root := ai.RootCauseMatch(input.Answer, question.Content.RootCause, question.Content.RootCauseKeywords)
+	structuredMissing := scenarioCanonicalMissingDimensions(input.Answer, question.Content.HiddenWorld)
+	root = scenarioStructuredRootMatchFloor(root, question.Content.HiddenWorld, structuredMissing)
 	events := extractScenarioEvidenceEvents(input.Messages, input.Answer)
 	docs := ai.BuildScenarioVectorDocuments(*question)
 	matches, evidenceScore, procedureScore, distractorHits := scoreEvidenceEvents(events, docs)
@@ -47,13 +50,31 @@ func scoreScenarioWithEvidenceChain(input scenarioScoringInput) (*domain.Scenari
 	}
 	reasoningDepth := reasoningDepthScore(events, evidenceScore, procedureScore)
 	penalties := []string{}
-	if root >= 60 && evidenceScore < 35 {
+	guessWithoutEvidence := root >= 60 && evidenceScore < 35
+	if guessWithoutEvidence {
 		penalties = append(penalties, "根因相似度较高，但会话中缺少可追溯证据链，按猜答案处理。")
 	}
 	if distractorHits > 0 {
 		penalties = append(penalties, "排查过程中命中干扰路径，扣除部分过程分。")
 	}
 	accuracy := clampInt((root*65 + evidenceScore*20 + procedureScore*15) / 100)
+	if guessWithoutEvidence && accuracy > 69 {
+		accuracy = 69
+	}
+	if containsScenarioString(structuredMissing, "直接触发") {
+		if accuracy > 59 {
+			accuracy = 59
+		}
+		penalties = append(penalties, "结论未说明本次事故的直接触发变化，潜在问题不能代替完整事故结论。")
+	} else if containsScenarioString(structuredMissing, "潜在问题") || containsScenarioString(structuredMissing, "现象解释") {
+		if accuracy > 69 {
+			accuracy = 69
+		}
+		penalties = append(penalties, "结论没有同时说明潜在问题与表层现象，因果链仍不完整。")
+	}
+	if containsScenarioString(structuredMissing, "衍生风险") {
+		penalties = append(penalties, "结论未覆盖由超时和重试带来的业务风险。")
+	}
 	total := (efficiency*15 + accuracy*45 + clueUsage*15 + reasoningDepth*25) / 100
 	if len(penalties) > 0 {
 		total -= 10 + distractorHits*5
@@ -78,8 +99,153 @@ func scoreScenarioWithEvidenceChain(input scenarioScoringInput) (*domain.Scenari
 		Penalties:              penalties,
 		ScoreExplanation:       scenarioScoreExplanation(root, evidenceScore, procedureScore, clueUsage, reasoningDepth, penalties),
 	}
-	missing := missingRootKeywords(input.Answer, question.Content.RootCauseKeywords)
+	missing := append(missingRootKeywords(input.Answer, question.Content.RootCauseKeywords), structuredMissing...)
+	missing = uniqueScenarioStrings(missing, 6)
 	return score, report, missing
+}
+
+func scenarioStructuredRootMatchFloor(current int, world *domain.HiddenWorld, missing []string) int {
+	if world == nil || world.CanonicalAnswer == nil {
+		return current
+	}
+	canonical := world.CanonicalAnswer
+	criticalDimensions := 0
+	if strings.TrimSpace(canonical.DirectTrigger) != "" {
+		criticalDimensions++
+	}
+	if len(canonical.LatentIssues) > 0 {
+		criticalDimensions++
+	}
+	if strings.TrimSpace(canonical.Phenomenon) != "" {
+		criticalDimensions++
+	}
+	if criticalDimensions < 2 || containsScenarioString(missing, "直接触发") ||
+		containsScenarioString(missing, "潜在问题") || containsScenarioString(missing, "现象解释") {
+		return current
+	}
+	floor := 84
+	if len(canonical.DerivedRisks) > 0 && !containsScenarioString(missing, "衍生风险") {
+		floor = 90
+	}
+	if current < floor {
+		return floor
+	}
+	return current
+}
+
+func scenarioCanonicalMissingDimensions(answer string, world *domain.HiddenWorld) []string {
+	if world == nil || world.CanonicalAnswer == nil {
+		return nil
+	}
+	canonical := world.CanonicalAnswer
+	missing := []string{}
+	if strings.TrimSpace(canonical.DirectTrigger) != "" && !scenarioCanonicalDimensionCovered(answer, canonical.DirectTrigger) {
+		missing = append(missing, "直接触发")
+	}
+	if len(canonical.LatentIssues) > 0 && !scenarioCanonicalAnyDimensionCovered(answer, canonical.LatentIssues) {
+		missing = append(missing, "潜在问题")
+	}
+	if strings.TrimSpace(canonical.Phenomenon) != "" && !scenarioCanonicalDimensionCovered(answer, canonical.Phenomenon) {
+		missing = append(missing, "现象解释")
+	}
+	if len(canonical.DerivedRisks) > 0 && !scenarioCanonicalAnyDimensionCovered(answer, canonical.DerivedRisks) {
+		missing = append(missing, "衍生风险")
+	}
+	return missing
+}
+
+func scenarioCanonicalAnyDimensionCovered(answer string, expected []string) bool {
+	for _, item := range expected {
+		if scenarioCanonicalDimensionCovered(answer, item) {
+			return true
+		}
+	}
+	return false
+}
+
+func scenarioCanonicalDimensionCovered(answer, expected string) bool {
+	answer = strings.TrimSpace(answer)
+	expected = strings.TrimSpace(expected)
+	if answer == "" || expected == "" {
+		return false
+	}
+	if strings.Contains(compactScenarioScoringText(answer), compactScenarioScoringText(expected)) {
+		return true
+	}
+	semanticGroups := [][]string{
+		{"网关", "gateway", "vip"},
+		{"响应超时", "response_timeout", "timeout", "超时"},
+		{"缩短", "改为", "改成", "调整", "变成", "→", "->", "由"},
+		{"订单库", "数据库", "db", "mysql"},
+		{"锁等待", "数据库锁", "db lock", "lock_wait", "lock wait", "锁"},
+		{"长尾", "慢请求", "3～5", "3-5"},
+		{"504", "gateway timeout"},
+		{"nginx", "callback", "回调服务", "后端"},
+		{"200", "稍后完成", "最终完成", "处理成功", "返回成功", "成功"},
+		{"重试", "retry", "重复回调"},
+		{"幂等", "idempotent", "idempotency", "重复处理"},
+	}
+	requiredGroups := 0
+	matchedGroups := 0
+	for _, group := range semanticGroups {
+		if !containsScoringTerm(strings.ToLower(expected), group) {
+			continue
+		}
+		requiredGroups++
+		if containsScoringTerm(strings.ToLower(answer), group) {
+			matchedGroups++
+		}
+	}
+	if requiredGroups > 0 {
+		return matchedGroups == requiredGroups
+	}
+
+	tokens := meaningfulVectorTokens(expected)
+	if len(tokens) == 0 {
+		return false
+	}
+	hits := 0
+	for _, token := range tokens {
+		if ai.ContainsAny(answer, []string{token}) {
+			hits++
+		}
+	}
+	return hits >= max(1, (len(tokens)+1)/2)
+}
+
+func compactScenarioScoringText(value string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || unicode.IsPunct(r) {
+			return -1
+		}
+		return unicode.ToLower(r)
+	}, value)
+}
+
+func containsScenarioString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueScenarioStrings(values []string, limit int) []string {
+	seen := map[string]bool{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+		if limit > 0 && len(result) >= limit {
+			break
+		}
+	}
+	return result
 }
 
 func extractScenarioEvidenceEvents(messages []domain.ScenarioMessage, answer string) []domain.ScenarioEvidenceEvent {

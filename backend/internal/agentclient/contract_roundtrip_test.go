@@ -76,3 +76,34 @@ func TestStrictDecodeRejectsUnknownContractField(t *testing.T) {
 		t.Fatal("strict decode accepted an unknown contract field; 契约漂移将不再被发现")
 	}
 }
+
+// TestPublicAnswerComparisonV2Golden 保证 Python 公开投影与 Go 接收 DTO
+// 使用同一组 V2 字段；旧 v1 的 support_status/next_action 不能再进入新结果。
+func TestPublicAnswerComparisonV2Golden(t *testing.T) {
+	payload, err := os.ReadFile("testdata/public_answer_comparison_v2.golden.json")
+	if err != nil {
+		t.Fatalf("read compare_answer golden payload: %v", err)
+	}
+	var comparison PublicAnswerComparison
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&comparison); err != nil {
+		t.Fatalf("strict decode of compare_answer V2 golden failed: %v", err)
+	}
+	if comparison.Tool != "compare_answer" || comparison.Status != "completed" {
+		t.Fatalf("unexpected compare_answer metadata: %+v", comparison)
+	}
+	if comparison.ConclusionStatus == "" || comparison.EvidenceStatus == "" || comparison.CausalStatus == "" {
+		t.Fatalf("V2 status fields must be present: %+v", comparison)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		t.Fatalf("unmarshal compare_answer golden payload: %v", err)
+	}
+	if _, ok := raw["support_status"]; ok {
+		t.Fatal("V2 compare_answer golden must not contain support_status")
+	}
+	if _, ok := raw["next_action"]; ok {
+		t.Fatal("V2 compare_answer golden must not contain next_action")
+	}
+}

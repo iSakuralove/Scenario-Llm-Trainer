@@ -8,6 +8,7 @@
 
 import type {
   ScenarioPublicAnswerComparison,
+  ScenarioPublicAnswerComparisonPayload,
   ScenarioPublicContent,
   ScenarioPublicObservation,
   ScenarioRunEvent,
@@ -25,13 +26,14 @@ export interface AgentRunViewModel {
   tasks: ScenarioTaskPayload[]
   toolResults: ScenarioToolResultPayload[]
   clues: { clueId: string; content: ScenarioPublicContent }[]
+  hints: { hintId: string; level: number; content: ScenarioPublicContent }[]
   replyChunks: string[]
   failure: string | null
   failureCode: string | null
   complete: boolean
   nextActions: ScenarioAllowedAction[]
   /** 最近一条实质事件，驱动 Thinking State 文案；回复流期间为 replying。 */
-  lastSignal: 'turn' | 'understanding' | 'tool' | 'clue' | 'replying' | 'done' | 'failed'
+  lastSignal: 'turn' | 'understanding' | 'tool' | 'clue' | 'hint' | 'replying' | 'done' | 'failed'
 }
 
 export function buildAgentRunViewModel(events: ScenarioRunEventAny[]): AgentRunViewModel {
@@ -43,6 +45,7 @@ export function buildAgentRunViewModel(events: ScenarioRunEventAny[]): AgentRunV
     tasks: [],
     toolResults: [],
     clues: [],
+    hints: [],
     replyChunks: [],
     failure: null,
     failureCode: null,
@@ -77,6 +80,15 @@ export function buildAgentRunViewModel(events: ScenarioRunEventAny[]): AgentRunV
         upsertTask(task) {
           tasksById.set(task.task_id, { ...tasksById.get(task.task_id), ...task })
         },
+        linkTaskResult(callId) {
+          for (const [taskId, task] of tasksById) {
+            if (task.state === 'completed') continue
+            if (task.call_id === callId || taskId === callId) {
+              tasksById.set(taskId, { ...task, state: 'completed' })
+              return
+            }
+          }
+        },
       })
       continue
     }
@@ -110,7 +122,10 @@ interface ViewModelCallbacks {
 function applyV2Event(
   model: AgentRunViewModel,
   event: ScenarioRunEventAny & { schema_version: string },
-  callbacks: ViewModelCallbacks & { upsertTask: (task: ScenarioTaskPayload) => void },
+  callbacks: ViewModelCallbacks & {
+    upsertTask: (task: ScenarioTaskPayload) => void
+    linkTaskResult: (callId: string) => void
+  },
 ): void {
   const v2 = event as import('../../../types/agentRun').ScenarioRunEventV2
   switch (v2.kind) {
@@ -132,24 +147,33 @@ function applyV2Event(
       callbacks.upsertTask(v2.payload.task)
       model.lastSignal = 'tool'
       break
-    case 'tool_result':
-      if (v2.payload.tool_result.content?.content_type === 'clue') {
-        // clue_published 是主动线索的唯一正式事件来源；兼容某些过渡响应把
-        // clue 内容挂在 tool_result 上时，只补入尚不存在的 clue，避免同轮双卡片。
-        const clueId = v2.payload.tool_result.call_id || v2.payload.tool_result.tool_id
-        if (!model.clues.some((item) => item.clueId === clueId)) {
-          model.clues.push({ clueId, content: v2.payload.tool_result.content })
-        }
-      } else {
-        model.toolResults.push(v2.payload.tool_result)
+    case 'tool_result': {
+      const toolResult = v2.payload.tool_result
+      if (toolResult.content?.content_type !== 'clue'
+        && toolResult.content?.content_type !== 'hint') {
+        model.toolResults.push(toolResult)
       }
+      // 工具结果到达即补齐对应任务的终态：即使 task_upserted(completed)
+      // 事件丢失或乱序，芯片也不会永远停在“查询中”。
+      callbacks.linkTaskResult(toolResult.call_id)
       model.lastSignal = 'tool'
       break
+    }
     case 'clue_published':
       if (!model.clues.some((item) => item.clueId === v2.payload.clue.clue_id)) {
         model.clues.push({ clueId: v2.payload.clue.clue_id, content: v2.payload.clue.content })
       }
       model.lastSignal = 'clue'
+      break
+    case 'hint_published':
+      if (!model.hints.some((item) => item.hintId === v2.payload.hint.hint_id)) {
+        model.hints.push({
+          hintId: v2.payload.hint.hint_id,
+          level: v2.payload.hint.level,
+          content: v2.payload.hint.content,
+        })
+      }
+      model.lastSignal = 'hint'
       break
     case 'turn_completed':
       model.complete = true
@@ -258,13 +282,29 @@ function applyLegacyCompareAnswerEvent(
   }
 }
 
-function legacyComparisonMarkdown(comparison: ScenarioPublicAnswerComparison): string {
+function legacyComparisonMarkdown(comparison: ScenarioPublicAnswerComparisonPayload): string {
+  const isV2 = 'conclusion_status' in comparison
+  if (isV2) {
+    const parts = [
+      `结论完整度：${conclusionStatusLabel(comparison.conclusion_status)}`,
+      `证据充分度：${evidenceStatusLabel(comparison.evidence_status)}`,
+      `因果链：${causalStatusLabel(comparison.causal_status)}`,
+    ]
+    if ((comparison.missing_dimensions ?? []).length > 0) {
+      parts.push(`还需补充：${comparison.missing_dimensions?.map(comparisonDimensionLabel).join('、')}`)
+    }
+    if ((comparison.contradictions ?? []).length > 0) {
+      parts.push(`需要核对：${comparison.contradictions?.join('；')}`)
+    }
+    return parts.join('；')
+  }
+
   const parts = [`答案对比：${supportStatusLabel(comparison.support_status)}`]
   if (comparison.user_points.length > 0) parts.push(`你的要点：${comparison.user_points.join('；')}`)
   return parts.join('；')
 }
 
-export function supportStatusLabel(status: string): string {
+export function supportStatusLabel(status?: string): string {
   switch (status) {
     case 'insufficiently_specific':
       return '表述还不够具体'
@@ -275,7 +315,65 @@ export function supportStatusLabel(status: string): string {
     case 'evidence_consistent':
       return '与已有观察一致'
     default:
-      return status
+      return '暂无法判断'
+  }
+}
+
+function conclusionStatusLabel(status?: ScenarioPublicAnswerComparison['conclusion_status']): string {
+  switch (status) {
+    case 'none':
+      return '尚未形成明确结论'
+    case 'partial':
+      return '已提出部分结论'
+    case 'supported':
+      return '结论已有公开证据支持'
+    case 'contradictory':
+      return '结论与公开证据存在矛盾'
+    default:
+      return '暂无法判断'
+  }
+}
+
+function evidenceStatusLabel(status?: ScenarioPublicAnswerComparison['evidence_status']): string {
+  switch (status) {
+    case 'none':
+      return '尚未引用公开证据'
+    case 'insufficient':
+      return '证据不足'
+    case 'partial':
+      return '已有部分证据'
+    case 'sufficient':
+      return '证据链基本充分'
+    default:
+      return '暂无法判断'
+  }
+}
+
+function causalStatusLabel(status?: ScenarioPublicAnswerComparison['causal_status']): string {
+  switch (status) {
+    case 'missing':
+      return '尚未说明因果关系'
+    case 'partial':
+      return '因果链仍不完整'
+    case 'sufficient':
+      return '因果链基本完整'
+    default:
+      return '暂无法判断'
+  }
+}
+
+function comparisonDimensionLabel(dimension: string): string {
+  switch (dimension) {
+    case 'conclusion':
+      return '明确结论'
+    case 'evidence':
+      return '证据链'
+    case 'causal_link':
+      return '因果关系'
+    case 'consistency':
+      return '证据一致性'
+    default:
+      return '必要分析维度'
   }
 }
 
@@ -314,6 +412,7 @@ export interface ObservationRelease {
   result: string
   is_negative: boolean
   key: string
+  title?: string
 }
 
 export function collectObservationReleases(events: ScenarioRunEventAny[]): ObservationRelease[] {
@@ -328,7 +427,13 @@ export function collectObservationReleases(events: ScenarioRunEventAny[]): Obser
     const key = `${action}::${result}`
     if (seen.has(key)) continue
     seen.add(key)
-    releases.push({ action, result, is_negative: false, key })
+    releases.push({
+      action,
+      result,
+      is_negative: false,
+      key,
+      title: clue.content.meta?.title,
+    })
   }
   return releases
 }

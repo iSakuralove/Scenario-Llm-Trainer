@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import dataclasses
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -91,6 +93,9 @@ def test_mentor_deps_field_boundary() -> None:
         "transcript",
         "learner_state",
         "constraints",
+        # 更早对话摘要只来自已经提交的公开回合，供长会话上下文隔离使用；
+        # 它不是 HiddenWorld/答案投影，仍需由 prompt 泄露测试覆盖。
+        "conversation_summary",
         "current_user_message",
         "current_intent",
         "requested_action_raw",
@@ -214,6 +219,24 @@ def test_public_answer_comparison_has_no_verdict_fields() -> None:
         "missing_dimensions",
         "contradictions",
     }
+
+
+def test_public_answer_comparison_v2_cross_language_golden() -> None:
+    """Python 必须能读取 Go 共用的 V2 compare_answer golden。"""
+
+    golden = (
+        Path(__file__).resolve().parents[2]
+        / "backend"
+        / "internal"
+        / "agentclient"
+        / "testdata"
+        / "public_answer_comparison_v2.golden.json"
+    )
+    payload = json.loads(golden.read_text(encoding="utf-8"))
+    comparison = PublicAnswerComparison.model_validate(payload)
+    assert comparison.model_dump() == payload
+    assert "support_status" not in payload
+    assert "next_action" not in payload
 
 
 def test_run_event_roundtrip_preserves_sequence() -> None:

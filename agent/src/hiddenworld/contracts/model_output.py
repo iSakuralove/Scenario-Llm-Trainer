@@ -6,7 +6,16 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .assessment import TeachingDecision, TurnAssessment
+from .assessment import (
+    ConcernLevel,
+    HumorLevel,
+    IntensityLevel,
+    MasterySignal,
+    PreferenceSignalKey,
+    PreferenceSignalValue,
+    TeachingDecision,
+    TurnAssessment,
+)
 from .version import ReplyMode, StudentAffect
 
 
@@ -96,6 +105,15 @@ class AgentOutputEnvelope(BaseModel):
     is_noise: bool = False
     student_affect: StudentAffect = "engaged"
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    humor_level: HumorLevel = "none"
+    frustration_level: ConcernLevel = "none"
+    confusion_level: ConcernLevel = "none"
+    confidence_level: IntensityLevel = "low"
+    urgency_level: IntensityLevel = "low"
+    random_investigation: bool = False
+    concept_mastery_signals: dict[str, MasterySignal] = Field(default_factory=dict)
+    skill_mastery_signals: dict[str, MasterySignal] = Field(default_factory=dict)
+    preference_signals: dict[PreferenceSignalKey, PreferenceSignalValue] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_shape(self) -> "AgentOutputEnvelope":

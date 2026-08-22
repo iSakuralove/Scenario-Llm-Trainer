@@ -59,7 +59,44 @@ class ScenarioContractValidator:
             [item for item in answer.accepted_equivalents if item.strip()]
         ):
             raise ScenarioContractValidationError("accepted_equivalents contain duplicates")
+        self._validate_teaching_model(world)
         return world
+
+    @staticmethod
+    def _validate_teaching_model(world: HiddenWorld) -> None:
+        model = world.teaching_model
+        concept_ids = [item.concept_id.strip() for item in model.concepts if item.concept_id.strip()]
+        if len(concept_ids) != len(set(concept_ids)):
+            raise ScenarioContractValidationError("teaching_model concepts contain duplicate concept_id")
+
+        hint_levels = [item.level for item in model.hint_ladder]
+        if len(hint_levels) != len(set(hint_levels)):
+            raise ScenarioContractValidationError("teaching_model hint_ladder contains duplicate levels")
+
+        declared_actions = {item.action for item in world.observations}
+        virtual_actions = {item.observation_action for item in world.virtual_tools}
+        declared_actions.update(virtual_actions)
+        for rule in model.evidence_availability_rules:
+            unknown = set(rule.action_ids) - declared_actions
+            if unknown:
+                raise ScenarioContractValidationError(
+                    f"evidence availability rule references unknown actions: {sorted(unknown)}"
+                )
+            if rule.availability == "SIMULATED_ALLOWED" and not virtual_actions.intersection(rule.action_ids):
+                raise ScenarioContractValidationError(
+                    "SIMULATED_ALLOWED evidence rule must reference a declared action"
+                )
+        for hint in model.hint_ladder:
+            unknown = set(hint.focus_action_ids) - declared_actions
+            if unknown:
+                raise ScenarioContractValidationError(
+                    f"hint step references unknown actions: {sorted(unknown)}"
+                )
+        for node in world.evidence_graph:
+            if node.clue_importance != "none" and not node.public_title.strip():
+                raise ScenarioContractValidationError(
+                    f"evidence {node.evidence_id} requires public_title when published as a clue"
+                )
 
 
 def validate_scenario_contract(world: HiddenWorld) -> HiddenWorld:

@@ -13,6 +13,7 @@ type TurnRequest struct {
 	HiddenWorld     domain.HiddenWorld    `json:"hidden_world"`
 	LearnerState    LearnerState          `json:"learner_state"`
 	Transcript      []Turn                `json:"transcript"`
+	ConversationSummary string            `json:"conversation_summary"`
 	UserMessage     string                `json:"user_message"`
 	// StructuredUserAction 是 QuickAction 点击产生的一等用户动作；
 	// Python Runtime 只把它签发成 UserActionAuthorization，Agent 自身
@@ -59,15 +60,26 @@ type TeachingDimensionRef struct {
 }
 
 type LearnerState struct {
-	CollectedEvidence  []string `json:"collected_evidence"`
-	RuledOutHypotheses []string `json:"ruled_out_hypotheses"`
-	CurrentHypothesis  string   `json:"current_hypothesis,omitempty"`
-	EstablishedFacts   []string `json:"established_facts"`
-	ActionsTaken       []string `json:"actions_taken"`
-	CurrentFocus       string   `json:"current_focus"`
-	EffectiveTurns     int      `json:"effective_turns"`
-	StalledTurns       int      `json:"stalled_turns"`
-	RecentOpenings     []string `json:"recent_openings"`
+	CollectedEvidence      []string                       `json:"collected_evidence"`
+	RuledOutHypotheses     []string                       `json:"ruled_out_hypotheses"`
+	CurrentHypothesis      string                         `json:"current_hypothesis,omitempty"`
+	EstablishedFacts       []string                       `json:"established_facts"`
+	ActionsTaken           []string                       `json:"actions_taken"`
+	CurrentFocus           string                         `json:"current_focus"`
+	EffectiveTurns         int                            `json:"effective_turns"`
+	StalledTurns           int                            `json:"stalled_turns"`
+	RecentOpenings         []string                       `json:"recent_openings"`
+	ConceptMastery         map[string]int                 `json:"concept_mastery"`
+	SkillMastery           map[string]int                 `json:"skill_mastery"`
+	ExplanationPreferences ExplanationPreferences         `json:"explanation_preferences"`
+	HintLevel              int                            `json:"hint_level"`
+	LastHint               string                         `json:"last_hint"`
+}
+
+type ExplanationPreferences struct {
+	Detail     string `json:"detail"`
+	Analogy    string `json:"analogy"`
+	Directness string `json:"directness"`
 }
 
 type Turn struct {
@@ -120,11 +132,21 @@ type TurnAssessment struct {
 	IsNoise               bool     `json:"is_noise"`
 	StudentAffect         string   `json:"student_affect"`
 	Confidence            float64  `json:"confidence"`
+	HumorLevel            string         `json:"humor_level"`
+	FrustrationLevel      string         `json:"frustration_level"`
+	ConfusionLevel        string         `json:"confusion_level"`
+	ConfidenceLevel       string         `json:"confidence_level"`
+	UrgencyLevel          string         `json:"urgency_level"`
+	RandomInvestigation   bool           `json:"random_investigation"`
+	ConceptMasterySignals map[string]int `json:"concept_mastery_signals"`
+	SkillMasterySignals   map[string]int `json:"skill_mastery_signals"`
+	PreferenceSignals     map[string]string `json:"preference_signals"`
 }
 
 type TeachingDecision struct {
 	TeachingState         string `json:"teaching_state"`
 	Strategy              string `json:"strategy"`
+	PrimaryTask           string `json:"primary_task"`
 	GuidanceDirection     string `json:"guidance_direction"`
 	ReplyPolicy           string `json:"reply_policy"`
 	AllowExplicitNextStep bool   `json:"allow_explicit_next_step"`
@@ -171,14 +193,18 @@ type TurnAnalysis struct {
 }
 
 type Proposal struct {
-	Kind         string `json:"kind"`
-	EvidenceID   string `json:"evidence_id"`
-	HypothesisID string `json:"hypothesis_id"`
-	Fact         string `json:"fact"`
-	Action       string `json:"action"`
-	Focus        string `json:"focus"`
-	Value        int    `json:"value"`
-	Text         string `json:"text"`
+	Kind            string `json:"kind"`
+	EvidenceID      string `json:"evidence_id"`
+	HypothesisID    string `json:"hypothesis_id"`
+	Fact            string `json:"fact"`
+	Action          string `json:"action"`
+	Focus           string `json:"focus"`
+	Value           int    `json:"value"`
+	Text            string `json:"text"`
+	ConceptID       string `json:"concept_id"`
+	SkillID         string `json:"skill_id"`
+	PreferenceKey   string `json:"preference_key"`
+	PreferenceValue string `json:"preference_value"`
 }
 
 type PublicTraceEvent struct {
@@ -213,11 +239,14 @@ type ToolEventPayload struct {
 }
 
 type PublicAnswerComparison struct {
-	Tool          string   `json:"tool"`
-	Status        string   `json:"status"`
-	UserPoints    []string `json:"user_points"`
-	SupportStatus string   `json:"support_status"`
-	NextAction    string   `json:"next_action"`
+	Tool              string   `json:"tool"`
+	Status            string   `json:"status"`
+	UserPoints        []string `json:"user_points"`
+	ConclusionStatus  string   `json:"conclusion_status"`
+	EvidenceStatus    string   `json:"evidence_status"`
+	CausalStatus      string   `json:"causal_status"`
+	MissingDimensions []string `json:"missing_dimensions"`
+	Contradictions    []string `json:"contradictions"`
 }
 
 type VerificationResult struct {

@@ -46,6 +46,8 @@ import type {
   ScenarioGenerationConstraints,
   ScenarioMessage,
   ScenarioQuestion,
+  ScenarioReviewDebrief,
+  ScenarioReviewResponse,
   ScenarioScore,
   ScenarioSession,
   ScenarioSessionDetailResponse,
@@ -444,17 +446,15 @@ async function requestScenarioMessageStream(
     let buffer = ''
     let finalPayload: ScenarioMessageResponse | null = null
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      let boundary = buffer.indexOf('\n\n')
-      while (boundary >= 0) {
-        const rawEvent = buffer.slice(0, boundary)
-        buffer = buffer.slice(boundary + 2)
-        const parsed = parseSSEEvent(rawEvent)
-        if (parsed.event === 'run_event') {
+    const consumeScenarioEvent = (rawEvent: string) => {
+      const parsed = parseSSEEvent(rawEvent)
+      if (parsed.event === 'run_event') {
+        // 过程事件是可丢弃的旁路信息；一条损坏/旧版本 event 不应
+        // 把已经在流中的正文变成整轮失败。只有明确的 turn_failed
+        // 才提升为用户可见失败，finish 仍是不可替代的完成边界。
+        try {
           const event = JSON.parse(parsed.data) as ScenarioRunEventAny
+          if (!event || typeof event !== 'object' || typeof event.kind !== 'string') return
           onRunEvent(event)
           if (event.kind === 'turn_failed') {
             const legacy = event as { error_code?: string; summary?: string }
@@ -462,23 +462,54 @@ async function requestScenarioMessageStream(
             const errorCode = v2.payload?.error_code || legacy.error_code || 'turn_failed'
             throw new ScenarioRunFailure(errorCode, legacy.summary || '本轮处理失败')
           }
+        } catch (err) {
+          if (err instanceof ScenarioRunFailure) throw err
+          // Ignore malformed process event and continue to consume finish.
         }
-        if (parsed.event === 'debug_trace') {
+      }
+      if (parsed.event === 'debug_trace') {
+        try {
           const trace = parsed.data ? JSON.parse(parsed.data) as ScenarioDebugTraceEvent : null
           if (trace?.kind === 'reasoning_raw_delta' && typeof trace.text === 'string') {
             onDebugTrace?.(trace)
           }
+        } catch {
+          // 调试 reasoning 是旁路信息，格式异常时静默丢弃，不影响正文。
         }
-        if (parsed.event === 'finish') {
-          finalPayload = JSON.parse(parsed.data) as ScenarioMessageResponse
-        }
+      }
+      if (parsed.event === 'finish') {
+        // finish 是正式完成契约，损坏时必须让调用方感知，而不是把
+        // 一个只有思考过程的半成品当作成功回合。
+        finalPayload = JSON.parse(parsed.data) as ScenarioMessageResponse
+      }
+    }
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      buffer = buffer.replace(/\r\n/g, '\n')
+      let boundary = buffer.indexOf('\n\n')
+      while (boundary >= 0) {
+        const rawEvent = buffer.slice(0, boundary)
+        buffer = buffer.slice(boundary + 2)
+        consumeScenarioEvent(rawEvent)
         boundary = buffer.indexOf('\n\n')
       }
     }
+    buffer += decoder.decode()
+    buffer = buffer.replace(/\r\n/g, '\n')
+    if (buffer.trim()) consumeScenarioEvent(buffer)
     if (!finalPayload) {
       throw new Error('流式响应缺少完成事件')
     }
-    return finalPayload
+    // TypeScript 无法追踪嵌套 SSE 消费函数对 finalPayload 的赋值，显式固定
+    // 完成边界，避免它被错误收窄为 never；运行时检查仍在上一行保留。
+    const completedPayload = finalPayload as ScenarioMessageResponse
+    return {
+      ...completedPayload,
+      session: normalizeScenarioSession(completedPayload.session),
+    }
   } catch (err) {
     throw normalizeFetchError(err)
   } finally {
@@ -689,15 +720,38 @@ function normalizeScenarioEvaluation(evaluation?: ScenarioEvaluation): ScenarioE
 function normalizeScenarioSession(session: ScenarioSession): ScenarioSession {
   return {
     ...session,
-    revealed_clue_ids: session.revealed_clue_ids ?? [],
+    revealed_clue_count: session.revealed_clue_count ?? session.revealed_clue_ids?.length ?? 0,
     investigation_state: {
       current_focus: session.investigation_state?.current_focus ?? '',
       current_hypothesis: session.investigation_state?.current_hypothesis ?? '',
       has_current_hypothesis: session.investigation_state?.has_current_hypothesis ?? false,
       collected_evidence_count: session.investigation_state?.collected_evidence_count ?? 0,
+      established_facts: session.investigation_state?.established_facts ?? [],
+      ruled_out_labels: session.investigation_state?.ruled_out_labels ?? [],
+      hint_level: session.investigation_state?.hint_level ?? 0,
     },
     state_revision: session.state_revision ?? 0,
     evaluation_result: normalizeScenarioEvaluation(session.evaluation_result),
+  }
+}
+
+function normalizeReviewList(value: string | string[] | null | undefined): string[] {
+  if (Array.isArray(value)) return value.map((item) => item.trim()).filter(Boolean)
+  const text = value?.trim()
+  return text ? [text] : []
+}
+
+function normalizeScenarioReviewDebrief(
+  debrief?: Partial<Record<keyof ScenarioReviewDebrief, string | string[] | null>>,
+): ScenarioReviewDebrief {
+  return {
+    direct_trigger: normalizeReviewList(debrief?.direct_trigger),
+    latent_issues: normalizeReviewList(debrief?.latent_issues),
+    phenomenon: normalizeReviewList(debrief?.phenomenon),
+    derived_risks: normalizeReviewList(debrief?.derived_risks),
+    causal_chain: normalizeReviewList(debrief?.causal_chain),
+    solutions: normalizeReviewList(debrief?.solutions),
+    verification: normalizeReviewList(debrief?.verification),
   }
 }
 
@@ -870,8 +924,14 @@ export const api = {
       token,
     ),
 
-  scenarioSessionDetail: (token: string, sessionId: string) =>
-    request<ScenarioSessionDetailResponse>(`/scenarios/sessions/${sessionId}`, {}, token),
+  scenarioSessionDetail: async (token: string, sessionId: string) => {
+    const data = await request<ScenarioSessionDetailResponse>(`/scenarios/sessions/${sessionId}`, {}, token)
+    return {
+      ...data,
+      session: normalizeScenarioSession(data.session),
+      messages: data.messages ?? [],
+    }
+  },
 
   forkScenario: (token: string, id: string) =>
     request<CommunityPost>(`/scenarios/${id}/fork`, { method: 'POST' }, token),
@@ -937,20 +997,18 @@ export const api = {
     }
   },
 
-  quitScenarioSession: (token: string, sessionId: string) =>
-    request<{ status: string; session: ScenarioSession }>(
+  quitScenarioSession: async (token: string, sessionId: string) => {
+    const data = await request<{ status: string; session: ScenarioSession }>(
       `/scenarios/sessions/${sessionId}/quit`,
       { method: 'POST' },
       token,
-    ),
+    )
+    return { ...data, session: normalizeScenarioSession(data.session) }
+  },
 
   scenarioReview: async (token: string, sessionId: string) => {
-    const data = await request<{
-      session: ScenarioSession
-      messages: ScenarioMessage[]
-      standard_answer: string
-      standard_steps: string[]
-      key_evidence: string[]
+    const data = await request<Omit<ScenarioReviewResponse, 'debrief'> & {
+      debrief?: Partial<Record<keyof ScenarioReviewDebrief, string | string[] | null>>
     }>(`/scenarios/sessions/${sessionId}/review`, {}, token)
     return {
       ...data,
@@ -958,6 +1016,7 @@ export const api = {
       messages: data.messages ?? [],
       standard_steps: data.standard_steps ?? [],
       key_evidence: data.key_evidence ?? [],
+      debrief: normalizeScenarioReviewDebrief(data.debrief),
     }
   },
 

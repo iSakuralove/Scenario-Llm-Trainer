@@ -73,6 +73,9 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
   // the client only stores public run events needed to resume the visible stream.
   _connectRun: async (token, sessionId, run, stateRevision) => {
     const onRunEvent = (event: ScenarioRunEventAny) => {
+      // SSE 过程事件来自可演进的 Agent 旁路。只把满足公开事件最小边界
+      // 的帧写入当前回合；坏帧被丢弃，不让它污染重连游标或页面状态。
+      if (!isPublicScenarioRunEvent(event)) return
       let nextRun: ScenarioActiveRun | null = null
       set((state) => {
         if (state.activeRun?.requestId !== run.requestId) return state
@@ -361,6 +364,40 @@ function normalizeRunEvents(events: ScenarioRunEventAny[]) {
   const byKey = new Map<string, ScenarioRunEventAny>()
   for (const event of events) byKey.set(`${event.request_id}:${event.sequence}`, event)
   return [...byKey.values()].sort((left, right) => left.sequence - right.sequence)
+}
+
+const PUBLIC_SCENARIO_RUN_EVENT_KINDS = new Set([
+  'user_message',
+  'reasoning_summary_delta',
+  'reasoning_summary_completed',
+  'observation_result',
+  'tool_started',
+  'tool_result',
+  'tool_completed',
+  'response_summary',
+  'mentor_buffered',
+  'guard_passed',
+  'proposal_approved',
+  'reply_delta',
+  'turn_started',
+  'task_upserted',
+  'assistant_delta',
+  'clue_published',
+  'hint_published',
+  'turn_completed',
+  'turn_failed',
+])
+
+function isPublicScenarioRunEvent(event: unknown): event is ScenarioRunEventAny {
+  if (!event || typeof event !== 'object') return false
+  const candidate = event as { request_id?: unknown; sequence?: unknown; kind?: unknown }
+  return typeof candidate.request_id === 'string'
+    && candidate.request_id.trim() !== ''
+    && typeof candidate.sequence === 'number'
+    && Number.isInteger(candidate.sequence)
+    && candidate.sequence > 0
+    && typeof candidate.kind === 'string'
+    && PUBLIC_SCENARIO_RUN_EVENT_KINDS.has(candidate.kind)
 }
 
 function latestSequence(events: ScenarioRunEventAny[]) {

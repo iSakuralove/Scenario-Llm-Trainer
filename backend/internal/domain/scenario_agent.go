@@ -9,15 +9,26 @@ import (
 // ScenarioLearnerState 是 Go 持有的排查工坊权威学习状态。
 // Python 只能提出变更建议，最终状态必须由 Go 审批后写入。
 type ScenarioLearnerState struct {
-	CollectedEvidence  []string `json:"collected_evidence"`
-	RuledOutHypotheses []string `json:"ruled_out_hypotheses"`
-	CurrentHypothesis  string   `json:"current_hypothesis,omitempty"`
-	EstablishedFacts   []string `json:"established_facts"`
-	ActionsTaken       []string `json:"actions_taken"`
-	CurrentFocus       string   `json:"current_focus"`
-	EffectiveTurns     int      `json:"effective_turns"`
-	StalledTurns       int      `json:"stalled_turns"`
-	RecentOpenings     []string `json:"recent_openings"`
+	CollectedEvidence      []string                       `json:"collected_evidence"`
+	RuledOutHypotheses     []string                       `json:"ruled_out_hypotheses"`
+	CurrentHypothesis      string                         `json:"current_hypothesis,omitempty"`
+	EstablishedFacts       []string                       `json:"established_facts"`
+	ActionsTaken           []string                       `json:"actions_taken"`
+	CurrentFocus           string                         `json:"current_focus"`
+	EffectiveTurns         int                            `json:"effective_turns"`
+	StalledTurns           int                            `json:"stalled_turns"`
+	RecentOpenings         []string                       `json:"recent_openings"`
+	ConceptMastery         map[string]int                 `json:"concept_mastery"`
+	SkillMastery           map[string]int                 `json:"skill_mastery"`
+	ExplanationPreferences ScenarioExplanationPreferences `json:"explanation_preferences"`
+	HintLevel              int                            `json:"hint_level"`
+	LastHint               string                         `json:"last_hint,omitempty"`
+}
+
+type ScenarioExplanationPreferences struct {
+	Detail     string `json:"detail"`
+	Analogy    string `json:"analogy"`
+	Directness string `json:"directness"`
 }
 
 type ScenarioPublicReasoningSummary struct {
@@ -32,11 +43,14 @@ type ScenarioPublicObservation struct {
 }
 
 type ScenarioPublicAnswerComparison struct {
-	Tool          string   `json:"tool"`
-	Status        string   `json:"status"`
-	UserPoints    []string `json:"user_points"`
-	SupportStatus string   `json:"support_status"`
-	NextAction    string   `json:"next_action"`
+	Tool              string   `json:"tool"`
+	Status            string   `json:"status"`
+	UserPoints        []string `json:"user_points"`
+	ConclusionStatus  string   `json:"conclusion_status"`
+	EvidenceStatus    string   `json:"evidence_status"`
+	CausalStatus      string   `json:"causal_status"`
+	MissingDimensions []string `json:"missing_dimensions"`
+	Contradictions    []string `json:"contradictions"`
 }
 
 type ScenarioToolEventPayload struct {
@@ -92,6 +106,8 @@ type ScenarioRunEventPayload struct {
 	ToolResult *ScenarioToolResultPayload `json:"tool_result,omitempty"`
 	// clue_published
 	Clue *ScenarioCluePayload `json:"clue,omitempty"`
+	// hint_published
+	Hint *ScenarioHintPayload `json:"hint,omitempty"`
 	// assistant_delta：phase = understanding | replying
 	Phase              string `json:"phase,omitempty"`
 	MarkdownReadyDelta string `json:"markdown_ready_delta,omitempty"`
@@ -134,8 +150,11 @@ type ScenarioPublicContent struct {
 }
 
 type ScenarioPublicContentMeta struct {
-	ToolKind   string `json:"tool_kind,omitempty"`
-	IsNegative bool   `json:"is_negative,omitempty"`
+	ToolKind    string `json:"tool_kind,omitempty"`
+	IsNegative  bool   `json:"is_negative,omitempty"`
+	SourceKind  string `json:"source_kind,omitempty"`
+	SourceLabel string `json:"source_label,omitempty"`
+	Title       string `json:"title,omitempty"`
 }
 
 // ScenarioCluePayload 是 clue_published 的负载。
@@ -143,6 +162,13 @@ type ScenarioCluePayload struct {
 	ClueID    string                    `json:"clue_id"`
 	Content   ScenarioPublicContent     `json:"content"`
 	Dimension *ScenarioTeachingDimension `json:"dimension,omitempty"`
+}
+
+// ScenarioHintPayload 与线索分离。提示帮助学生缩小范围，但不会计入学生独立发现的证据。
+type ScenarioHintPayload struct {
+	HintID  string                `json:"hint_id"`
+	Level   int                   `json:"level"`
+	Content ScenarioPublicContent `json:"content"`
 }
 
 // ScenarioTeachingDimension 与 agentclient.TeachingDimensionRef 同构，
@@ -179,7 +205,34 @@ func (state ScenarioLearnerState) Normalized() ScenarioLearnerState {
 	if state.RecentOpenings == nil {
 		state.RecentOpenings = []string{}
 	}
+	if state.ConceptMastery == nil {
+		state.ConceptMastery = map[string]int{}
+	}
+	if state.SkillMastery == nil {
+		state.SkillMastery = map[string]int{}
+	}
+	if state.ExplanationPreferences.Detail == "" {
+		state.ExplanationPreferences.Detail = "balanced"
+	}
+	if state.ExplanationPreferences.Analogy == "" {
+		state.ExplanationPreferences.Analogy = "medium"
+	}
+	if state.ExplanationPreferences.Directness == "" {
+		state.ExplanationPreferences.Directness = "medium"
+	}
+	if state.HintLevel < 0 {
+		state.HintLevel = 0
+	}
+	if state.HintLevel > 4 {
+		state.HintLevel = 4
+	}
 	return state
+}
+
+type ScenarioSessionTransition struct {
+	SessionID        string
+	ExpectedRevision int
+	NextSession      ScenarioSession
 }
 
 type ScenarioAgentTurnRecord struct {

@@ -84,6 +84,41 @@ class BatchScheduler:
                 accepted.append(call)
         return BatchPlan(accepted=accepted, deferred=deferred, rejected=rejected)
 
+    def authorize_action(
+        self,
+        action_id: str,
+        *,
+        action_catalog: list[ActionCatalogEntry],
+        authorized_actions: list[AuthorizedActionRef],
+        call_id: str = "",
+    ) -> AgentToolResult | None:
+        """校验结构化动作，与普通 tool call 共用同一准入规则。
+
+        QuickAction 是用户点击产生的动作，但它仍必须同时存在于题目目录和
+        Runtime 签发的授权集合中；不能因为前端传了一个 action_id 就直接读取
+        虚拟世界。返回 ``None`` 表示允许执行，返回终态结果表示拒绝原因。
+        """
+
+        catalog = {item.tool_id: item for item in action_catalog}
+        entry = catalog.get(action_id)
+        if entry is None:
+            return AgentToolResult(
+                call_id=call_id or f"quick:{action_id}",
+                tool_id=action_id,
+                tool_kind="unknown",
+                status="unsupported",
+                error_code="unsupported_tool",
+            )
+        if not any(item.action_ref == action_id for item in authorized_actions):
+            return AgentToolResult(
+                call_id=call_id or f"quick:{action_id}",
+                tool_id=action_id,
+                tool_kind=entry.kind,
+                status="rejected",
+                error_code="user_action_required",
+            )
+        return None
+
 
 def _fingerprint(call: ToolCall) -> str:
     return json.dumps(

@@ -7,9 +7,9 @@ Runtime 负责校验、执行和状态归约。旧的扁平字段仍保留在兼
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .dimensions import TeachingDimensionRef
 from .version import StudentAffect
@@ -79,6 +79,16 @@ TeachingStrategy = Literal[
     "silence",
 ]
 
+PrimaryTeachingTask = Literal[
+    "explain_concept",
+    "interpret_evidence",
+    "acknowledge_progress",
+    "correct_conclusion",
+    "release_hint",
+    "redirect_investigation",
+    "close_investigation",
+]
+
 ReplyPolicy = Literal[
     "neutral_summary",
     "tool_result_only",
@@ -87,6 +97,13 @@ ReplyPolicy = Literal[
     "casual_reply",
     "no_reply",
 ]
+
+HumorLevel = Literal["none", "light", "strong"]
+ConcernLevel = Literal["none", "light", "high"]
+IntensityLevel = Literal["low", "medium", "high"]
+MasterySignal = Annotated[int, Field(ge=0, le=4)]
+PreferenceSignalKey = Literal["detail", "analogy", "directness"]
+PreferenceSignalValue = Literal["brief", "balanced", "detailed", "low", "medium", "high"]
 
 
 class TurnAssessment(BaseModel):
@@ -117,6 +134,26 @@ class TurnAssessment(BaseModel):
     is_noise: bool = False
     student_affect: StudentAffect = "engaged"
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    humor_level: HumorLevel = "none"
+    frustration_level: ConcernLevel = "none"
+    confusion_level: ConcernLevel = "none"
+    confidence_level: IntensityLevel = "low"
+    urgency_level: IntensityLevel = "low"
+    random_investigation: bool = False
+    concept_mastery_signals: dict[str, MasterySignal] = Field(default_factory=dict)
+    skill_mastery_signals: dict[str, MasterySignal] = Field(default_factory=dict)
+    preference_signals: dict[PreferenceSignalKey, PreferenceSignalValue] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_preference_signals(self) -> "TurnAssessment":
+        allowed = {
+            "detail": {"brief", "balanced", "detailed"},
+            "analogy": {"low", "medium", "high"},
+            "directness": {"low", "medium", "high"},
+        }
+        if any(value not in allowed[key] for key, value in self.preference_signals.items()):
+            raise ValueError("preference signal value does not match its key")
+        return self
 
 
 class TeachingDecision(BaseModel):
@@ -130,6 +167,7 @@ class TeachingDecision(BaseModel):
 
     teaching_state: TeachingState = "normal_diagnosis"
     strategy: TeachingStrategy = "acknowledge"
+    primary_task: PrimaryTeachingTask = "acknowledge_progress"
     guidance_direction: str = ""
     reply_policy: ReplyPolicy = "acknowledgement"
     allow_explicit_next_step: Literal[False] = False

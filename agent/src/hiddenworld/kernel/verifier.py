@@ -80,6 +80,19 @@ class RootCauseVerifier:
         if any(_phrase_is_asserted(normalized_text, phrase) for phrase in canonical_phrases):
             return "target"
 
+        structured_relation = _structured_answer_relation(
+            normalized_text,
+            canonical_answer,
+        )
+        if structured_relation is not None:
+            if structured_relation == "target":
+                return "target"
+            # 有结构化答案时，单个已接受假设只能代表因果链的一部分；
+            # 不能再把“只说数据库锁”与完整事故结论视为等价。
+            partial_structured_relation: HypothesisRelation = "contributing"
+        else:
+            partial_structured_relation = None
+
         matched: list[str] = []
         for hypothesis in world.hypotheses:
             label = _normalize(hypothesis.label)
@@ -92,7 +105,7 @@ class RootCauseVerifier:
         if matched_id in learner_state.ruled_out_hypotheses:
             return "ruled_out"
         if matched_id in world.root_cause.accepted_hypotheses:
-            return "target"
+            return partial_structured_relation or "target"
         if matched_id in world.hypothesis_ids():
             return "unrelated"
         return "unknown"
@@ -107,6 +120,43 @@ def _phrase_is_asserted(normalized_text: str, phrase: str) -> bool:
     return bool(normalized_phrase) and normalized_phrase in normalized_text and not _is_negated(
         normalized_text, normalized_phrase
     )
+
+
+def _structured_answer_relation(
+    normalized_text: str,
+    answer: CanonicalAnswer,
+) -> HypothesisRelation | None:
+    """按答案维度区分完整因果链与单一贡献因素。"""
+
+    has_structured_answer = bool(
+        answer.direct_trigger.strip()
+        or answer.latent_issues
+        or answer.phenomenon.strip()
+        or answer.derived_risks
+    )
+    if not has_structured_answer:
+        return None
+
+    checks: list[bool] = []
+    if answer.direct_trigger.strip():
+        checks.append(_phrase_is_asserted(normalized_text, answer.direct_trigger))
+    latent_issues = [item for item in answer.latent_issues if item.strip()]
+    if latent_issues:
+        checks.append(
+            any(_phrase_is_asserted(normalized_text, item) for item in latent_issues)
+        )
+    if answer.phenomenon.strip():
+        checks.append(_phrase_is_asserted(normalized_text, answer.phenomenon))
+    derived_risks = [item for item in answer.derived_risks if item.strip()]
+    if derived_risks:
+        checks.append(
+            any(_phrase_is_asserted(normalized_text, item) for item in derived_risks)
+        )
+    if checks and all(checks):
+        return "target"
+    if any(checks):
+        return "contributing"
+    return "unknown"
 
 
 def _is_negated(normalized_text: str, phrase: str) -> bool:

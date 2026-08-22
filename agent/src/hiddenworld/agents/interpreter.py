@@ -27,6 +27,7 @@ def build_interpreter_prompt(deps: InterpreterDeps) -> str:
 
     context = {
         "public_scenario": deps.public_scenario.model_dump(mode="json"),
+        "conversation_summary": deps.conversation_summary,
         "hypotheses": [item.model_dump(mode="json") for item in deps.hypotheses],
         "known_actions": list(deps.known_actions),
         "virtual_tools": [

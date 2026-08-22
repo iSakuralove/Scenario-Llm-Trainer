@@ -8,7 +8,14 @@
 from __future__ import annotations
 
 from .answer import CanonicalAnswer, InternalAnswerComparison, PublicAnswerComparison, SupportStatus
-from .assessment import GuidanceState, TeachingDecision, TeachingState, TurnAssessment, TurnControl
+from .assessment import (
+    GuidanceState,
+    PrimaryTeachingTask,
+    TeachingDecision,
+    TeachingState,
+    TurnAssessment,
+    TurnControl,
+)
 from .agent_context import (
     ActionCatalogEntry,
     AgentBudgetView,
@@ -41,7 +48,7 @@ from .events import (
     RunEventStatus,
     ToolEventPayload,
 )
-from .learner import LearnerState, LearnerStateView, Turn
+from .learner import ExplanationPreferences, LearnerState, LearnerStateView, Turn
 from .mentor import ExpectedEffort, MentorAction
 from .teaching import ConstraintFacts, TeachingConstraints
 from .transport import (
@@ -74,14 +81,19 @@ from .version import (
     direction_for_category,
 )
 from .world import (
+    ConceptDefinition,
+    EvidenceAvailabilityRule,
     EvidenceNode,
+    HintStep,
     HiddenWorld,
     Hypothesis,
+    MentorPersona,
     MisconceptionRule,
     Observation,
     PublicScenario,
     RootCause,
     SolutionRubric,
+    TeachingModel,
     VirtualTool,
 )
 
@@ -120,6 +132,10 @@ FORBIDDEN_PUBLIC_FIELDS = frozenset(
         "root_cause",
         "accepted_hypotheses",
         "solution_requirements",
+        "direct_trigger",
+        "latent_issues",
+        "phenomenon",
+        "derived_risks",
         "correct",
         "is_correct",
         "target",
@@ -184,18 +200,22 @@ __all__ = [
     "ContractVersionMismatch",
     "DebugTraceEvent",
     "EvidenceCategory",
+    "EvidenceAvailabilityRule",
     "EvidenceNode",
+    "ExplanationPreferences",
     "ExpectedEffort",
     "FinalReplyOutput",
     "GuardContext",
     "EvidenceRequest",
     "HiddenWorld",
+    "HintStep",
     "Hypothesis",
     "HypothesisRelation",
     "InternalAnswerComparison",
     "InterpreterDeps",
     "LearnerState",
     "LearnerStateView",
+    "MentorPersona",
     "MentorAction",
     "MentorDeps",
     "MisconceptionRule",
@@ -204,6 +224,7 @@ __all__ = [
     "VirtualTool",
     "Proposal",
     "ProposalKind",
+    "PrimaryTeachingTask",
     "PublicAnswerComparison",
     "PublicObservation",
     "PublicReasoningSummary",
@@ -215,6 +236,7 @@ __all__ = [
     "RunEventKind",
     "RunEventStatus",
     "SolutionRubric",
+    "TeachingModel",
     "StudentAffect",
     "EvidenceAvailability",
     "SupportStatus",
@@ -230,6 +252,7 @@ __all__ = [
     "TurnAssessment",
     "TurnControl",
     "TurnAnalysis",
+    "ConceptDefinition",
     "VerificationResult",
     "UserActionAuthorization",
     "ScenarioContractValidationError",

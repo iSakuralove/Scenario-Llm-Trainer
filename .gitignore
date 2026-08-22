@@ -116,6 +116,8 @@ docs/report-figures/generated/
 .trellis\
 .serena\
 docs\
+!docs/research/
+!docs/research/codex-harness-adoption-roadmap-2026-08-22.md
 features\
 验收标准\
 # Binary media and archives are not committed to this source branch

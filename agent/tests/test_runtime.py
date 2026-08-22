@@ -366,6 +366,39 @@ async def test_quickaction_turn_executes_authorized_observation_without_user_tex
 
 
 @pytest.mark.asyncio
+async def test_quickaction_rejects_an_action_outside_the_runtime_catalog(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    """结构化动作也必须经过 Runtime 准入，不能凭 action_id 读取世界。"""
+
+    request = AgentTurnRequest(
+        request_id="request-quickaction-invalid",
+        session_id="session-1",
+        state_revision=12,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="",
+        structured_user_action={
+            "action_id": "inspect:metrics.not_declared",
+            "catalog_version": "catalog-1",
+            "state_revision": 12,
+        },
+    )
+
+    result = await HiddenWorldRuntime(
+        interpreter=_stuck_interpreter(is_stuck=False),
+        mentor=_plain_mentor(),
+    ).run_turn(request)
+
+    assert result.turn_analysis.actions == []
+    assert all(item.kind != "record_action" for item in result.proposals)
+    assert all(item.observation is None for item in result.public_trace)
+
+
+@pytest.mark.asyncio
 async def test_runtime_streams_analysis_and_public_trace_before_returning_result(
     hidden_world,
     learner_state,
@@ -569,12 +602,12 @@ def _plain_mentor():
 
 
 @pytest.mark.asyncio
-async def test_stuck_student_gets_a_stall_release_after_the_threshold(
+async def test_stuck_student_does_not_release_evidence_without_a_declared_hint_ladder(
     hidden_world,
     learner_state,
     public_scenario,
 ) -> None:
-    """卡住的学生说不出动作，常规 ClueGate 永远给不了他任何东西。"""
+    """卡住时逐级增加 Hint，不把系统提示伪装成学生获得的证据。"""
     learner_state.stalled_turns = 2
     request = AgentTurnRequest(
         request_id="request-stalled",
@@ -590,15 +623,14 @@ async def test_stuck_student_gets_a_stall_release_after_the_threshold(
         interpreter=_stuck_interpreter(), mentor=_plain_mentor()
     ).run_turn(request)
 
-    stall = [item for item in result.proposals if item.kind == "release_evidence_on_stall"]
-    assert len(stall) == 1
-    assert stall[0].evidence_id == "E_SLOW_SQL"
-    # 兜底释放不能伪装成常规释放，否则 Go 会用 evidence_not_requested 打回整轮。
-    assert all(item.kind != "release_evidence" for item in result.proposals)
-    # 也不能算作学生挣来的进展：stalled_turns 继续累加，effective_turns 不动。
+    # 提示不是学生独立发现的证据，不应生成任何 release_evidence 提议。
+    assert all(item.kind not in {"release_evidence", "release_evidence_on_stall"} for item in result.proposals)
+    # 卡住时仍然累加 stalled_turns，且不计入有效推进。
     assert all(item.kind != "advance_effective_turn" for item in result.proposals)
     stalled = next(item for item in result.proposals if item.kind == "set_stalled_turns")
     assert stalled.value == 3
+    # 该最小测试世界没有声明 HintStep，Runtime 不能凭空编造提示文本或证据。
+    assert all(item.kind not in {"set_hint_level", "set_last_hint"} for item in result.proposals)
 
 
 @pytest.mark.asyncio

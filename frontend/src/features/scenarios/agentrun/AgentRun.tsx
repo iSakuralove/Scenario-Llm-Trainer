@@ -1,11 +1,15 @@
-import { Bot, ChevronDown, Clock3, FileText, UserRound, XCircle } from 'lucide-react'
+import { Bot, ChevronDown, Clock3, Lightbulb, Loader2, UserRound, XCircle } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import type { ScenarioAllowedAction, ScenarioRunEventAny, ScenarioToolResultPayload } from '../../../types/agentRun'
+import type {
+  ScenarioAllowedAction,
+  ScenarioRunEventAny,
+  ScenarioTaskPayload,
+  ScenarioToolResultPayload,
+} from '../../../types/agentRun'
 import { buildAgentRunViewModel } from './LegacyEventAdapter'
 import { QuickActions } from './QuickActions'
 import { ToolKindIcon } from './ToolKindIcon'
 import { StreamingText } from './StreamingText'
-import { TaskList } from './TaskList'
 import { ThinkingReasoning } from './ThinkingReasoning'
 import { ThinkingState } from './ThinkingState'
 import styles from './AgentRun.module.css'
@@ -35,7 +39,7 @@ export function AgentRun({
   const model = useMemo(() => buildAgentRunViewModel(events), [events])
   const userText = model.userText || fallbackUser
   const isProcessing = active && !model.complete && !model.failure
-  const hasPublicObservation = model.toolResults.length > 0 || model.clues.length > 0
+  const hasPublicObservation = model.toolResults.length > 0 || model.clues.length > 0 || model.hints.length > 0
   const historicalUnderstanding = model.understanding && !active
     ? model.understanding.chunks.join('').trim()
     : ''
@@ -55,9 +59,9 @@ export function AgentRun({
   const visibleReply = model.failure
     ? []
     : visibleReplyChunks
-  // Task List 阈值：单轮至少 2 个工具/任务才显示内嵌列表；单个工具走工具行。
-  const showTaskList = model.tasks.length >= 2
-  const soloTasks = model.tasks.length === 1 ? model.tasks : []
+  // 统一工具芯片：任务（运行中状态）与工具结果按 call_id 合并成一行，
+  // 点击展开查看返回内容——与 Codex 的 MCP 工具行同构。
+  const toolChips = useMemo(() => mergeTasksAndResults(model.tasks, model.toolResults), [model])
 
   return (
     <div className={styles.run} data-testid="scenario-agent-run">
@@ -96,14 +100,12 @@ export function AgentRun({
             rawElapsedSeconds={debugReasoningElapsed}
           />
 
-          {showTaskList && <TaskList tasks={model.tasks} active={isProcessing} />}
-
-          {model.toolResults.map((toolResult, index) => (
-            <ToolResultRow key={`${toolResult.call_id}-${index}`} toolResult={toolResult} />
+          {toolChips.map((chip) => (
+            <ToolChipRow key={chip.key} chip={chip} />
           ))}
 
-          {soloTasks.map((task) => (
-            <SoloTaskLine key={task.task_id} title={task.title} state={task.state} />
+          {model.hints.map((hint) => (
+            <HintCard key={hint.hintId} level={hint.level} content={hint.content} />
           ))}
 
           {visibleReply.length > 0 && (
@@ -115,7 +117,12 @@ export function AgentRun({
           {model.failure && (
             <div className={styles.failureLine} role="alert">
               <XCircle size={15} aria-hidden="true" />
-              <span>{model.failure}</span>
+              <span>
+                {model.failure}
+                {model.failureCode && model.failureCode !== 'turn_failed' && (
+                  <small data-testid="agent-run-failure-code"> · {model.failureCode}</small>
+                )}
+              </span>
             </div>
           )}
 
@@ -142,22 +149,74 @@ function normalizeHistoricalReply(
   return ['本轮没有形成新的公开观察。']
 }
 
-function ToolResultRow({ toolResult }: { toolResult: ScenarioToolResultPayload }) {
+interface ToolChip {
+  key: string
+  title: string
+  state: ScenarioTaskPayload['state']
+  toolKind: string
+  result?: ScenarioToolResultPayload
+}
+
+function mergeTasksAndResults(
+  tasks: ScenarioTaskPayload[],
+  toolResults: ScenarioToolResultPayload[],
+): ToolChip[] {
+  const consumed = new Set<string>()
+  const chips: ToolChip[] = tasks.map((task) => {
+    const result = toolResults.find(
+      (item) =>
+        !consumed.has(item.call_id)
+        && (item.call_id === task.call_id || item.call_id === task.task_id),
+    )
+    if (result) consumed.add(result.call_id)
+    return {
+      key: task.task_id,
+      title: task.title,
+      state: result && result.result_status === 'succeeded' ? 'completed' : task.state,
+      toolKind: result?.tool_kind || toolKindFromToolRef(task.tool_ref),
+      result,
+    }
+  })
+  for (const result of toolResults) {
+    if (consumed.has(result.call_id)) continue
+    consumed.add(result.call_id)
+    chips.push({
+      key: result.call_id,
+      title: toolRowTitle(result),
+      state: 'completed',
+      toolKind: result.tool_kind,
+      result,
+    })
+  }
+  return chips
+}
+
+function toolKindFromToolRef(toolRef?: string): string {
+  if (!toolRef) return 'observation'
+  const [, remainder = ''] = toolRef.split(':')
+  const [kind] = remainder.split('.')
+  return kind || 'observation'
+}
+
+function ToolChipRow({ chip }: { chip: ToolChip }) {
   const [open, setOpen] = useState(false)
-  const content = toolResult.content
-  const statusLabel = toolResultStatusLabel(toolResult)
+  const content = chip.result?.content
+  const sourceLabel = publicSourceLabel(content?.meta?.source_kind, content?.meta?.source_label)
   return (
-    <div className={styles.toolLine} data-testid="agent-run-tool-result">
+    <div className={styles.toolLine} data-testid="agent-run-tool-chip">
       <button
         className={styles.toolButton}
         type="button"
         onClick={() => setOpen((current) => !current)}
         aria-expanded={open}
       >
-        <ToolKindIcon kind={toolResult.tool_kind} size={14} />
-        <span>{toolRowTitle(toolResult)}</span>
-        <small>{statusLabel}</small>
-        <ChevronDown className={open ? styles.chevronOpen : ''} size={14} aria-hidden="true" />
+        <ToolKindIcon kind={chip.toolKind} size={14} />
+        <span>{chip.title}</span>
+        {sourceLabel && <span className={styles.toolSourceBadge}>{sourceLabel}</span>}
+        <small>{chipStatusLabel(chip)}</small>
+        {chip.state === 'running'
+          ? <Loader2 className={styles.taskSpinner} size={14} aria-hidden="true" />
+          : <ChevronDown className={open ? styles.chevronOpen : ''} size={14} aria-hidden="true" />}
       </button>
       {content && (
         <div className={`${styles.disclosureGrid} ${open ? styles.disclosureGridOpen : ''}`}>
@@ -171,11 +230,11 @@ function ToolResultRow({ toolResult }: { toolResult: ScenarioToolResultPayload }
               data-negative={content.meta?.is_negative ? 'true' : undefined}
             >
               <div className={styles.observationHeader}>
-                <strong>{toolResultLabel(toolResult.tool_kind)}</strong>
-                {toolResult.duration_ms > 0 && (
+                <strong>{toolResultLabel(chip.toolKind)}</strong>
+                {(chip.result?.duration_ms ?? 0) > 0 && (
                   <span>
                     <Clock3 size={12} aria-hidden="true" />
-                    {toolResult.duration_ms} ms
+                    {chip.result?.duration_ms} ms
                   </span>
                 )}
               </div>
@@ -188,15 +247,30 @@ function ToolResultRow({ toolResult }: { toolResult: ScenarioToolResultPayload }
   )
 }
 
-function SoloTaskLine({ title, state }: { title: string; state: string }) {
+function chipStatusLabel(chip: ToolChip): string {
+  if (chip.state === 'running') return '查询中'
+  if (chip.state === 'failed') return '失败'
+  if (chip.state === 'rejected' || chip.state === 'unsupported' || chip.state === 'expired') return '已跳过'
+  if (chip.result?.result_status === 'timeout') return '超时'
+  if (chip.result && chip.result.duration_ms > 0) return `${chip.result.duration_ms} ms · 已返回`
+  return '已返回'
+}
+
+function HintCard({
+  level,
+  content,
+}: {
+  level: number
+  content: NonNullable<ScenarioToolResultPayload['content']>
+}) {
   return (
-    <div className={styles.toolLine}>
-      <div className={styles.toolButton} role="status">
-        <FileText size={14} aria-hidden="true" />
-        <span>{title}</span>
-        <small>{state === 'completed' ? '已完成' : '进行中'}</small>
+    <aside className={styles.hintCard} data-testid="agent-run-hint" aria-label="教学提示">
+      <div className={styles.hintHeader}>
+        <span><Lightbulb size={14} aria-hidden="true" />{content.meta?.title || '教学提示'}</span>
+        <small>{hintLevelLabel(level)}</small>
       </div>
-    </div>
+      <p>{content.markdown_ready}</p>
+    </aside>
   )
 }
 
@@ -221,14 +295,33 @@ function toolResultLabel(toolKind: string): string {
 }
 
 function toolRowTitle(toolResult: ScenarioToolResultPayload): string {
+  const publicTitle = toolResult.content?.meta?.title?.trim()
+  if (publicTitle) return publicTitle
   if (toolResult.tool_id === 'compare_answer') return '对比答案与已公开证据'
   return `查询${toolResultLabel(toolResult.tool_kind)}`
 }
 
-function toolResultStatusLabel(toolResult: ScenarioToolResultPayload): string {
-  const status =
-    toolResult.result_status === 'succeeded' ? '已返回' : toolResult.result_status === 'timeout' ? '超时' : '失败'
-  return toolResult.duration_ms > 0 ? `${toolResult.duration_ms} ms · ${status}` : status
+function publicSourceLabel(sourceKind?: string, sourceLabel?: string): string {
+  if (sourceLabel?.trim()) return sourceLabel.trim()
+  if (sourceKind === 'teaching_simulation' || sourceKind === 'simulation' || sourceKind === 'simulated') {
+    return '教学模拟'
+  }
+  return ''
+}
+
+function hintLevelLabel(level: number): string {
+  switch (Math.max(0, Math.min(4, level))) {
+    case 1:
+      return '提醒变化点'
+    case 2:
+      return '提示排查方向'
+    case 3:
+      return '收窄检查范围'
+    case 4:
+      return '给出可验证事实'
+    default:
+      return '方向提醒'
+  }
 }
 
 // Thinking State 只表示“本轮仍在处理”，文案由最近一条实质事件推导；
@@ -243,6 +336,8 @@ function thinkingLabel(model: ReturnType<typeof buildAgentRunViewModel>): string
       return '查询已返回，正在继续'
     case 'clue':
       return '新线索已发布'
+    case 'hint':
+      return '教学提示已给出'
     case 'understanding':
       return '正在根据本轮输入安排检查'
     default:

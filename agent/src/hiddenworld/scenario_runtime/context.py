@@ -16,12 +16,18 @@ from hiddenworld.contracts import (
     AgentContext,
     AgentTurnControlView,
     AuthorizedActionRef,
+    EvidenceRequestView,
     GuidanceState,
     HypothesisCatalogEntry,
     LearnerStateView,
     TurnControl,
 )
 from hiddenworld.contracts.transport import AgentTurnRequest
+from hiddenworld.evidence_availability import resolve_evidence_request
+
+
+_ALLOWED_SKILL_IDS = frozenset({"log_reading", "causal_reasoning", "cross_layer_debugging"})
+_RECENT_COMPLETE_TURNS = 4
 
 
 def project_agent_context(
@@ -73,8 +79,14 @@ def project_agent_context(
     ]
 
     authorized = _project_authorized_actions(request)
+    evidence_request = _project_evidence_request(request)
     labels = {item.hypothesis_id: item.label for item in request.hidden_world.hypotheses}
     learner = request.learner_state
+    concept_ids = {
+        item.concept_id
+        for item in request.hidden_world.teaching_model.concepts
+        if item.concept_id.strip()
+    }
     learner_summary = LearnerStateView(
         established_facts=list(learner.established_facts),
         actions_taken=list(learner.actions_taken),
@@ -83,6 +95,19 @@ def project_agent_context(
         ruled_out_labels=[labels[item] for item in learner.ruled_out_hypotheses if item in labels],
         effective_turns=learner.effective_turns,
         stalled_turns=learner.stalled_turns,
+        concept_mastery={
+            key: value
+            for key, value in learner.concept_mastery.items()
+            if key in concept_ids
+        },
+        skill_mastery={
+            key: value
+            for key, value in learner.skill_mastery.items()
+            if key in _ALLOWED_SKILL_IDS
+        },
+        explanation_preferences=learner.explanation_preferences.model_copy(deep=True),
+        hint_level=learner.hint_level,
+        last_hint=learner.last_hint,
         recent_openings=list(learner.recent_openings),
     )
     # 上一轮 GuidanceState 是跨轮教学状态的唯一安全切片。没有它时才从
@@ -104,9 +129,17 @@ def project_agent_context(
 
     return AgentContext(
         public_scenario=request.public_scenario,
-        transcript=list(request.transcript),
+        conversation_summary=request.conversation_summary.strip(),
+        transcript=_recent_transcript(request.transcript),
         current_user_message=request.user_message,
+        evidence_request=evidence_request,
         learner_summary=learner_summary,
+        mentor_persona=request.hidden_world.teaching_model.mentor_persona.model_copy(deep=True),
+        concept_catalog=[
+            item.model_copy(deep=True)
+            for item in request.hidden_world.teaching_model.concepts
+            if item.concept_id.strip() and item.label.strip() and item.summary.strip()
+        ],
         action_catalog=catalog,
         hypothesis_catalog=hypothesis_catalog,
         authorized_actions=authorized,
@@ -117,6 +150,32 @@ def project_agent_context(
         teaching_navigation=list(prior_guidance.navigation),
         guidance_state=prior_guidance,
         turn_control=AgentTurnControlView(terminal=prior_control.terminal),
+    )
+
+
+def _recent_transcript(transcript):
+    """只投影最近四个完整用户/导师回合；更早内容由确定性摘要承接。"""
+
+    if not transcript:
+        return []
+    limit = _RECENT_COMPLETE_TURNS * 2
+    return [item.model_copy(deep=True) for item in transcript[-limit:]]
+
+
+def _project_evidence_request(request: AgentTurnRequest) -> EvidenceRequestView | None:
+    requested_text = request.user_message
+    if request.structured_user_action is not None:
+        requested_text = (
+            request.structured_user_action.normalized_scope.strip()
+            or request.structured_user_action.action_id.strip()
+        )
+    resolved = resolve_evidence_request(request, requested_text)
+    if resolved is None:
+        return None
+    return EvidenceRequestView(
+        requested_text=resolved.requested_text,
+        availability=resolved.availability,
+        public_message=resolved.public_message,
     )
 
 
@@ -219,16 +278,20 @@ def _project_authorized_actions(request: AgentTurnRequest) -> list[AuthorizedAct
     if not candidates:
         # 与旧 Runtime 的兼容动作标识匹配保持确定性，不做模糊近邻替换。
         candidates = resolve_legacy_observation_action(request.user_message, request.hidden_world.observations)
-    if len(set(candidates)) == 1:
-        action_ref = candidates[0]
-        if not any(item.action_ref == action_ref for item in result) and _has_action(request, action_ref):
-            result.append(
-                AuthorizedActionRef(
-                    authorization_id=f"{request.request_id}:message:{action_ref}",
-                    action_ref=action_ref,
-                    tool_kind=_tool_kind(request, action_ref),
-                )
+    # 一条学生消息可以明确请求一组相互关联的观察（例如按 request_id
+    # 对比 Gateway 与 Nginx）。解析器已经只返回题目声明的精确动作，
+    # 因此逐项签发授权；“候选为空/同一对象多次命中”仍保持拒绝，避免
+    # 把泛泛的“看看日志”扩展成工具枚举。
+    for action_ref in dict.fromkeys(candidates):
+        if any(item.action_ref == action_ref for item in result) or not _has_action(request, action_ref):
+            continue
+        result.append(
+            AuthorizedActionRef(
+                authorization_id=f"{request.request_id}:message:{action_ref}",
+                action_ref=action_ref,
+                tool_kind=_tool_kind(request, action_ref),
             )
+        )
     return result
 
 

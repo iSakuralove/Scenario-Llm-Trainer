@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -22,6 +23,33 @@ var (
 )
 
 const maxResponseBytes = 4 << 20
+
+func logTurnStreamFailure(
+	request TurnRequest,
+	startedAt time.Time,
+	stage string,
+	resultSeen bool,
+	lastEvent string,
+	eventCounts map[string]int,
+	droppedProcessEvents int,
+	totalBytes int64,
+	err error,
+) {
+	log.Printf("[agentclient-stream] request_id=%s session_id=%s state_revision=%d stage=%s elapsed_ms=%d budget_deadline_ms=%d result_seen=%t last_event=%s event_counts=%v dropped_process_events=%d response_bytes=%d error_type=%T error=%v",
+		request.RequestID,
+		request.SessionID,
+		request.StateRevision,
+		stage,
+		time.Since(startedAt).Milliseconds(),
+		request.Budget.DeadlineMS,
+		resultSeen,
+		lastEvent,
+		eventCounts,
+		droppedProcessEvents,
+		totalBytes,
+		err,
+		err)
+}
 
 type ContractVersionError struct {
 	Received string
@@ -199,6 +227,7 @@ func (c *Client) TurnStream(ctx context.Context, request TurnRequest, callbacks 
 		return TurnResult{}, ErrCircuitOpen
 	}
 	request = normalizeTurnRequest(request)
+	startedAt := time.Now()
 	body, err := json.Marshal(request)
 	if err != nil {
 		return TurnResult{}, fmt.Errorf("encode agent request: %w", err)
@@ -215,9 +244,13 @@ func (c *Client) TurnStream(ctx context.Context, request TurnRequest, callbacks 
 	if err != nil {
 		c.recordFailure()
 		if errors.Is(err, context.DeadlineExceeded) {
-			return TurnResult{}, fmt.Errorf("%w: %v", ErrRequestTimeout, err)
+			wrapped := fmt.Errorf("%w: %v", ErrRequestTimeout, err)
+			logTurnStreamFailure(request, startedAt, "http_do_timeout", false, "", nil, 0, 0, wrapped)
+			return TurnResult{}, wrapped
 		}
-		return TurnResult{}, fmt.Errorf("%w: %v", ErrAgentUnavailable, err)
+		wrapped := fmt.Errorf("%w: %v", ErrAgentUnavailable, err)
+		logTurnStreamFailure(request, startedAt, "http_do", false, "", nil, 0, 0, wrapped)
+		return TurnResult{}, wrapped
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
@@ -227,6 +260,7 @@ func (c *Client) TurnStream(ctx context.Context, request TurnRequest, callbacks 
 		} else {
 			c.recordSuccess()
 		}
+		logTurnStreamFailure(request, startedAt, "http_status", false, "", nil, 0, 0, httpErr)
 		return TurnResult{}, httpErr
 	}
 
@@ -235,6 +269,9 @@ func (c *Client) TurnStream(ctx context.Context, request TurnRequest, callbacks 
 	var eventName string
 	var dataLines []string
 	var totalBytes int64
+	eventCounts := map[string]int{}
+	droppedProcessEvents := 0
+	lastEvent := ""
 	flush := func() error {
 		if eventName == "" && len(dataLines) == 0 {
 			return nil
@@ -246,6 +283,8 @@ func (c *Client) TurnStream(ctx context.Context, request TurnRequest, callbacks 
 		if len(data) == 0 {
 			return nil
 		}
+		eventCounts[name]++
+		lastEvent = name
 		totalBytes += int64(len(data))
 		if totalBytes > maxResponseBytes {
 			return fmt.Errorf("stream response exceeds %d bytes", maxResponseBytes)
@@ -254,21 +293,32 @@ func (c *Client) TurnStream(ctx context.Context, request TurnRequest, callbacks 
 		case "turn_analysis":
 			var analysis TurnAnalysis
 			if err := json.Unmarshal([]byte(data), &analysis); err != nil {
-				return fmt.Errorf("decode turn_analysis: %w", err)
+				// turn_analysis 是过程事件，不是最终结果契约。模型/旧 Agent
+				// 偶尔发出不完整的分析帧时，不能把已经在途的正文流一并截断。
+				// result 事件仍会在收尾阶段做严格校验。
+				droppedProcessEvents++
+				return nil
 			}
 			if callbacks.OnTurnAnalysis != nil {
+				// 分析回调只用于影子校验/展示，回调拒绝不能取消 Agent
+				// 的主流。真正不可恢复的协议错误由 result 校验负责。
 				if err := callbacks.OnTurnAnalysis(analysis); err != nil {
-					return fmt.Errorf("turn_analysis callback: %w", err)
+					droppedProcessEvents++
 				}
 			}
 		case "public_trace":
 			var trace PublicTraceEvent
 			if err := json.Unmarshal([]byte(data), &trace); err != nil {
-				return fmt.Errorf("decode public_trace: %w", err)
+				// 单条公开过程事件损坏时安全丢弃；下游仍可继续接收
+				// reply_delta/result。正式历史只由 Go 侧已通过复核的事件重建。
+				droppedProcessEvents++
+				return nil
 			}
 			if callbacks.OnPublicTrace != nil {
 				if err := callbacks.OnPublicTrace(trace); err != nil {
-					return fmt.Errorf("public_trace callback: %w", err)
+					// 过程事件是旁路：验证器拒绝在 log/strict 下都只丢弃该条
+					// 并记审计，不能把已经在途的正文一起截断。
+					droppedProcessEvents++
 				}
 			}
 		case "reply_delta":
@@ -276,11 +326,14 @@ func (c *Client) TurnStream(ctx context.Context, request TurnRequest, callbacks 
 				Text string `json:"text"`
 			}
 			if err := json.Unmarshal([]byte(data), &payload); err != nil {
-				return fmt.Errorf("decode reply_delta: %w", err)
+				// reply_delta 只是实时预览；最终 result.reply 才是落库正文。
+				// 损坏的单个分片不能阻断后续完整结果。
+				droppedProcessEvents++
+				return nil
 			}
 			if callbacks.OnReplyDelta != nil {
 				if err := callbacks.OnReplyDelta(payload.Text); err != nil {
-					return fmt.Errorf("reply_delta callback: %w", err)
+					droppedProcessEvents++
 				}
 			}
 		case "reasoning_raw_delta":
@@ -288,13 +341,16 @@ func (c *Client) TurnStream(ctx context.Context, request TurnRequest, callbacks 
 				Text string `json:"text"`
 			}
 			if err := json.Unmarshal([]byte(data), &payload); err != nil {
-				return fmt.Errorf("decode reasoning_raw_delta: %w", err)
+				droppedProcessEvents++
+				return nil
 			}
 			// 测试专用调试事件：正式 Go 事件流和 TurnResult 不承载它，
 			// 只有显式注册回调的测试/调试入口才会继续向前传递。
 			if callbacks.OnReasoningRawDelta != nil {
+				// 调试 reasoning 永远是旁路信息，不得成为正式正文的
+				// 失败条件；即使调试消费者拒绝了本片段也继续主流。
 				if err := callbacks.OnReasoningRawDelta(payload.Text); err != nil {
-					return fmt.Errorf("reasoning_raw_delta callback: %w", err)
+					droppedProcessEvents++
 				}
 			}
 		case "result":
@@ -327,12 +383,16 @@ func (c *Client) TurnStream(ctx context.Context, request TurnRequest, callbacks 
 	}
 
 	scanner := bufio.NewScanner(response.Body)
-	scanner.Buffer(make([]byte, 4096), 1<<20)
+	// Python 把 result 编码为单个 SSE data 行；单行限制必须与总响应限制
+	// 一致，否则 1–4 MiB 的合法最终结果会先被 Scanner 以 token too long
+	// 截断，并在上层表现成 agent_invalid_response。
+	scanner.Buffer(make([]byte, 4096), maxResponseBytes)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
 			if err := flush(); err != nil {
 				c.recordFailure()
+				logTurnStreamFailure(request, startedAt, "event_flush", resultSeen, lastEvent, eventCounts, droppedProcessEvents, totalBytes, err)
 				return TurnResult{}, err
 			}
 			continue
@@ -347,20 +407,28 @@ func (c *Client) TurnStream(ctx context.Context, request TurnRequest, callbacks 
 	if err := scanner.Err(); err != nil {
 		c.recordFailure()
 		if errors.Is(err, context.DeadlineExceeded) {
-			return TurnResult{}, fmt.Errorf("%w: %v", ErrRequestTimeout, err)
+			wrapped := fmt.Errorf("%w: %v", ErrRequestTimeout, err)
+			logTurnStreamFailure(request, startedAt, "scanner_timeout", resultSeen, lastEvent, eventCounts, droppedProcessEvents, totalBytes, wrapped)
+			return TurnResult{}, wrapped
 		}
-		return TurnResult{}, fmt.Errorf("read agent stream: %w", err)
+		wrapped := fmt.Errorf("read agent stream: %w", err)
+		logTurnStreamFailure(request, startedAt, "scanner", resultSeen, lastEvent, eventCounts, droppedProcessEvents, totalBytes, wrapped)
+		return TurnResult{}, wrapped
 	}
 	if err := flush(); err != nil {
 		c.recordFailure()
+		logTurnStreamFailure(request, startedAt, "final_flush", resultSeen, lastEvent, eventCounts, droppedProcessEvents, totalBytes, err)
 		return TurnResult{}, err
 	}
 	if !resultSeen {
 		c.recordFailure()
-		return TurnResult{}, errors.New("agent stream ended without result event")
+		err := errors.New("agent stream ended without result event")
+		logTurnStreamFailure(request, startedAt, "eof_without_result", false, lastEvent, eventCounts, droppedProcessEvents, totalBytes, err)
+		return TurnResult{}, err
 	}
 	if err := validateTurnResult(request, result, c.allowLegacyStructuredResponse); err != nil {
 		c.recordFailure()
+		logTurnStreamFailure(request, startedAt, "result_validation", true, lastEvent, eventCounts, droppedProcessEvents, totalBytes, err)
 		return TurnResult{}, err
 	}
 	c.recordSuccess()
@@ -420,6 +488,21 @@ func normalizeLearnerState(state LearnerState) LearnerState {
 	}
 	if state.RecentOpenings == nil {
 		state.RecentOpenings = []string{}
+	}
+	if state.ConceptMastery == nil {
+		state.ConceptMastery = map[string]int{}
+	}
+	if state.SkillMastery == nil {
+		state.SkillMastery = map[string]int{}
+	}
+	if state.ExplanationPreferences.Detail == "" {
+		state.ExplanationPreferences.Detail = "balanced"
+	}
+	if state.ExplanationPreferences.Analogy == "" {
+		state.ExplanationPreferences.Analogy = "medium"
+	}
+	if state.ExplanationPreferences.Directness == "" {
+		state.ExplanationPreferences.Directness = "medium"
 	}
 	return state
 }

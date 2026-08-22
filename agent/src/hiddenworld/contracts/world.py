@@ -14,9 +14,11 @@ RootCauseVerifier / AntiGuess / ClueGate / Guard）消费。根因原文从头�
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
-from .version import EvidenceCategory
+from .version import EvidenceAvailability, EvidenceCategory
 from .answer import CanonicalAnswer
 
 
@@ -57,6 +59,59 @@ class EvidenceNode(_Strict):
         default_factory=list,
         description="哪些 action 能取得这条证据",
     )
+    clue_importance: Literal["none", "supporting", "core"] = "none"
+    public_title: str = Field(default="", description="公开线索标题；不得包含内部 evidence id")
+    diagnostic_role: str = Field(default="", description="该证据在排查链中的公开教学角色")
+
+
+class MentorPersona(_Strict):
+    """题目级导师表达偏好；只控制说法，不控制事实。"""
+
+    style_name: str = ""
+    tone: str = ""
+    detail: Literal["brief", "balanced", "detailed"] = "balanced"
+    directness: float = Field(default=0.5, ge=0.0, le=1.0)
+    humor: float = Field(default=0.0, ge=0.0, le=1.0)
+    timeline_focus: float = Field(default=0.0, ge=0.0, le=1.0)
+    question_frequency: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class ConceptDefinition(_Strict):
+    """可安全进入 AgentContext 的概念目录。"""
+
+    concept_id: str
+    label: str
+    summary: str
+    aliases: list[str] = Field(default_factory=list)
+
+
+class EvidenceAvailabilityRule(_Strict):
+    """题面数据可用性；Runtime 用它诚实回答未提供的数据请求。"""
+
+    request_patterns: list[str] = Field(default_factory=list)
+    availability: EvidenceAvailability
+    public_message: str = ""
+    action_ids: list[str] = Field(
+        default_factory=list,
+        description="AVAILABLE/SIMULATED_ALLOWED 对应的已声明观察动作；不可据此生成数据",
+    )
+
+
+class HintStep(_Strict):
+    """确定性提示阶梯。提示事实不进入 AgentContext。"""
+
+    level: int = Field(ge=1, le=4)
+    public_hint: str
+    focus_action_ids: list[str] = Field(default_factory=list)
+
+
+class TeachingModel(_Strict):
+    """题目可复用的教学配置；答案与安全投影仍保持物理隔离。"""
+
+    mentor_persona: MentorPersona = Field(default_factory=MentorPersona)
+    concepts: list[ConceptDefinition] = Field(default_factory=list)
+    evidence_availability_rules: list[EvidenceAvailabilityRule] = Field(default_factory=list)
+    hint_ladder: list[HintStep] = Field(default_factory=list)
 
 
 class Observation(_Strict):
@@ -189,6 +244,7 @@ class HiddenWorld(_Strict):
     """完整的世界。含答案，只由确定性组件消费。"""
 
     root_cause: RootCause
+    teaching_model: TeachingModel = Field(default_factory=TeachingModel)
     canonical_answer: CanonicalAnswer | None = Field(
         default=None,
         description="V2 题目必填；None 仅供旧 v1 题目读取兼容。",

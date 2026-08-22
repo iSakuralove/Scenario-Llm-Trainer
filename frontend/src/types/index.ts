@@ -1,4 +1,4 @@
-import type { ScenarioRunEvent } from './agentRun'
+import type { ScenarioRunEventAny } from './agentRun'
 
 export interface ApiEnvelope<T> {
   code: number
@@ -159,6 +159,8 @@ export interface ScenarioSession {
   status: string
   current_turn: number
   max_turns: number
+  revealed_clue_count?: number
+  /** 存量响应只读兼容；新页面不得据此展示或推断线索。 */
   revealed_clue_ids?: string[]
   investigation_state?: ScenarioInvestigationState
   user_answer?: string
@@ -172,13 +174,16 @@ export interface ScenarioSession {
 
 /**
  * 学生界面可见的调查状态切片。
- * 不包含题目内部 ID、排除项或下一步动作；这些仍由 Runtime 私有持有。
+ * 不包含题目内部 ID、原始假设 ID 或下一步动作；这些仍由 Runtime 私有持有。
  */
 export interface ScenarioInvestigationState {
   current_focus?: string
   current_hypothesis?: string
   has_current_hypothesis: boolean
   collected_evidence_count: number
+  established_facts?: string[]
+  ruled_out_labels?: string[]
+  hint_level?: number
 }
 
 export interface ScenarioMessage {
@@ -196,12 +201,31 @@ export interface ResponseMeta {
   response_type: string
   request_id?: string
   revision: number
-  run_events?: ScenarioRunEvent[]
+  run_events?: ScenarioRunEventAny[]
 }
 
 export interface ScenarioSessionDetailResponse {
   session: ScenarioSession
   messages: ScenarioMessage[]
+}
+
+export interface ScenarioReviewDebrief {
+  direct_trigger: string[]
+  latent_issues: string[]
+  phenomenon: string[]
+  derived_risks: string[]
+  causal_chain: string[]
+  solutions: string[]
+  verification: string[]
+}
+
+export interface ScenarioReviewResponse {
+  session: ScenarioSession
+  messages: ScenarioMessage[]
+  standard_answer: string
+  standard_steps: string[]
+  key_evidence: string[]
+  debrief: ScenarioReviewDebrief
 }
 
 export interface AgentTrace {

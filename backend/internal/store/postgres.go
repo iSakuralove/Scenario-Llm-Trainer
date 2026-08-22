@@ -556,12 +556,13 @@ func (s *PostgresStore) CommitScenarioAgentTurn(commit domain.ScenarioAgentTurnC
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var currentRevision int
+	var currentStatus string
 	if err := tx.QueryRow(ctx, `
-		SELECT state_revision
-		FROM scenario_sessions
-		WHERE id = $1
-		FOR UPDATE
-	`, commit.SessionID).Scan(&currentRevision); err != nil {
+			SELECT state_revision, status
+			FROM scenario_sessions
+			WHERE id = $1
+			FOR UPDATE
+		`, commit.SessionID).Scan(&currentRevision, &currentStatus); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.ScenarioAgentTurnCommitResult{}, errors.New("scenario session not found")
 		}
@@ -592,6 +593,9 @@ func (s *PostgresStore) CommitScenarioAgentTurn(commit domain.ScenarioAgentTurnC
 			Expected: commit.ExpectedRevision,
 			Current:  currentRevision,
 		}
+	}
+	if currentStatus != "active" {
+		return domain.ScenarioAgentTurnCommitResult{}, errors.New("scenario session is not active")
 	}
 
 	next := commit.NextSession
@@ -656,6 +660,67 @@ func (s *PostgresStore) CommitScenarioAgentTurn(commit domain.ScenarioAgentTurnC
 		return domain.ScenarioAgentTurnCommitResult{}, err
 	}
 	return domain.ScenarioAgentTurnCommitResult{Record: record}, nil
+}
+
+func (s *PostgresStore) CommitScenarioSessionTransition(transition domain.ScenarioSessionTransition) (*domain.ScenarioSession, error) {
+	ctx := context.Background()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var currentRevision int
+	var currentStatus string
+	if err := tx.QueryRow(ctx, `
+		SELECT state_revision, status
+		FROM scenario_sessions
+		WHERE id = $1
+		FOR UPDATE
+	`, transition.SessionID).Scan(&currentRevision, &currentStatus); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errors.New("scenario session not found")
+		}
+		return nil, err
+	}
+	if currentRevision != transition.ExpectedRevision {
+		return nil, domain.ScenarioRevisionConflictError{
+			Expected: transition.ExpectedRevision,
+			Current:  currentRevision,
+		}
+	}
+	if currentStatus != "active" {
+		return nil, errors.New("scenario session is not active")
+	}
+	next := transition.NextSession
+	if next.ID != transition.SessionID {
+		return nil, errors.New("scenario session transition has invalid next session")
+	}
+	next.StateRevision = transition.ExpectedRevision + 1
+	next.LearnerState = next.LearnerState.Normalized()
+	if err := updateScenarioSessionTx(ctx, tx, &next, transition.ExpectedRevision); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &next, nil
+}
+
+// TouchScenarioSessionActivity only refreshes an active session's timestamp
+// under the caller's observed revision. It is intentionally not a state
+// transition and must never increment state_revision.
+func (s *PostgresStore) TouchScenarioSessionActivity(sessionID string, expectedRevision int) (bool, error) {
+	ctx := context.Background()
+	command, err := s.pool.Exec(ctx, `
+		UPDATE scenario_sessions
+		SET last_active_at = NOW()
+		WHERE id = $1 AND state_revision = $2 AND status = 'active'
+	`, sessionID, expectedRevision)
+	if err != nil {
+		return false, err
+	}
+	return command.RowsAffected() == 1, nil
 }
 
 func (s *PostgresStore) ListScenarioSessionsForUser(userID string) []domain.ScenarioSession {

@@ -18,6 +18,7 @@ from hiddenworld.contracts import (
     LearnerState,
     TeachingConstraints,
     TeachingDecision,
+    TurnAssessment,
     TurnAnalysis,
     TurnControl,
     HypothesisRelation,
@@ -57,6 +58,7 @@ class StateReducer:
         observations: Sequence[Observation] = (),
         answer_comparison: InternalAnswerComparison | None = None,
         teaching_decision: TeachingDecision | None = None,
+        turn_assessment: TurnAssessment | None = None,
         progress_assessment: str | None = None,
         max_releases: int | None = None,
         advance_state: bool = True,
@@ -82,6 +84,19 @@ class StateReducer:
             if advance_state
             else prior.model_copy(deep=True)
         )
+        projected = _apply_session_learning_state(
+            world,
+            before=prior,
+            after=projected,
+            analysis=analysis,
+            assessment=turn_assessment,
+            allow_progress_signals=advance_state,
+        )
+        if advance_state:
+            if teaching_decision is not None:
+                focus = teaching_decision.guidance_direction.strip()
+                if focus in _VALID_FOCUS_VALUES:
+                    projected.current_focus = focus
         relation = RootCauseVerifier().relation(
             world, hypothesis_id=analysis.hypothesis_id, learner_state=projected
         )
@@ -140,11 +155,7 @@ class StateReducer:
                 progress_assessment=progress_assessment or getattr(analysis, "progress_assessment", "unknown"),
                 navigation=navigation,
                 stalled_turns=projected.stalled_turns,
-                current_focus=(
-                    (teaching_decision.guidance_direction if teaching_decision else "").strip()
-                    or projected.current_focus
-                    or prior_guidance.current_focus
-                ),
+                current_focus=projected.current_focus or prior_guidance.current_focus,
             )
         # terminal 表示会话生命周期已经结束，只能由上一轮权威会话状态回注；
         # 证据充足/答案可提交并不自动终止会话。三者故意保持独立。
@@ -346,6 +357,119 @@ def _normalize_turn_control(value: TurnControl) -> TurnControl:
     )
 
 
+_ALLOWED_SKILL_IDS = frozenset({"log_reading", "causal_reasoning", "cross_layer_debugging"})
+_VALID_FOCUS_VALUES = frozenset({"logs", "metrics", "config", "change", "dependency", "data", "resource"})
+_PREFERENCE_VALUES: dict[str, frozenset[str]] = {
+    "detail": frozenset({"brief", "balanced", "detailed"}),
+    "analogy": frozenset({"low", "medium", "high"}),
+    "directness": frozenset({"low", "medium", "high"}),
+}
+
+
+def _apply_session_learning_state(
+    world: HiddenWorld,
+    *,
+    before: LearnerState,
+    after: LearnerState,
+    analysis: TurnAnalysis,
+    assessment: TurnAssessment | None,
+    allow_progress_signals: bool,
+) -> LearnerState:
+    """归约当前会话画像与提示；不把模型信号直接当权威状态。"""
+
+    updated = after.model_copy(deep=True)
+    assessment = assessment or TurnAssessment()
+    concept_ids = {
+        item.concept_id
+        for item in world.teaching_model.concepts
+        if item.concept_id.strip()
+    }
+    demonstrated_understanding = not analysis.is_low_confidence() and bool(
+        assessment.established_facts
+        or assessment.made_claim
+        or assessment.contains_answer_attempt
+        or assessment.claim_type in {"observation", "hypothesis", "answer"}
+        or analysis.actions
+    )
+    mastery_progress = False
+    if allow_progress_signals and demonstrated_understanding:
+        for concept_id, signal in assessment.concept_mastery_signals.items():
+            current = before.concept_mastery.get(concept_id, 0)
+            if concept_id not in concept_ids or signal <= current:
+                continue
+            updated.concept_mastery[concept_id] = min(
+                4,
+                current + 1,
+            )
+            mastery_progress = True
+        for skill_id, signal in assessment.skill_mastery_signals.items():
+            current = before.skill_mastery.get(skill_id, 0)
+            if skill_id not in _ALLOWED_SKILL_IDS or signal <= current:
+                continue
+            updated.skill_mastery[skill_id] = min(
+                4,
+                current + 1,
+            )
+            mastery_progress = True
+
+    if mastery_progress and updated.effective_turns == before.effective_turns:
+        updated.effective_turns += 1
+        updated.stalled_turns = 0
+
+    preferences = updated.explanation_preferences.model_copy(deep=True)
+    for key, value in assessment.preference_signals.items():
+        allowed = _PREFERENCE_VALUES.get(str(key))
+        if allowed is None or value not in allowed:
+            continue
+        setattr(preferences, str(key), value)
+    updated.explanation_preferences = preferences
+
+    if allow_progress_signals:
+        updated.hint_level, updated.last_hint = _next_hint_state(
+            world,
+            before=before,
+            after=updated,
+            analysis=analysis,
+            assessment=assessment,
+        )
+    return updated
+
+
+def _next_hint_state(
+    world: HiddenWorld,
+    *,
+    before: LearnerState,
+    after: LearnerState,
+    analysis: TurnAnalysis,
+    assessment: TurnAssessment,
+) -> tuple[int, str]:
+    """提示随卡住/随机排查升级，形成进展后逐级回落。"""
+
+    explicit_help = assessment.is_stuck or analysis.is_stuck
+    random_investigation = assessment.random_investigation
+    progressed = assessment.progress_assessment in {"progress", "partial"}
+
+    if explicit_help or random_investigation:
+        target = min(4, before.hint_level + 1)
+    elif progressed:
+        target = max(0, before.hint_level - 1)
+    else:
+        target = before.hint_level
+
+    last_hint = before.last_hint
+    if target > before.hint_level:
+        step = next(
+            (item for item in world.teaching_model.hint_ladder if item.level == target),
+            None,
+        )
+        if step is None or not step.public_hint.strip():
+            return before.hint_level, before.last_hint
+        last_hint = step.public_hint.strip()
+    elif target < before.hint_level:
+        last_hint = ""
+    return target, last_hint
+
+
 def _legal_teaching_state(
     *,
     previous: str,
@@ -430,6 +554,7 @@ def _build_navigation(
             continue
         grouped.setdefault(dimension, []).append(node.evidence_id)
     collected = set(state.collected_evidence)
+    hinted_dimensions = _hint_focus_dimensions(world, state.hint_level)
     navigation: list[TeachingDimensionRef] = []
     for category, evidence_ids in grouped.items():
         found = len(collected.intersection(evidence_ids))
@@ -442,6 +567,8 @@ def _build_navigation(
         hint_level = "none"
         if not terminal and allowed_category is not None and _CATEGORY_TO_DIMENSION.get(allowed_category) == category:
             hint_level = "light"
+        if not terminal and category in hinted_dimensions:
+            hint_level = "direct" if state.hint_level >= 3 else "light"
         navigation.append(
             TeachingDimensionRef(
                 dimension_id=f"dimension:{category}",
@@ -453,22 +580,41 @@ def _build_navigation(
     return navigation
 
 
+def _hint_focus_dimensions(world: HiddenWorld, hint_level: int) -> set[str]:
+    actions = _hint_focus_actions(world, hint_level)
+    if not actions:
+        return set()
+    categories: set[str] = set()
+    for observation in world.observations:
+        if observation.action not in actions:
+            continue
+        for evidence_id in observation.yields_evidence:
+            node = world.evidence_by_id(evidence_id)
+            if node is not None:
+                dimension = _CATEGORY_TO_DIMENSION.get(str(node.category))
+                if dimension:
+                    categories.add(dimension)
+    return categories
+
+
 def _allowed_action_ids(
     world: HiddenWorld,
     state: LearnerState,
     *,
     observations: Sequence[Observation] = (),
 ) -> list[str]:
-    """返回仍可供学生选择的题目声明动作，不把隐藏证据内容带出。"""
+    """返回 2–3 个当前可执行候选，不把整份工具目录伪装成推荐。"""
 
     # 低置信度/QuickAction 轮可能不会把动作写入 actions_taken，但本轮已经
     # 执行的观察同样不能马上重新出现在 allowed_action_ids 中。
     taken = set(state.actions_taken).union(item.action for item in observations)
     collected = set(state.collected_evidence)
-    result: list[str] = []
+    candidates: list[tuple[int, int, str]] = []
     seen: set[str] = set()
+    focus = state.current_focus.casefold().strip()
+    hint_actions = _hint_focus_actions(world, state.hint_level)
     if world.virtual_tools:
-        for tool in world.virtual_tools:
+        for index, tool in enumerate(world.virtual_tools):
             action = str(tool.observation_action or "").strip()
             if not _is_public_observation_action(tool) or action in seen or action in taken:
                 continue
@@ -482,19 +628,78 @@ def _allowed_action_ids(
                 }
             if evidence_ids and evidence_ids.issubset(collected):
                 continue
-            result.append(action)
+            if not _action_prerequisites_met(world, evidence_ids, collected):
+                continue
+            score = _action_priority(
+                action=action,
+                focus=focus,
+                hint_actions=hint_actions,
+                searchable=" ".join([action, tool.kind, tool.target, *tool.aliases]).casefold(),
+            )
+            candidates.append((score, -index, action))
             seen.add(action)
-        return result
-    for observation in world.observations:
+        return _top_actions(candidates)
+    for index, observation in enumerate(world.observations):
         action = str(observation.action or "").strip()
-        if (
-            _is_public_observation_action_id(action)
-            and action not in seen
-            and action not in taken
-        ):
-            result.append(action)
-            seen.add(action)
-    return result
+        if not _is_public_observation_action_id(action) or action in seen or action in taken:
+            continue
+        evidence_ids = set(observation.yields_evidence)
+        if evidence_ids and evidence_ids.issubset(collected):
+            continue
+        if not _action_prerequisites_met(world, evidence_ids, collected):
+            continue
+        score = _action_priority(
+            action=action,
+            focus=focus,
+            hint_actions=hint_actions,
+            searchable=action.casefold(),
+        )
+        candidates.append((score, -index, action))
+        seen.add(action)
+    return _top_actions(candidates)
+
+
+def _hint_focus_actions(world: HiddenWorld, hint_level: int) -> set[str]:
+    step = next((item for item in world.teaching_model.hint_ladder if item.level == hint_level), None)
+    return set(step.focus_action_ids) if step is not None else set()
+
+
+def _action_prerequisites_met(
+    world: HiddenWorld,
+    evidence_ids: set[str],
+    collected: set[str],
+) -> bool:
+    """动作至少要能形成一条当前可公开观察。"""
+
+    if not evidence_ids:
+        return True
+    for evidence_id in evidence_ids:
+        if evidence_id in collected:
+            continue
+        node = world.evidence_by_id(evidence_id)
+        if node is not None and set(node.prerequisites).issubset(collected):
+            return True
+    return False
+
+
+def _action_priority(
+    *,
+    action: str,
+    focus: str,
+    hint_actions: set[str],
+    searchable: str,
+) -> int:
+    score = 0
+    if action in hint_actions:
+        score += 100
+    if focus and (focus in searchable or any(token and token in searchable for token in focus.split())):
+        score += 40
+    return score
+
+
+def _top_actions(candidates: list[tuple[int, int, str]]) -> list[str]:
+    candidates.sort(reverse=True)
+    return [action for _, _, action in candidates[:3]]
 
 
 def _is_public_observation_action(tool) -> bool:

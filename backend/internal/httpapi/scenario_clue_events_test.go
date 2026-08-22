@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"strings"
 	"testing"
 
 	"situational-teaching/backend/internal/domain"
@@ -28,7 +29,8 @@ func TestScenarioReleasedClueEventsOnlyPublishNewApprovedEvidence(t *testing.T) 
 		t.Fatalf("missing clue payload: %+v", event)
 	}
 	clue := event.Payload.Clue
-	if clue.ClueID != "E_NEW" || clue.Content.ContentType != "clue" || clue.Content.DisplayVariant != "clue" {
+	// clue_id 是不透明公钥：不回传内部 evidence_id，只承诺稳定派生。
+	if !strings.HasPrefix(clue.ClueID, "clue_") || clue.Content.ContentType != "clue" || clue.Content.DisplayVariant != "clue" {
 		t.Fatalf("unexpected clue projection: %+v", clue)
 	}
 	if clue.Content.MarkdownReady != "网关超时从 10s 变为 3s" || clue.Content.Meta == nil || clue.Content.Meta.ToolKind != "config" {

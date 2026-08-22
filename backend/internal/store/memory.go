@@ -415,6 +415,9 @@ func (s *MemoryStore) CommitScenarioAgentTurn(commit domain.ScenarioAgentTurnCom
 			Current:  current.StateRevision,
 		}
 	}
+	if current.Status != "active" {
+		return domain.ScenarioAgentTurnCommitResult{}, errors.New("scenario session is not active")
+	}
 
 	next := cloneScenarioSession(&commit.NextSession)
 	if next == nil || next.ID != commit.SessionID {
@@ -447,6 +450,51 @@ func (s *MemoryStore) CommitScenarioAgentTurn(commit domain.ScenarioAgentTurnCom
 	}
 	s.ScenarioAgentTurns[key] = record
 	return domain.ScenarioAgentTurnCommitResult{Record: cloneScenarioAgentTurnRecord(record)}, nil
+}
+
+func (s *MemoryStore) CommitScenarioSessionTransition(transition domain.ScenarioSessionTransition) (*domain.ScenarioSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	current, ok := s.ScenarioSessions[transition.SessionID]
+	if !ok {
+		return nil, errors.New("scenario session not found")
+	}
+	if current.StateRevision != transition.ExpectedRevision {
+		return nil, domain.ScenarioRevisionConflictError{
+			Expected: transition.ExpectedRevision,
+			Current:  current.StateRevision,
+		}
+	}
+	if current.Status != "active" {
+		return nil, errors.New("scenario session is not active")
+	}
+	next := cloneScenarioSession(&transition.NextSession)
+	if next == nil || next.ID != transition.SessionID {
+		return nil, errors.New("scenario session transition has invalid next session")
+	}
+	next.StateRevision = transition.ExpectedRevision + 1
+	next.LearnerState = next.LearnerState.Normalized()
+	s.ScenarioSessions[transition.SessionID] = next
+	return cloneScenarioSession(next), nil
+}
+
+// TouchScenarioSessionActivity only refreshes the activity timestamp for the
+// still-active revision. It deliberately does not advance state_revision, so a
+// failed Agent turn cannot overwrite a newer terminal or successful turn.
+func (s *MemoryStore) TouchScenarioSessionActivity(sessionID string, expectedRevision int) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	current, ok := s.ScenarioSessions[sessionID]
+	if !ok {
+		return false, errors.New("scenario session not found")
+	}
+	if current.StateRevision != expectedRevision || current.Status != "active" {
+		return false, nil
+	}
+	current.LastActiveAt = time.Now()
+	return true, nil
 }
 
 func scenarioAgentTurnKey(sessionID, requestID string) string {
@@ -1717,7 +1765,17 @@ func cloneScenarioLearnerState(state domain.ScenarioLearnerState) domain.Scenari
 	state.EstablishedFacts = append([]string{}, state.EstablishedFacts...)
 	state.ActionsTaken = append([]string{}, state.ActionsTaken...)
 	state.RecentOpenings = append([]string{}, state.RecentOpenings...)
+	state.ConceptMastery = cloneScenarioMasteryMap(state.ConceptMastery)
+	state.SkillMastery = cloneScenarioMasteryMap(state.SkillMastery)
 	return state
+}
+
+func cloneScenarioMasteryMap(values map[string]int) map[string]int {
+	result := make(map[string]int, len(values))
+	for key, value := range values {
+		result[key] = value
+	}
+	return result
 }
 
 func cloneScenarioAgentTurnRecord(record domain.ScenarioAgentTurnRecord) domain.ScenarioAgentTurnRecord {

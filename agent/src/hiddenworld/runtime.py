@@ -17,7 +17,6 @@ from hiddenworld.agents.tools import CompareAnswerRuntime
 from hiddenworld.contracts import (
     AgentTurnRequest,
     AgentTurnResult,
-    AnswerAttempt,
     AuditTrace,
     AuthorizedActionRef,
     EvidenceRequest,
@@ -48,6 +47,7 @@ from hiddenworld.kernel import (
     TeachingPolicy,
 )
 from hiddenworld.kernel.guard import Guard, extract_forbidden_entities
+from hiddenworld.evidence_availability import resolve_evidence_request
 from hiddenworld.retry import run_with_network_retries
 from hiddenworld.streaming_json import StreamingFieldExtractor
 
@@ -56,12 +56,16 @@ class TurnDeadlineExceeded(TimeoutError):
     """单轮总 deadline 已耗尽；不得在后台继续执行或重放工具。"""
 
 
+class PublicBoundaryRejected(RuntimeError):
+    """模型多次重写后仍未形成可安全公开的完整回复。"""
+
+
 PublicTraceCallback = Callable[[PublicTraceEvent], Awaitable[None]]
 TurnAnalysisCallback = Callable[[Any], Awaitable[None]]
 ReplyDeltaCallback = Callable[[str], Awaitable[None]]
 
-# 卡住兜底释放的阈值。Go 侧 scenarioStallUnlockThreshold 必须与此保持一致——
-# Python 提前判断只是为了不发出注定被拒的提议，真正的权威复核在 Go。
+# 旧回放/Go 兼容常量。新 Runtime 已把 Hint 与 collected_evidence 分离，
+# 不再据此生成 release_evidence_on_stall；保留值只避免兼容读取发生漂移。
 STALL_UNLOCK_THRESHOLD = 2
 logger = logging.getLogger("hiddenworld.runtime")
 
@@ -133,7 +137,8 @@ class HiddenWorldRuntime:
         interpreter_deps = InterpreterDeps(
             public_scenario=request.public_scenario,
             hypotheses=request.hidden_world.hypotheses,
-            transcript=request.transcript,
+            conversation_summary=request.conversation_summary,
+            transcript=request.transcript[-8:],
             known_actions=[item.action for item in request.hidden_world.observations],
             virtual_tools=list(request.hidden_world.virtual_tools),
         )
@@ -210,20 +215,8 @@ class HiddenWorldRuntime:
                 max_releases=request.budget.max_releases,
             )
         )
-        # 卡住兜底：说不出动作的学生走不到上面那条路，越求助拿到的越少。
+        # 提示与线索严格分离：卡住只提升 Hint，不再把系统提示伪装成学生取得的证据。
         stall_release = ""
-        if (
-            not is_clarification
-            and not approved_releases
-            and analysis.is_stuck
-            and request.learner_state.stalled_turns >= STALL_UNLOCK_THRESHOLD
-        ):
-            stall_release = ClueGate().approve_on_stall(
-                request.hidden_world,
-                collected_evidence=request.learner_state.collected_evidence,
-            )
-            if stall_release:
-                approved_releases = [stall_release]
         observations = [] if is_clarification else _observe_actions(
             request,
             actions=actions,
@@ -240,11 +233,6 @@ class HiddenWorldRuntime:
                 valid_hypothesis_ids=request.hidden_world.hypothesis_ids(),
             )
         )
-        if stall_release:
-            # 刻意放在 advance 之后：兜底释放是系统给的，不是学生挣来的，
-            # 不能重置 stalled_turns，也不能推进 effective_turns。
-            projected_state = projected_state.model_copy(deep=True)
-            projected_state.collected_evidence.append(stall_release)
 
         relation = RootCauseVerifier().relation(
             request.hidden_world,
@@ -262,15 +250,8 @@ class HiddenWorldRuntime:
         answer_attempt_id = ""
         compare_answer_ms = 0
         if analysis.contains_answer_attempt and not analysis.is_low_confidence():
-            attempt = AnswerAttempt(
-                answer_attempt_id=f"{request.request_id}:answer",
-                session_id=request.session_id,
-                turn_id=request.request_id,
-                revision=request.state_revision,
-                text=analysis.answer_attempt_text,
-            )
-            answer_attempt_id = attempt.answer_attempt_id
-            tool_runtime = CompareAnswerRuntime(
+            answer_attempt_id = f"{request.request_id}:answer"
+            tool_runtime = CompareAnswerRuntime.bind_user_message(
                 request_id=request.request_id,
                 session_id=request.session_id,
                 turn_id=request.request_id,
@@ -278,7 +259,7 @@ class HiddenWorldRuntime:
                 world=request.hidden_world,
                 learner_state=projected_state,
                 analysis=analysis,
-                attempts={attempt.answer_attempt_id: attempt},
+                user_message=request.user_message,
             )
             compare_started = perf_counter()
             answer_public = tool_runtime.execute_bound()
@@ -290,9 +271,13 @@ class HiddenWorldRuntime:
             projected_state.ruled_out_hypotheses,
         )
         verification = VerificationResult(
-            relation=relation,
-            coverage=anti_guess.coverage,
-            completion_allowed=anti_guess.completion_allowed,
+            relation=(answer_internal.relation if answer_internal is not None else relation),
+            coverage=(answer_internal.evidence_coverage if answer_internal is not None else anti_guess.coverage),
+            completion_allowed=(
+                answer_internal.completion_allowed
+                if answer_internal is not None
+                else anti_guess.completion_allowed
+            ),
             ruled_out_this_turn=ruled_out_this_turn,
             answer_comparison=answer_internal,
         )
@@ -320,14 +305,15 @@ class HiddenWorldRuntime:
         mentor_started = perf_counter()
         mentor_deps = MentorDeps(
             public_scenario=request.public_scenario,
-            transcript=request.transcript,
+            transcript=request.transcript[-8:],
             learner_state=_learner_view(request, projected_state),
             constraints=constraints,
+            conversation_summary=request.conversation_summary,
             current_user_message=request.user_message,
             current_intent=analysis.intent,
             requested_action_raw=analysis.requested_action_raw,
             action_match_status=analysis.action_match_status,
-            evidence_request=_evidence_request_for_analysis(analysis),
+            evidence_request=_evidence_request_for_analysis(analysis, request),
             authorized_actions=[AuthorizedActionRef.from_authorization(item) for item in authorizations],
             simulation_tools=_simulation_tool_labels(request),
             released_evidence=_released_evidence_text(request, projected_state),
@@ -336,7 +322,12 @@ class HiddenWorldRuntime:
                 forbidden_entities=_forbidden_entities(request, projected_state),
                 completion_allowed=verification.completion_allowed,
                 may_release=approved_releases,
-                evidence_request=_evidence_request_for_analysis(analysis),
+                evidence_request=_evidence_request_for_analysis(analysis, request),
+                public_observation_texts=_public_guard_observation_texts(
+                    request,
+                    projected_state,
+                    observations,
+                ),
             ),
         )
         mentor_fallback = False
@@ -760,8 +751,8 @@ def _legacy_virtual_tool_aliases(tool) -> tuple[str, ...]:
 
 def _simulation_tool_labels(request: AgentTurnRequest) -> list[str]:
     if request.hidden_world.virtual_tools:
-        return [f"{item.kind}：{item.target}" for item in request.hidden_world.virtual_tools]
-    return [item.action for item in request.hidden_world.observations]
+        return [f"教学模拟 {item.kind}：{item.target}" for item in request.hidden_world.virtual_tools]
+    return [f"教学模拟观察：{item.action}" for item in request.hidden_world.observations]
 
 
 def _normalize_mentor_reply(
@@ -792,12 +783,15 @@ def _fallback_mentor_action(
 ) -> MentorAction:
     """模型失败时的最小公开回复；仍需经过同一 Guard，不执行旁路。"""
 
-    reply = (
-        analysis.public_summary.strip()
-        or _public_observation_summary(observations)
-        or request.public_scenario.description.strip()
-        or request.user_message.strip()
-    )
+    if observations:
+        subject = "这些观察" if len(observations) > 1 else "这条观察"
+        reply = f"{subject}能支撑局部判断，但还不足以连接完整因果链。"
+    else:
+        reply = (
+            analysis.public_summary.strip()
+            or request.public_scenario.description.strip()
+            or request.user_message.strip()
+        )
     return MentorAction(
         rationale="deterministic_fallback",
         reply=reply,
@@ -807,7 +801,10 @@ def _fallback_mentor_action(
     )
 
 
-def _evidence_request_for_analysis(analysis: TurnAnalysis) -> EvidenceRequest | None:
+def _evidence_request_for_analysis(
+    analysis: TurnAnalysis,
+    request: AgentTurnRequest | None = None,
+) -> EvidenceRequest | None:
     requested = analysis.requested_action_raw.strip()
     if not requested:
         return None
@@ -817,6 +814,12 @@ def _evidence_request_for_analysis(analysis: TurnAnalysis) -> EvidenceRequest | 
         availability = "SIMULATED_ALLOWED"
     else:
         availability = "DERIVABLE"
+    if request is not None:
+        return resolve_evidence_request(
+            request,
+            requested,
+            fallback_availability=availability,
+        )
     return EvidenceRequest(requested_text=requested, availability=availability)
 
 
@@ -830,6 +833,19 @@ def _learner_view(request: AgentTurnRequest, state: LearnerState) -> LearnerStat
         ruled_out_labels=[labels[item] for item in state.ruled_out_hypotheses if item in labels],
         effective_turns=state.effective_turns,
         stalled_turns=state.stalled_turns,
+        concept_mastery={
+            key: value
+            for key, value in state.concept_mastery.items()
+            if key in {item.concept_id for item in request.hidden_world.teaching_model.concepts}
+        },
+        skill_mastery={
+            key: value
+            for key, value in state.skill_mastery.items()
+            if key in {"log_reading", "causal_reasoning", "cross_layer_debugging"}
+        },
+        explanation_preferences=state.explanation_preferences.model_copy(deep=True),
+        hint_level=state.hint_level,
+        last_hint=state.last_hint,
         recent_openings=list(state.recent_openings),
     )
 
@@ -837,6 +853,23 @@ def _learner_view(request: AgentTurnRequest, state: LearnerState) -> LearnerStat
 def _released_evidence_text(request: AgentTurnRequest, state: LearnerState) -> list[str]:
     released = set(state.collected_evidence)
     return [node.content for node in request.hidden_world.evidence_graph if node.evidence_id in released]
+
+
+def _public_guard_observation_texts(
+    request: AgentTurnRequest,
+    state: LearnerState,
+    observations: list[Observation],
+) -> list[str]:
+    """汇总会话已公开事实，供 Guard 区分合法引用与隐藏实体。"""
+
+    return list(
+        dict.fromkeys(
+            [
+                *_released_evidence_text(request, state),
+                *(item.result for item in observations if item.result.strip()),
+            ]
+        )
+    )
 
 
 def _forbidden_entities(request: AgentTurnRequest, state: LearnerState) -> list[str]:
@@ -889,12 +922,49 @@ def _state_proposals(
     )
     if after.current_hypothesis and after.current_hypothesis != before.current_hypothesis:
         proposals.append(Proposal(kind="set_current_hypothesis", hypothesis_id=after.current_hypothesis))
+    for concept_id, score in after.concept_mastery.items():
+        increment = score - before.concept_mastery.get(concept_id, 0)
+        if increment > 0:
+            proposals.append(
+                Proposal(
+                    kind="increment_concept_mastery",
+                    concept_id=concept_id,
+                    value=min(1, increment),
+                )
+            )
+    for skill_id, score in after.skill_mastery.items():
+        increment = score - before.skill_mastery.get(skill_id, 0)
+        if increment > 0:
+            proposals.append(
+                Proposal(
+                    kind="increment_skill_mastery",
+                    skill_id=skill_id,
+                    value=min(1, increment),
+                )
+            )
+    before_preferences = before.explanation_preferences.model_dump()
+    after_preferences = after.explanation_preferences.model_dump()
+    for key in ("detail", "analogy", "directness"):
+        if after_preferences[key] != before_preferences[key]:
+            proposals.append(
+                Proposal(
+                    kind="set_explanation_preference",
+                    preference_key=key,
+                    preference_value=after_preferences[key],
+                )
+            )
     if after.effective_turns != before.effective_turns:
         proposals.append(
             Proposal(kind="advance_effective_turn", value=after.effective_turns - before.effective_turns)
         )
     if after.stalled_turns != before.stalled_turns:
         proposals.append(Proposal(kind="set_stalled_turns", value=after.stalled_turns))
+    if after.current_focus != before.current_focus:
+        proposals.append(Proposal(kind="set_current_focus", focus=after.current_focus))
+    if after.hint_level != before.hint_level:
+        proposals.append(Proposal(kind="set_hint_level", value=after.hint_level))
+    if after.last_hint != before.last_hint:
+        proposals.append(Proposal(kind="set_last_hint", text=after.last_hint))
     opening = reply.strip().splitlines()[0][:80] if reply.strip() else ""
     if opening:
         proposals.append(Proposal(kind="record_opening", text=opening))

@@ -80,10 +80,20 @@ func (deterministicScenarioAgentClient) Turn(_ context.Context, request agentcli
 			Actions:            []string{},
 			EstablishedFacts:   []string{},
 			Confidence:         0.9,
+			// 瞬时情绪枚举与 Python 契约默认值对齐；缺省零值 "" 过不了校验。
+			HumorLevel:            "none",
+			FrustrationLevel:      "none",
+			ConfusionLevel:        "none",
+			ConfidenceLevel:       "low",
+			UrgencyLevel:          "low",
+			ConceptMasterySignals: map[string]int{},
+			SkillMasterySignals:   map[string]int{},
+			PreferenceSignals:     map[string]string{},
 		},
 		TeachingDecision: &agentclient.TeachingDecision{
 			TeachingState: "normal_diagnosis",
 			Strategy:      "acknowledge",
+			PrimaryTask:   "interpret_evidence",
 			ReplyPolicy:   "acknowledgement",
 		},
 		GuidanceState: agentclient.GuidanceState{
@@ -220,6 +230,16 @@ func classifyScenarioAgentError(err error) scenarioAgentHTTPError {
 	}
 	var httpErr agentclient.HTTPError
 	if errors.As(err, &httpErr) {
+		switch httpErr.Code {
+		case "turn_deadline_exceeded":
+			return scenarioAgentHTTPError{Status: http.StatusGatewayTimeout, Code: "agent_timeout", Message: "本轮处理超时，请重试"}
+		case "public_boundary_rejected":
+			return scenarioAgentHTTPError{Status: http.StatusBadGateway, Code: "agent_invalid_response", Message: "这轮没有生成完整回复，请重试"}
+		case "contract_version_mismatch":
+			return scenarioAgentHTTPError{Status: http.StatusBadGateway, Code: "agent_contract_mismatch", Message: "排查服务契约不兼容"}
+		case "model_not_configured":
+			return scenarioAgentHTTPError{Status: http.StatusServiceUnavailable, Code: "agent_not_configured", Message: "排查服务尚未配置"}
+		}
 		return scenarioAgentHTTPError{Status: http.StatusBadGateway, Code: "agent_upstream_error", Message: "排查服务返回异常"}
 	}
 	return scenarioAgentHTTPError{Status: http.StatusBadGateway, Code: "agent_invalid_response", Message: "排查服务返回了无效结果"}
@@ -262,6 +282,14 @@ func approveScenarioProposals(
 	for _, node := range world.EvidenceGraph {
 		evidence[node.EvidenceID] = node
 	}
+	concepts := map[string]bool{}
+	if world.TeachingModel != nil {
+		for _, concept := range world.TeachingModel.Concepts {
+			if strings.TrimSpace(concept.ConceptID) != "" {
+				concepts[concept.ConceptID] = true
+			}
+		}
+	}
 	actions := stringSet(result.TurnAnalysis.Actions)
 	facts := stringSet(result.TurnAnalysis.EstablishedFacts)
 	ruledOut := stringSet(result.InternalVerification.RuledOutThisTurn)
@@ -269,6 +297,14 @@ func approveScenarioProposals(
 	progress := false
 	stallReleases := 0
 	approvals := make([]scenarioProposalApproval, 0, len(result.Proposals))
+	conceptSignals := map[string]int{}
+	skillSignals := map[string]int{}
+	preferenceSignals := map[string]string{}
+	if result.TurnAssessment != nil {
+		conceptSignals = result.TurnAssessment.ConceptMasterySignals
+		skillSignals = result.TurnAssessment.SkillMasterySignals
+		preferenceSignals = result.TurnAssessment.PreferenceSignals
+	}
 
 	for _, proposal := range result.Proposals {
 		approval := scenarioProposalApproval{Kind: proposal.Kind}
@@ -375,6 +411,45 @@ func approveScenarioProposals(
 				if len(state.RecentOpenings) > 3 {
 					state.RecentOpenings = append([]string{}, state.RecentOpenings[len(state.RecentOpenings)-3:]...)
 				}
+			case "increment_concept_mastery":
+				current := state.ConceptMastery[proposal.ConceptID]
+				demonstrated := conceptSignals[proposal.ConceptID]
+				if gated && (!concepts[proposal.ConceptID] || proposal.Value != 1 || demonstrated <= current || current >= 4) {
+					return "invalid_concept_mastery_increment"
+				}
+				if concepts[proposal.ConceptID] && current < 4 {
+					state.ConceptMastery[proposal.ConceptID] = current + 1
+					progress = true
+				}
+			case "increment_skill_mastery":
+				current := state.SkillMastery[proposal.SkillID]
+				demonstrated := skillSignals[proposal.SkillID]
+				if gated && (!scenarioSkillIDAllowed(proposal.SkillID) || proposal.Value != 1 || demonstrated <= current || current >= 4) {
+					return "invalid_skill_mastery_increment"
+				}
+				if scenarioSkillIDAllowed(proposal.SkillID) && current < 4 {
+					state.SkillMastery[proposal.SkillID] = current + 1
+					progress = true
+				}
+			case "set_explanation_preference":
+				if gated && (preferenceSignals[proposal.PreferenceKey] != proposal.PreferenceValue ||
+					!scenarioExplanationPreferenceAllowed(proposal.PreferenceKey, proposal.PreferenceValue)) {
+					return "invalid_explanation_preference"
+				}
+				scenarioSetExplanationPreference(&state.ExplanationPreferences, proposal.PreferenceKey, proposal.PreferenceValue)
+			case "set_hint_level":
+				if gated && !scenarioHintTransitionAllowed(session.LearnerState.HintLevel, proposal.Value, result.TurnAssessment) {
+					return "invalid_hint_level"
+				}
+				state.HintLevel = proposal.Value
+				if state.HintLevel == 0 {
+					state.LastHint = ""
+				}
+			case "set_last_hint":
+				if gated && !scenarioHintTextAllowed(world, proposal.Text) {
+					return "invalid_hint_text"
+				}
+				state.LastHint = strings.TrimSpace(proposal.Text)
 			default:
 				// 未知提议类型在任何模式下都无变更逻辑可执行，只能拒绝。
 				return "unsupported_proposal_kind"
@@ -397,6 +472,69 @@ func approveScenarioProposals(
 		approvals = append(approvals, approval)
 	}
 	return state.Normalized(), approvals, nil
+}
+
+func scenarioSkillIDAllowed(value string) bool {
+	switch value {
+	case "log_reading", "causal_reasoning", "cross_layer_debugging":
+		return true
+	default:
+		return false
+	}
+}
+
+func scenarioExplanationPreferenceAllowed(key, value string) bool {
+	switch key {
+	case "detail":
+		return value == "brief" || value == "balanced" || value == "detailed"
+	case "analogy", "directness":
+		return value == "low" || value == "medium" || value == "high"
+	default:
+		return false
+	}
+}
+
+func scenarioSetExplanationPreference(preferences *domain.ScenarioExplanationPreferences, key, value string) {
+	if preferences == nil || !scenarioExplanationPreferenceAllowed(key, value) {
+		return
+	}
+	switch key {
+	case "detail":
+		preferences.Detail = value
+	case "analogy":
+		preferences.Analogy = value
+	case "directness":
+		preferences.Directness = value
+	}
+}
+
+func scenarioHintTransitionAllowed(current, next int, assessment *agentclient.TurnAssessment) bool {
+	if next < 0 || next > 4 || next < current-1 || next > current+1 {
+		return false
+	}
+	if next > current {
+		return assessment != nil && (assessment.IsStuck || assessment.RandomInvestigation)
+	}
+	if next < current {
+		return assessment != nil && (assessment.ProgressAssessment == "progress" || assessment.ProgressAssessment == "partial")
+	}
+	return true
+}
+
+func scenarioHintTextAllowed(world *domain.HiddenWorld, text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return true
+	}
+	if world == nil || world.TeachingModel == nil {
+		return false
+	}
+	for _, hint := range world.TeachingModel.HintLadder {
+		if strings.TrimSpace(hint.PublicHint) == text {
+			return true
+		}
+	}
+	return false
 }
 
 const legacyStructuredResponseEnv = "SCENARIO_ALLOW_LEGACY_STRUCTURED_RESPONSE"
@@ -427,10 +565,17 @@ func validateScenarioStructuredTurn(result agentclient.TurnResult, world *domain
 		}
 		if !scenarioTurnIntentAllowed(assessment.Intent) || !scenarioClaimTypeAllowed(assessment.ClaimType) ||
 			!scenarioProgressAssessmentAllowed(assessment.ProgressAssessment) ||
-			!scenarioStudentAffectAllowed(assessment.StudentAffect) {
+			!scenarioStudentAffectAllowed(assessment.StudentAffect) ||
+			!scenarioInstantLevelAllowed(assessment.HumorLevel, "none", "light", "strong") ||
+			!scenarioInstantLevelAllowed(assessment.FrustrationLevel, "none", "light", "high") ||
+			!scenarioInstantLevelAllowed(assessment.ConfusionLevel, "none", "light", "high") ||
+			!scenarioInstantLevelAllowed(assessment.ConfidenceLevel, "low", "medium", "high") ||
+			!scenarioInstantLevelAllowed(assessment.UrgencyLevel, "low", "medium", "high") {
 			return errors.New("turn assessment enum is invalid")
 		}
-		if assessment.Actions == nil || assessment.EstablishedFacts == nil {
+		if assessment.Actions == nil || assessment.EstablishedFacts == nil ||
+			assessment.ConceptMasterySignals == nil || assessment.SkillMasterySignals == nil ||
+			assessment.PreferenceSignals == nil {
 			return errors.New("turn assessment arrays are required")
 		}
 		if err := validateScenarioAssessmentConsistency(*assessment, result.TurnAnalysis); err != nil {
@@ -439,7 +584,7 @@ func validateScenarioStructuredTurn(result agentclient.TurnResult, world *domain
 	}
 	if decision := result.TeachingDecision; decision != nil {
 		if !scenarioTeachingStateAllowed(decision.TeachingState) || !scenarioTeachingStrategyAllowed(decision.Strategy) ||
-			!scenarioReplyPolicyAllowed(decision.ReplyPolicy) {
+			!scenarioPrimaryTeachingTaskAllowed(decision.PrimaryTask) || !scenarioReplyPolicyAllowed(decision.ReplyPolicy) {
 			return errors.New("teaching decision enum is invalid")
 		}
 		// 这两个开关在契约中固定为 False；Go 不允许 Agent 打开它们。
@@ -637,6 +782,15 @@ func scenarioStudentAffectAllowed(value string) bool {
 	}
 }
 
+func scenarioInstantLevelAllowed(value string, allowed ...string) bool {
+	for _, item := range allowed {
+		if value == item {
+			return true
+		}
+	}
+	return false
+}
+
 func scenarioProgressAssessmentAllowed(value string) bool {
 	switch value {
 	case "progress", "partial", "no_progress", "unsupported", "contradictory", "leak_risk", "unknown":
@@ -658,6 +812,15 @@ func scenarioTeachingStateAllowed(value string) bool {
 func scenarioTeachingStrategyAllowed(value string) bool {
 	switch value {
 	case "observe", "acknowledge", "reflect", "clarify", "debrief", "chat", "recover", "silence":
+		return true
+	default:
+		return false
+	}
+}
+
+func scenarioPrimaryTeachingTaskAllowed(value string) bool {
+	switch value {
+	case "explain_concept", "interpret_evidence", "acknowledge_progress", "correct_conclusion", "release_hint", "redirect_investigation", "close_investigation":
 		return true
 	default:
 		return false
@@ -830,12 +993,6 @@ func validateScenarioPublicTrace(
 		"verifying_answer":      true,
 		"composing_reply":       true,
 	}
-	allowedSupportStatuses := map[string]bool{
-		"insufficiently_specific": true,
-		"needs_more_evidence":     true,
-		"has_evidence_conflict":   true,
-		"evidence_consistent":     true,
-	}
 	allowedKinds := map[string]bool{
 		"reasoning_summary_delta":     true,
 		"reasoning_summary_completed": true,
@@ -843,6 +1000,8 @@ func validateScenarioPublicTrace(
 		"tool_started":                true,
 		"tool_result":                 true,
 		"tool_completed":              true,
+		"agent_tool_started":          true,
+		"agent_tool_result":           true,
 		"response_summary":            true,
 		"mentor_buffered":             true,
 		"guard_passed":                true,
@@ -906,7 +1065,33 @@ func validateScenarioPublicTrace(
 		}
 
 		isToolEvent := trace.Kind == "tool_started" || trace.Kind == "tool_result" || trace.Kind == "tool_completed"
-		if !isToolEvent {
+		if trace.Kind == "agent_tool_started" || trace.Kind == "agent_tool_result" {
+			// 循环内实时旁路：与流式校验同一套规则，观察负载逐字比对题目声明。
+			if trace.Tool != nil {
+				return errors.New("agent tool trace must not carry compare_answer payload")
+			}
+			if !scenarioPublicObservationToolName(world, trace.ToolName) {
+				return errors.New("agent tool trace references an undeclared observation action")
+			}
+			switch trace.Kind {
+			case "agent_tool_started":
+				if trace.Status != "started" || trace.Observation != nil || trace.DurationMS != 0 {
+					return errors.New("agent tool start event is invalid")
+				}
+			case "agent_tool_result":
+				if trace.Status != "completed" && trace.Status != "failed" {
+					return errors.New("agent tool result status is invalid")
+				}
+				if trace.Observation != nil {
+					if trace.Status != "completed" {
+						return errors.New("agent tool result observation requires completed status")
+					}
+					if err := validateScenarioPublicObservation(trace.Observation, world); err != nil {
+						return err
+					}
+				}
+			}
+		} else if !isToolEvent {
 			if trace.Tool != nil || trace.ToolName != "" || trace.DurationMS != 0 {
 				return errors.New("non-tool public trace contains tool payload")
 			}
@@ -946,11 +1131,8 @@ func validateScenarioPublicTrace(
 				hasCompareResult = true
 			}
 			if tool.Result != nil {
-				if tool.Result.Tool != "compare_answer" || tool.Result.Status != "completed" || !allowedSupportStatuses[tool.Result.SupportStatus] {
-					return errors.New("public compare_answer result is invalid")
-				}
-				if err := validateScenarioReply(tool.Result.NextAction, world, publicScenario, state); err != nil {
-					return fmt.Errorf("public compare_answer next action rejected: %w", err)
+				if err := validateScenarioPublicComparison(tool.Result, userContent, world, publicScenario, state); err != nil {
+					return err
 				}
 				for _, point := range tool.Result.UserPoints {
 					normalizedPoint := strings.ToLower(strings.TrimSpace(norm.NFKC.String(point)))
@@ -982,11 +1164,10 @@ type scenarioPublicTraceStream struct {
 	emittedCount     int
 	mode             scenarioValidationMode
 	// bypasses 收集 log 模式下放行的违规，轮次结束后统一落审计。
-	bypasses        []string
-	validationError error
+	bypasses []string
 	// lastAccepted 供流式投影层判断当前事件是否可以安全落到正式事件流。
-	// log/off 模式下 onPublicTrace 仍返回 nil，但违规事件必须被丢弃，不能因为
-	// 暂时放宽校验就把未知 payload 直接透传到前端或业务历史。
+	// 任何模式下 onPublicTrace 都不会因为单条旁路事件失败而中断主流；违规
+	// 事件必须被丢弃，不能把未知 payload 透传到前端或业务历史。
 	lastAccepted bool
 }
 
@@ -1015,18 +1196,15 @@ func (stream *scenarioPublicTraceStream) onTurnAnalysis(analysis agentclient.Tur
 
 func (stream *scenarioPublicTraceStream) onPublicTrace(trace agentclient.PublicTraceEvent) error {
 	stream.lastAccepted = false
-	if stream.validationError != nil {
-		return stream.validationError
-	}
 	if err := stream.validate(trace); err != nil {
-		// log 模式：记下违规但继续消费事件流——中断会连累 reply_delta
-		// 一起断流，前端表现为「回复到一半挂了」。off 模式 validate 恒 nil。
-		if stream.mode == scenarioValidationLog {
-			stream.bypasses = append(stream.bypasses, err.Error())
-			return nil
-		}
-		stream.validationError = err
-		return err
+		// 公开过程事件是旁路信息，不是最终结果契约。无论迁移闸门处于
+		// strict/log，单条 trace 的协议或内容问题都只丢弃该条并记审计，
+		// 继续消费后续 trace、reply_delta 和 result。否则一条旧 Agent
+		// 事件会把已经产生的正文一起截断，前端只能看到“本轮失败”。
+		// 真正不可恢复的错误仍由 agentclient 的 result 解码/最终回合校验
+		// 返回，不在这里升级。
+		stream.bypasses = append(stream.bypasses, err.Error())
+		return nil
 	}
 	stream.emittedCount++
 	stream.lastAccepted = true
@@ -1060,6 +1238,8 @@ func (stream *scenarioPublicTraceStream) validate(trace agentclient.PublicTraceE
 		"tool_started":                true,
 		"tool_result":                 true,
 		"tool_completed":              true,
+		"agent_tool_started":          true,
+		"agent_tool_result":           true,
 		"response_summary":            true,
 		"mentor_buffered":             true,
 		"guard_passed":                true,
@@ -1070,7 +1250,6 @@ func (stream *scenarioPublicTraceStream) validate(trace agentclient.PublicTraceE
 	if trace.Sequence <= stream.lastSequence {
 		return errors.New("public trace sequence is not strictly increasing")
 	}
-	stream.lastSequence = trace.Sequence
 	if !scenarioTraceStatusAllowed(trace.Status) {
 		return fmt.Errorf("public trace status %q is invalid", trace.Status)
 	}
@@ -1111,7 +1290,37 @@ func (stream *scenarioPublicTraceStream) validate(trace agentclient.PublicTraceE
 			return err
 		}
 	}
-	if trace.Kind != "tool_started" && trace.Kind != "tool_result" && trace.Kind != "tool_completed" {
+	if trace.Kind == "agent_tool_started" || trace.Kind == "agent_tool_result" {
+		// Python AgentLoop 的循环内实时旁路。工具名必须是题目声明的公开观察
+		// 动作；带观察负载时结果文本仍须与题目声明逐字一致，防伪造不变。
+		if trace.Tool != nil {
+			return errors.New("agent tool trace must not carry compare_answer payload")
+		}
+		if !scenarioPublicObservationToolName(stream.world, trace.ToolName) {
+			return errors.New("agent tool trace references an undeclared observation action")
+		}
+		switch trace.Kind {
+		case "agent_tool_started":
+			if trace.Status != "started" || trace.Observation != nil || trace.DurationMS != 0 {
+				return errors.New("agent tool start event is invalid")
+			}
+		case "agent_tool_result":
+			if trace.Status != "completed" && trace.Status != "failed" {
+				return errors.New("agent tool result status is invalid")
+			}
+			if trace.DurationMS < 0 {
+				return errors.New("agent tool result duration is invalid")
+			}
+			if trace.Observation != nil {
+				if trace.Status != "completed" {
+					return errors.New("agent tool result observation requires completed status")
+				}
+				if err := validateScenarioPublicObservation(trace.Observation, stream.world); err != nil {
+					return err
+				}
+			}
+		}
+	} else if trace.Kind != "tool_started" && trace.Kind != "tool_result" && trace.Kind != "tool_completed" {
 		if trace.Tool != nil || trace.ToolName != "" || trace.DurationMS != 0 {
 			return errors.New("non-tool public trace contains tool payload")
 		}
@@ -1126,6 +1335,9 @@ func (stream *scenarioPublicTraceStream) validate(trace agentclient.PublicTraceE
 			return err
 		}
 	}
+	// 只在整条事件通过所有字段校验后推进序号。坏事件被丢弃时不应以
+	// 其伪造的高序号污染后续合法事件的顺序检查。
+	stream.lastSequence = trace.Sequence
 	return nil
 }
 
@@ -1150,16 +1362,17 @@ func (stream *scenarioPublicTraceStream) validateTool(trace agentclient.PublicTr
 		if trace.Status != "completed" || tool.Result == nil {
 			return errors.New("compare_answer result event is invalid")
 		}
-		stream.hasCompareResult = true
 	case "tool_completed":
 		if trace.Status != "completed" || tool.Result == nil {
 			return errors.New("compare_answer completion event is invalid")
 		}
-		stream.hasCompareResult = true
 	}
 	if tool.Result != nil {
 		if err := validateScenarioPublicComparison(tool.Result, stream.userContent, stream.world, stream.publicScenario, stream.state); err != nil {
 			return err
+		}
+		if trace.Kind == "tool_result" || trace.Kind == "tool_completed" {
+			stream.hasCompareResult = true
 		}
 	}
 	return nil
@@ -1172,23 +1385,35 @@ func validateScenarioPublicComparison(
 	publicScenario *domain.PublicScenario,
 	state domain.ScenarioLearnerState,
 ) error {
-	allowed := map[string]bool{
-		"insufficiently_specific": true,
-		"needs_more_evidence":     true,
-		"has_evidence_conflict":   true,
-		"evidence_consistent":     true,
-	}
-	if comparison.Tool != "compare_answer" || comparison.Status != "completed" || !allowed[comparison.SupportStatus] {
+	conclusionAllowed := map[string]bool{"none": true, "partial": true, "supported": true, "contradictory": true}
+	evidenceAllowed := map[string]bool{"none": true, "insufficient": true, "partial": true, "sufficient": true}
+	causalAllowed := map[string]bool{"missing": true, "partial": true, "sufficient": true}
+	dimensionAllowed := map[string]bool{"conclusion": true, "evidence": true, "causal_link": true, "consistency": true}
+	if comparison.Tool != "compare_answer" || comparison.Status != "completed" ||
+		!conclusionAllowed[comparison.ConclusionStatus] || !evidenceAllowed[comparison.EvidenceStatus] ||
+		!causalAllowed[comparison.CausalStatus] || comparison.MissingDimensions == nil ||
+		comparison.Contradictions == nil {
 		return errors.New("public compare_answer result is invalid")
 	}
-	if err := validateScenarioReply(comparison.NextAction, world, publicScenario, state); err != nil {
-		return fmt.Errorf("public compare_answer next action rejected: %w", err)
+	for _, dimension := range comparison.MissingDimensions {
+		if !dimensionAllowed[dimension] {
+			return errors.New("public compare_answer contains an invalid missing dimension")
+		}
 	}
 	normalizedUserContent := strings.ToLower(norm.NFKC.String(userContent))
 	for _, point := range comparison.UserPoints {
 		normalizedPoint := strings.ToLower(strings.TrimSpace(norm.NFKC.String(point)))
 		if normalizedPoint == "" || !strings.Contains(normalizedUserContent, normalizedPoint) {
 			return errors.New("public compare_answer point was not sourced from the user message")
+		}
+	}
+	for _, contradiction := range comparison.Contradictions {
+		contradiction = strings.TrimSpace(contradiction)
+		if contradiction == "" {
+			return errors.New("public compare_answer contains an empty contradiction")
+		}
+		if err := validateScenarioReply(contradiction, world, publicScenario, state); err != nil {
+			return fmt.Errorf("public compare_answer contradiction rejected: %w", err)
 		}
 	}
 	return nil
@@ -1321,7 +1546,24 @@ func learnerStateForAgent(state domain.ScenarioLearnerState) agentclient.Learner
 		EffectiveTurns:     state.EffectiveTurns,
 		StalledTurns:       state.StalledTurns,
 		RecentOpenings:     append([]string{}, state.RecentOpenings...),
+		ConceptMastery:     cloneScenarioIntMap(state.ConceptMastery),
+		SkillMastery:       cloneScenarioIntMap(state.SkillMastery),
+		ExplanationPreferences: agentclient.ExplanationPreferences{
+			Detail:     state.ExplanationPreferences.Detail,
+			Analogy:    state.ExplanationPreferences.Analogy,
+			Directness: state.ExplanationPreferences.Directness,
+		},
+		HintLevel: state.HintLevel,
+		LastHint:  state.LastHint,
 	}
+}
+
+func cloneScenarioIntMap(values map[string]int) map[string]int {
+	result := make(map[string]int, len(values))
+	for key, value := range values {
+		result[key] = value
+	}
+	return result
 }
 
 func scenarioTranscript(messages []domain.ScenarioMessage) []agentclient.Turn {
@@ -1335,6 +1577,16 @@ func scenarioTranscript(messages []domain.ScenarioMessage) []agentclient.Turn {
 		}
 	}
 	return turns
+}
+
+func scenarioRecentTranscript(messages []domain.ScenarioMessage, completeTurns int) []agentclient.Turn {
+	if completeTurns <= 0 || len(messages) == 0 {
+		return []agentclient.Turn{}
+	}
+	if len(messages) > completeTurns {
+		messages = messages[len(messages)-completeTurns:]
+	}
+	return scenarioTranscript(messages)
 }
 
 // scenarioInitialRunEvents 是每轮的第一条正式事件（V2 turn_started）。
@@ -1365,14 +1617,22 @@ func scenarioActionDeclared(world *domain.HiddenWorld, actionID string) bool {
 // scenarioActionDisplayTitle 返回结构化动作的展示标题，与 QuickActions
 // 按钮文案同源（查看 + 题目声明的工具目标）。
 func scenarioActionDisplayTitle(world *domain.HiddenWorld, actionID string) string {
-	if world != nil {
-		for _, tool := range world.VirtualTools {
-			if tool.ObservationAction == actionID {
-				return "查看" + tool.Target
-			}
-		}
+	if target := scenarioActionTarget(world, actionID); target != "" {
+		return "查看" + target
 	}
 	return "发起了一次快捷检查"
+}
+
+func scenarioActionTarget(world *domain.HiddenWorld, actionID string) string {
+	if world == nil {
+		return ""
+	}
+	for _, tool := range world.VirtualTools {
+		if tool.ObservationAction == actionID {
+			return strings.TrimSpace(tool.Target)
+		}
+	}
+	return ""
 }
 
 // V2 正式事件构造器：每种 kind 只填对应 payload 子对象，
@@ -1449,17 +1709,20 @@ func scenarioTurnFailedEvent(requestID string, revision, sequence int, errorCode
 	}
 }
 
-// projectScenarioTraceEvent 把一条 Python v1 公开 trace 投影为零或一条 V2 正式事件。
+// projectScenarioTraceEvents 把一条 Python v1 公开 trace 投影为零或多条 V2 正式事件。
 // 实时 SSE 与落库重建共用此函数：同输入必同输出，public sequence 由 Go 独占分配，
 // 断线重连或重放时不会重新编号。guard_passed / mentor_buffered / response_summary
 // 等内部阶段事件在此静默丢弃——「不下发」是 V2 的正式决策，与 Python 是否继续
 // 发送这些旧事件无关（Python 侧保留它们只为 v1 兼容窗口）。
-func projectScenarioTraceEvent(
+// agent_tool_started / agent_tool_result 是 Python AgentLoop 的循环内实时旁路：
+// 工具开始即时出现 running 任务，结束时联动任务终态并（在有观察负载时）投出
+// 与 observation_result 同构的工具结果卡片。
+func projectScenarioTraceEvents(
 	requestID string,
 	stateRevision int,
 	world *domain.HiddenWorld,
 	trace agentclient.PublicTraceEvent,
-) (domain.ScenarioRunEvent, bool) {
+) ([]domain.ScenarioRunEvent, bool) {
 	switch trace.Kind {
 	case "reasoning_summary_delta", "reasoning_summary_completed":
 		text := ""
@@ -1470,41 +1733,66 @@ func projectScenarioTraceEvent(
 			text = trace.Summary
 		}
 		if strings.TrimSpace(text) == "" {
-			return domain.ScenarioRunEvent{}, false
+			return nil, false
 		}
 		// sequence 由调用方分配，这里返回 0 占位。
-		return scenarioAssistantDeltaEvent(requestID, stateRevision, 0, "understanding", text), true
+		return []domain.ScenarioRunEvent{
+			scenarioAssistantDeltaEvent(requestID, stateRevision, 0, "understanding", text),
+		}, true
 	case "observation_result":
 		if trace.Observation == nil {
-			return domain.ScenarioRunEvent{}, false
+			return nil, false
 		}
-		toolKind := scenarioToolKindForAction(world, trace.Observation.Action)
-		return scenarioToolResultEvent(requestID, stateRevision, 0, domain.ScenarioToolResultPayload{
-			CallID:       "obs:" + trace.Observation.Action,
-			ToolID:       trace.Observation.Action,
-			ToolKind:     toolKind,
-			ResultStatus: "succeeded",
-			Content: &domain.ScenarioPublicContent{
-				ContentType:    "observation",
-				MarkdownReady:  scenarioPublicObservationMarkdown(trace.Observation.Result),
-				DisplayVariant: scenarioObservationDisplayVariant(toolKind),
-				Meta: &domain.ScenarioPublicContentMeta{
-					ToolKind:   toolKind,
-					IsNegative: trace.Observation.IsNegative,
-				},
-			},
-		}), true
+		return []domain.ScenarioRunEvent{
+			scenarioObservationToolResultEvent(requestID, stateRevision, world, trace.Observation),
+		}, true
+	case "agent_tool_started":
+		if !scenarioPublicObservationToolName(world, trace.ToolName) {
+			return nil, false
+		}
+		return []domain.ScenarioRunEvent{
+			scenarioTaskUpsertedEvent(requestID, stateRevision, 0, domain.ScenarioTaskPayload{
+				TaskID:  "obs:" + trace.ToolName,
+				CallID:  trace.ToolName,
+				Title:   "查看" + scenarioActionTarget(world, trace.ToolName),
+				State:   domain.ScenarioTaskRunning,
+				ToolRef: trace.ToolName,
+			}),
+		}, true
+	case "agent_tool_result":
+		if !scenarioPublicObservationToolName(world, trace.ToolName) {
+			return nil, false
+		}
+		state := domain.ScenarioTaskCompleted
+		if trace.Status == "failed" {
+			state = domain.ScenarioTaskFailed
+		}
+		events := []domain.ScenarioRunEvent{
+			scenarioTaskUpsertedEvent(requestID, stateRevision, 0, domain.ScenarioTaskPayload{
+				TaskID:  "obs:" + trace.ToolName,
+				CallID:  trace.ToolName,
+				Title:   "查看" + scenarioActionTarget(world, trace.ToolName),
+				State:   state,
+				ToolRef: trace.ToolName,
+			}),
+		}
+		if trace.Observation != nil {
+			events = append(events, scenarioObservationToolResultEvent(requestID, stateRevision, world, trace.Observation))
+		}
+		return events, true
 	case "tool_started":
-		return scenarioTaskUpsertedEvent(requestID, stateRevision, 0, domain.ScenarioTaskPayload{
-			TaskID:  "compare-answer",
-			CallID:  "compare_answer",
-			Title:   "对比答案与已公开证据",
-			State:   domain.ScenarioTaskRunning,
-			ToolRef: "compare_answer",
-		}), true
+		return []domain.ScenarioRunEvent{
+			scenarioTaskUpsertedEvent(requestID, stateRevision, 0, domain.ScenarioTaskPayload{
+				TaskID:  "compare-answer",
+				CallID:  "compare_answer",
+				Title:   "对比答案与已公开证据",
+				State:   domain.ScenarioTaskRunning,
+				ToolRef: "compare_answer",
+			}),
+		}, true
 	case "tool_result":
 		if trace.Tool == nil {
-			return domain.ScenarioRunEvent{}, false
+			return nil, false
 		}
 		content := (*domain.ScenarioPublicContent)(nil)
 		if trace.Tool.Result != nil {
@@ -1515,25 +1803,80 @@ func projectScenarioTraceEvent(
 				Meta:           &domain.ScenarioPublicContentMeta{ToolKind: "verification"},
 			}
 		}
-		return scenarioToolResultEvent(requestID, stateRevision, 0, domain.ScenarioToolResultPayload{
-			CallID:       "compare_answer",
-			ToolID:       "compare_answer",
-			ToolKind:     "verification",
-			ResultStatus: "succeeded",
-			DurationMS:   trace.Tool.DurationMS,
-			Content:      content,
-		}), true
+		return []domain.ScenarioRunEvent{
+			scenarioToolResultEvent(requestID, stateRevision, 0, domain.ScenarioToolResultPayload{
+				CallID:       "compare_answer",
+				ToolID:       "compare_answer",
+				ToolKind:     "verification",
+				ResultStatus: "succeeded",
+				DurationMS:   trace.Tool.DurationMS,
+				Content:      content,
+			}),
+		}, true
 	case "tool_completed":
-		return scenarioTaskUpsertedEvent(requestID, stateRevision, 0, domain.ScenarioTaskPayload{
-			TaskID:  "compare-answer",
-			CallID:  "compare_answer",
-			Title:   "对比答案与已公开证据",
-			State:   domain.ScenarioTaskCompleted,
-			ToolRef: "compare_answer",
-		}), true
+		return []domain.ScenarioRunEvent{
+			scenarioTaskUpsertedEvent(requestID, stateRevision, 0, domain.ScenarioTaskPayload{
+				TaskID:  "compare-answer",
+				CallID:  "compare_answer",
+				Title:   "对比答案与已公开证据",
+				State:   domain.ScenarioTaskCompleted,
+				ToolRef: "compare_answer",
+			}),
+		}, true
 	default:
-		return domain.ScenarioRunEvent{}, false
+		return nil, false
 	}
+}
+
+// scenarioObservationToolResultEvent 把一条公开观察投影成 V2 工具结果卡片；
+// observation_result 与循环内 agent_tool_result 的观察负载共用同一形状。
+func scenarioObservationToolResultEvent(
+	requestID string,
+	stateRevision int,
+	world *domain.HiddenWorld,
+	observation *agentclient.PublicObservation,
+) domain.ScenarioRunEvent {
+	toolKind := scenarioToolKindForAction(world, observation.Action)
+	return scenarioToolResultEvent(requestID, stateRevision, 0, domain.ScenarioToolResultPayload{
+		CallID:       "obs:" + observation.Action,
+		ToolID:       observation.Action,
+		ToolKind:     toolKind,
+		ResultStatus: "succeeded",
+		Content: &domain.ScenarioPublicContent{
+			ContentType:    "observation",
+			MarkdownReady:  scenarioPublicObservationMarkdown(observation.Result),
+			DisplayVariant: scenarioObservationDisplayVariant(toolKind),
+			Meta: &domain.ScenarioPublicContentMeta{
+				ToolKind:    toolKind,
+				IsNegative:  observation.IsNegative,
+				SourceKind:  "teaching_simulation",
+				SourceLabel: "教学模拟",
+				Title:       scenarioActionTarget(world, observation.Action),
+			},
+		},
+	})
+}
+
+// scenarioPublicObservationToolName 只接受题目声明的公开观察动作：循环旁路
+// 事件不得为 compare_answer 或未声明动作伪造任务。
+func scenarioPublicObservationToolName(world *domain.HiddenWorld, action string) bool {
+	if world == nil || strings.TrimSpace(action) == "" {
+		return false
+	}
+	if strings.Contains(strings.ToLower(action), "compare_answer") {
+		return false
+	}
+	for _, observation := range world.Observations {
+		if observation.Action == action {
+			return true
+		}
+	}
+	for _, tool := range world.VirtualTools {
+		if tool.ObservationAction == action {
+			return true
+		}
+	}
+	return false
 }
 
 // scenarioToolKindForAction 与 agent runtime.py 的 _tool_kind_for_action 同构：
@@ -1563,67 +1906,149 @@ func scenarioObservationDisplayVariant(toolKind string) string {
 	}
 }
 
-// scenarioPublicObservationMarkdown 落实公开文案规则：实现术语不得出现在
-// 开头。题库观察结果常以「模拟××日志」起头（内部生成注记），对外投影时
-// 只剥离开头前缀，正文数据一字不改。
+// scenarioPublicObservationMarkdown 只做空白规整。教学模拟来源由结构化
+// content meta 明确展示，不能通过删除“模拟”字样伪装成真实生产数据。
 func scenarioPublicObservationMarkdown(result string) string {
-	trimmed := strings.TrimSpace(result)
-	if rest := strings.TrimPrefix(trimmed, "模拟"); rest != trimmed {
-		return strings.TrimSpace(rest)
-	}
-	return trimmed
+	return strings.TrimSpace(result)
 }
 
 func scenarioComparisonMarkdown(comparison *agentclient.PublicAnswerComparison) string {
-	parts := []string{"答案对比：" + scenarioSupportStatusLabel(comparison.SupportStatus)}
+	parts := []string{
+		"结论：" + scenarioConclusionStatusLabel(comparison.ConclusionStatus),
+		"证据：" + scenarioEvidenceStatusLabel(comparison.EvidenceStatus),
+		"因果链：" + scenarioCausalStatusLabel(comparison.CausalStatus),
+	}
+	if len(comparison.MissingDimensions) > 0 {
+		labels := make([]string, 0, len(comparison.MissingDimensions))
+		for _, dimension := range comparison.MissingDimensions {
+			labels = append(labels, scenarioComparisonDimensionLabel(dimension))
+		}
+		parts = append(parts, "仍需补齐："+strings.Join(labels, "、"))
+	}
+	if len(comparison.Contradictions) > 0 {
+		parts = append(parts, "表述冲突："+strings.Join(comparison.Contradictions, "；"))
+	}
 	if len(comparison.UserPoints) > 0 {
 		parts = append(parts, "你的要点："+strings.Join(comparison.UserPoints, "；"))
 	}
 	return strings.Join(parts, "；")
 }
 
-func scenarioSupportStatusLabel(status string) string {
+func scenarioConclusionStatusLabel(status string) string {
 	switch status {
-	case "insufficiently_specific":
-		return "表述还不够具体"
-	case "needs_more_evidence":
-		return "还需要更多直接观察"
-	case "has_evidence_conflict":
-		return "与已有观察存在冲突"
-	case "evidence_consistent":
-		return "与已有观察一致"
+	case "none":
+		return "尚未形成明确判断"
+	case "partial":
+		return "已形成部分判断"
+	case "supported":
+		return "已有公开证据支撑"
+	case "contradictory":
+		return "与已公开事实存在冲突"
 	default:
 		return status
+	}
+}
+
+func scenarioEvidenceStatusLabel(status string) string {
+	switch status {
+	case "none":
+		return "尚未引用有效观察"
+	case "insufficient":
+		return "现有观察不足"
+	case "partial":
+		return "覆盖了部分证据"
+	case "sufficient":
+		return "证据链覆盖充分"
+	default:
+		return status
+	}
+}
+
+func scenarioCausalStatusLabel(status string) string {
+	switch status {
+	case "missing":
+		return "尚未说明因果关系"
+	case "partial":
+		return "因果关系仍有断点"
+	case "sufficient":
+		return "因果链已经连贯"
+	default:
+		return status
+	}
+}
+
+func scenarioComparisonDimensionLabel(dimension string) string {
+	switch dimension {
+	case "conclusion":
+		return "明确结论"
+	case "evidence":
+		return "直接证据"
+	case "causal_link":
+		return "因果连接"
+	case "consistency":
+		return "表述一致性"
+	default:
+		return dimension
 	}
 }
 
 // scenarioAllowedActions 从题目声明的虚拟工具目录（动态 ActionCatalog 实例）
 // 生成 turn_completed 下一步动作。只做当前状态过滤：全部关联证据都已收集的
 // 工具不再推荐；按钮只表达抽象检查方向，不携带答案关键词。
-func scenarioAllowedActions(world *domain.HiddenWorld, state domain.ScenarioLearnerState, catalogVersion string) []domain.ScenarioAllowedAction {
+func scenarioAllowedActions(
+	world *domain.HiddenWorld,
+	state domain.ScenarioLearnerState,
+	catalogVersion string,
+	allowedActionIDs ...string,
+) []domain.ScenarioAllowedAction {
 	if world == nil {
 		return nil
 	}
-	collected := stringSet(state.CollectedEvidence)
-	actions := []domain.ScenarioAllowedAction{}
+	if len(allowedActionIDs) == 0 {
+		return nil
+	}
+	taken := stringSet(state.ActionsTaken)
+	tools := make(map[string]domain.VirtualTool, len(world.VirtualTools))
 	for _, tool := range world.VirtualTools {
-		if tool.ObservationAction == "" {
+		tools[tool.ObservationAction] = tool
+	}
+	actions := make([]domain.ScenarioAllowedAction, 0, 3)
+	seen := map[string]bool{}
+	for _, actionID := range allowedActionIDs {
+		tool, ok := tools[actionID]
+		if !ok || seen[actionID] || taken[actionID] || !scenarioActionPrerequisitesMet(world, state, tool) {
 			continue
 		}
-		if len(tool.EvidenceIDs) > 0 && containsAll(state.CollectedEvidence, tool.EvidenceIDs) {
-			continue
-		}
-		if collected[tool.ObservationAction] {
-			continue
-		}
+		seen[actionID] = true
 		actions = append(actions, domain.ScenarioAllowedAction{
-			ActionID:       tool.ObservationAction,
+			ActionID:       actionID,
 			CatalogVersion: catalogVersion,
 			ToolKind:       tool.Kind,
-			Title:          "查看" + tool.Target,
+			Title:          tool.Target,
 		})
+		if len(actions) == 3 {
+			break
+		}
 	}
 	return actions
+}
+
+func scenarioActionPrerequisitesMet(world *domain.HiddenWorld, state domain.ScenarioLearnerState, tool domain.VirtualTool) bool {
+	if len(tool.EvidenceIDs) == 0 {
+		return true
+	}
+	collected := stringSet(state.CollectedEvidence)
+	for _, evidenceID := range tool.EvidenceIDs {
+		if collected[evidenceID] {
+			continue
+		}
+		for _, node := range world.EvidenceGraph {
+			if node.EvidenceID == evidenceID && containsAll(state.CollectedEvidence, node.Prerequisites) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // buildScenarioRunEvents 产出 V2 正式事件序列。
@@ -1649,15 +2074,26 @@ func buildScenarioRunEvents(
 	}
 	events := []domain.ScenarioRunEvent{scenarioTurnStartedEvent(requestID, stateRevision, 1)}
 	for _, trace := range result.PublicTrace {
-		event, ok := projectScenarioTraceEvent(requestID, stateRevision, world, trace)
+		projected, ok := projectScenarioTraceEvents(requestID, stateRevision, world, trace)
 		if !ok {
 			continue
 		}
-		events = append(events, event)
+		events = append(events, projected...)
 	}
 	// 序号统一在组装时分配：trace 投影事件保持 Python 到达顺序，
 	// reply 分片插入 tracesBeforeReply 分割点，与实时流出顺序逐位一致。
-	return insertReplyChunksAndComplete(events, requestID, stateRevision, chunks, tracesBeforeReply, previousState, state, world, catalogVersion)
+	return insertReplyChunksAndComplete(
+		events,
+		requestID,
+		stateRevision,
+		chunks,
+		tracesBeforeReply,
+		previousState,
+		state,
+		world,
+		catalogVersion,
+		result.TurnControl.AllowedActionIDs...,
+	)
 }
 
 // insertReplyChunksAndComplete 把 reply 分片插入 trace 投影事件的正确位置并
@@ -1673,6 +2109,7 @@ func insertReplyChunksAndComplete(
 	state domain.ScenarioLearnerState,
 	world *domain.HiddenWorld,
 	catalogVersion string,
+	allowedActionIDs ...string,
 ) []domain.ScenarioRunEvent {
 	var before, after []domain.ScenarioRunEvent
 	// events[0] 是 turn_started，恒在分片之前。
@@ -1696,7 +2133,15 @@ func insertReplyChunksAndComplete(
 	for _, clue := range scenarioReleasedClueEvents(requestID, stateRevision, previousState, state, world) {
 		out = append(out, clue)
 	}
-	out = append(out, scenarioTurnCompletedEvent(requestID, stateRevision, 0, scenarioAllowedActions(world, state, catalogVersion)))
+	if hint := scenarioPublishedHintEvent(requestID, stateRevision, previousState, state); hint != nil {
+		out = append(out, *hint)
+	}
+	out = append(out, scenarioTurnCompletedEvent(
+		requestID,
+		stateRevision,
+		0,
+		scenarioAllowedActions(world, state, catalogVersion, allowedActionIDs...),
+	))
 	for i := range out {
 		out[i].Sequence = i + 1
 	}
@@ -1726,12 +2171,22 @@ func scenarioReleasedClueEvents(
 			if node.EvidenceID != evidenceID || strings.TrimSpace(node.Content) == "" {
 				continue
 			}
+			if node.ClueImportance == "none" {
+				break
+			}
+			title := strings.TrimSpace(node.PublicTitle)
+			if title == "" {
+				title = "调查线索"
+			}
 			content := domain.ScenarioPublicContent{
 				ContentType:    "clue",
 				MarkdownReady:  scenarioPublicObservationMarkdown(node.Content),
 				DisplayVariant: "clue",
 				Meta: &domain.ScenarioPublicContentMeta{
-					ToolKind: node.Category,
+					ToolKind:    node.Category,
+					SourceKind:  "teaching_simulation",
+					SourceLabel: "教学模拟",
+					Title:       title,
 				},
 			}
 			events = append(events, domain.ScenarioRunEvent{
@@ -1741,7 +2196,7 @@ func scenarioReleasedClueEvents(
 				Kind:          "clue_published",
 				Payload: &domain.ScenarioRunEventPayload{
 					Clue: &domain.ScenarioCluePayload{
-						ClueID:  evidenceID,
+						ClueID:  scenarioOpaquePublicID("clue", evidenceID+"\x00"+node.Content),
 						Content: content,
 					},
 				},
@@ -1750,6 +2205,53 @@ func scenarioReleasedClueEvents(
 		}
 	}
 	return events
+}
+
+func scenarioPublishedHintEvent(
+	requestID string,
+	stateRevision int,
+	previousState domain.ScenarioLearnerState,
+	state domain.ScenarioLearnerState,
+) *domain.ScenarioRunEvent {
+	text := strings.TrimSpace(state.LastHint)
+	if text == "" || (text == strings.TrimSpace(previousState.LastHint) && state.HintLevel == previousState.HintLevel) {
+		return nil
+	}
+	level := state.HintLevel
+	if level < 1 {
+		level = 1
+	}
+	if level > 4 {
+		level = 4
+	}
+	content := domain.ScenarioPublicContent{
+		ContentType:    "hint",
+		MarkdownReady:  text,
+		DisplayVariant: "hint",
+		Meta: &domain.ScenarioPublicContentMeta{
+			SourceKind:  "teaching_guidance",
+			SourceLabel: "教学提示",
+			Title:       fmt.Sprintf("第 %d 级提示", level),
+		},
+	}
+	return &domain.ScenarioRunEvent{
+		RequestID:     requestID,
+		SchemaVersion: domain.ScenarioRunEventSchemaV2,
+		StateRevision: stateRevision,
+		Kind:          "hint_published",
+		Payload: &domain.ScenarioRunEventPayload{
+			Hint: &domain.ScenarioHintPayload{
+				HintID:  scenarioOpaquePublicID("hint", text),
+				Level:   level,
+				Content: content,
+			},
+		},
+	}
+}
+
+func scenarioOpaquePublicID(prefix, source string) string {
+	digest := sha256.Sum256([]byte(source))
+	return prefix + "_" + hex.EncodeToString(digest[:6])
 }
 
 // scenarioFillCurrentFocus 只在 Agent 没有提交焦点时补齐公开调查维度。

@@ -24,6 +24,10 @@ MENTOR_INSTRUCTIONS = """
 9. 当前是题目自带的虚拟工具环境，不存在可供学生登录的服务器、终端或配置文件。
    支持的检查会由系统直接模拟并在题目快照侧显示为线索卡；不要说“去服务器看”“打开配置文件”或“回来后再确认”。
 10. 学生可以用自然语言描述要查的对象，也可以输入只读 SQL、日志查询或配置查询语句；这些内容只在题目虚拟数据上解释，不会真实执行。
+11. 工具卡负责展示事实，你负责解释事实能证明什么、还不能证明什么；不要复述整段日志、指标或配置。
+12. 只轻度接住学生的幽默；学生受挫或连续随机枚举资源时减少反问，直接说明低收益方向应当停下。
+13. 不使用“非常棒”“关键线索”“继续验证”这类固定夸奖；只有真实缩小范围时才说清缩小了哪段因果链。
+14. 教学模拟来源、观察、假设、提示和最终结论必须分开；不能把模拟数据说成真实生产数据，也不能把提示算作学生发现的证据。
 
 表达风格：
 - 回复要像真实的人在认真交流，口吻自然、平实、克制，适合本科论文和训练说明语境，不能有明显的机器腔或套话感。
@@ -48,6 +52,7 @@ def build_mentor_prompt(deps: MentorDeps) -> str:
     sections = [
         MENTOR_INSTRUCTIONS,
         _render_scenario(deps),
+        _render_conversation_summary(deps),
         _render_transcript(deps),
         _render_current_user_message(deps),
         _render_intent_context(deps),
@@ -81,6 +86,13 @@ def _render_transcript(deps: MentorDeps) -> str:
     return "\n".join(lines)
 
 
+def _render_conversation_summary(deps: MentorDeps) -> str:
+    summary = deps.conversation_summary.strip()
+    if not summary:
+        return ""
+    return "## 更早对话的确定性摘要\n" + summary
+
+
 def _render_current_user_message(deps: MentorDeps) -> str:
     text = deps.current_user_message.strip()
     if not text:
@@ -96,6 +108,8 @@ def _render_intent_context(deps: MentorDeps) -> str:
         request = deps.evidence_request
         lines.append(f"学生请求的证据对象：{request.requested_text}")
         if request.availability == "UNAVAILABLE":
+            if request.public_message:
+                lines.append("题目声明的数据边界：" + request.public_message)
             lines.append(
                 "题目世界没有这类可公开观察；诚实说明该模拟数据不包含它，不能编造数值，"
                 "也不要替换成相近指标。不要提内部目录、工具清单、权限或系统实现。"
@@ -132,6 +146,25 @@ def _render_learner(deps: MentorDeps) -> str:
     lines.append(
         f"有效推进 {state.effective_turns} 轮；连续 {state.stalled_turns} 轮没有进展。"
     )
+    if state.concept_mastery:
+        lines.append(
+            "当前会话概念掌握度："
+            + "；".join(f"{key}={value}/4" for key, value in state.concept_mastery.items())
+        )
+    if state.skill_mastery:
+        lines.append(
+            "当前会话工程能力："
+            + "；".join(f"{key}={value}/4" for key, value in state.skill_mastery.items())
+        )
+    preferences = state.explanation_preferences
+    lines.append(
+        "明确表达过的解释偏好："
+        f"detail={preferences.detail}，analogy={preferences.analogy}，directness={preferences.directness}。"
+    )
+    if state.hint_level > 0:
+        lines.append(f"当前提示等级：{state.hint_level}/4。")
+    if state.last_hint:
+        lines.append("最近已经公开的教学提示：" + state.last_hint)
     if state.recent_openings:
         lines.append(
             "你最近用过的开场，这次换一个说法：" + "；".join(f"「{item}」" for item in state.recent_openings)

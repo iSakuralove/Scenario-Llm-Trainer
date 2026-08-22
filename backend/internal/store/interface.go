@@ -29,6 +29,8 @@ type Store interface {
 	GetScenarioAgentTurn(sessionID, requestID string) (domain.ScenarioAgentTurnRecord, bool)
 	ListScenarioAgentTurns(sessionID string) []domain.ScenarioAgentTurnRecord
 	CommitScenarioAgentTurn(commit domain.ScenarioAgentTurnCommit) (domain.ScenarioAgentTurnCommitResult, error)
+	CommitScenarioSessionTransition(transition domain.ScenarioSessionTransition) (*domain.ScenarioSession, error)
+	TouchScenarioSessionActivity(sessionID string, expectedRevision int) (bool, error)
 
 	FindInterviewQuestion(domainName, difficulty, questionType string) (*domain.InterviewQuestion, bool)
 	GetInterviewQuestion(id string) (*domain.InterviewQuestion, bool)

@@ -28,6 +28,10 @@ class CanonicalAnswer(BaseModel):
 
     canonical_conclusion: str
     root_cause_id: str
+    direct_trigger: str = Field(default="", description="本次事故的直接触发变化")
+    latent_issues: list[str] = Field(default_factory=list, description="被事故暴露的潜在问题")
+    phenomenon: str = Field(default="", description="学生需要解释的可见现象")
+    derived_risks: list[str] = Field(default_factory=list, description="由因果链推导出的业务风险")
     required_evidence_ids: list[str] = Field(default_factory=list)
     required_causal_relations: list[str] = Field(default_factory=list)
     accepted_equivalents: list[str] = Field(default_factory=list)
@@ -94,11 +98,14 @@ class PublicAnswerComparison(BaseModel):
         default_factory=list,
         description="从学生自己的表述里抽出的要点。只回显他说过的话。",
     )
-    conclusion_status: ConclusionStatus = "none"
-    evidence_status: EvidenceStatus = "none"
-    causal_status: CausalStatus = "missing"
-    missing_dimensions: list[ComparisonDimension] = Field(default_factory=list)
-    contradictions: list[str] = Field(default_factory=list)
+    # V2 字段必须出现在新 payload 中。旧 v1 只允许通过
+    # ``_adapt_legacy_v1`` 输入适配后再落成这五个字段，不能靠默认值把
+    # 契约缺字段悄悄吞掉。
+    conclusion_status: ConclusionStatus
+    evidence_status: EvidenceStatus
+    causal_status: CausalStatus
+    missing_dimensions: list[ComparisonDimension]
+    contradictions: list[str]
 
     @model_validator(mode="before")
     @classmethod
@@ -117,6 +124,7 @@ class PublicAnswerComparison(BaseModel):
             payload.setdefault("evidence_status", _legacy_evidence_status(legacy))
             payload.setdefault("causal_status", "missing")
             dimensions = payload.setdefault("missing_dimensions", [])
+            payload.setdefault("contradictions", [])
             if legacy == "has_evidence_conflict" and "consistency" not in dimensions:
                 dimensions.append("consistency")
         return payload

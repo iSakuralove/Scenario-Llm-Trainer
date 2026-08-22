@@ -38,6 +38,7 @@ class InterpreterDeps:
 
     public_scenario: PublicScenario
     hypotheses: list[Hypothesis]  # 无 is_correct 字段，见 world.Hypothesis
+    conversation_summary: str = ""
     transcript: list[Turn] = field(default_factory=list)
     known_actions: list[str] = field(
         default_factory=list,
@@ -76,6 +77,7 @@ class EvidenceRequest:
 
     requested_text: str
     availability: EvidenceAvailability
+    public_message: str = ""
 
 
 @dataclass
@@ -93,6 +95,7 @@ class MentorDeps:
     transcript: list[Turn]
     learner_state: LearnerStateView
     constraints: TeachingConstraints
+    conversation_summary: str = ""
     current_user_message: str = ""
     current_intent: str = "investigate"
     requested_action_raw: str = ""

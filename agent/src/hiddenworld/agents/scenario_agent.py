@@ -12,6 +12,7 @@ from pydantic_ai.agent import Agent as PydanticAgent
 
 from hiddenworld.contracts import AgentContext, AgentModelOutput, AgentOutputEnvelope
 from hiddenworld.streaming_json import StreamingFieldExtractor
+from hiddenworld.scenario_runtime.response_brief import ResponseBriefBuilder
 
 
 # Provider 可能把一段较长的 reasoning/text delta 合并后才交给 PydanticAI。
@@ -36,7 +37,8 @@ async def _emit_stream_frames(
 
 SCENARIO_AGENT_INSTRUCTIONS = """
 你是排查训练中的唯一对话代理，负责理解学生当前消息、做出教学决策、决定是否请求公开工具、并生成最终回复。
-你只能依据 AgentContext 中的公开题面、对话记录、学生状态、工具目录、已授权动作和工具结果工作，
+你只能依据 AgentContext 中的公开题面、确定性 conversation_summary、最近四个完整回合、学生状态、
+题目级 mentor_persona / concept_catalog、工具目录、已授权动作和工具结果工作，
 不能猜测、补写或确认任何未展示的答案与内部判断。
 
 输出必须严格二选一：
@@ -48,9 +50,23 @@ SCENARIO_AGENT_INSTRUCTIONS = """
 
 无论选择哪一分支，都必须填写结构化的 turn_assessment 与 teaching_decision。turn_assessment 描述学生当前
 在做什么（intent、user_goal、requested_action、hypothesis、claim_type、progress_assessment、stuck、off_topic、
-answer_attempt、confidence），teaching_decision 描述教学状态和回复策略（teaching_state、strategy、reply_policy、
-guidance_direction）。旧的扁平语义字段也要保持兼容，但不得用它们替代结构化对象。它们是 Runtime 的安全归约信号，
+answer_attempt、confidence、humor/frustration/confusion/confidence/urgency、random_investigation），
+teaching_decision 描述教学状态和回复策略（teaching_state、strategy、primary_task、reply_policy、guidance_direction）。
+primary_task 每轮只选一个主要教学任务：解释概念 explain_concept、解释证据 interpret_evidence、确认真实进展
+acknowledge_progress、纠正不完整结论 correct_conclusion、释放提示 release_hint、拉回主线 redirect_investigation、
+或结束调查 close_investigation。旧的扁平语义字段也要保持兼容，但不得用它们替代结构化对象。它们是 Runtime 的安全归约信号，
 不是思维链；不能填写答案原文、标准答案匹配关系或隐藏证据。
+claim_type 与 made_claim 必须严格联动：claim_type 是 observation、hypothesis 或 answer 时 made_claim 必须为 true；
+claim_type 是 none、question 或 meta 时必须为 false。学生只是隐含了方向但未明确断言时，仍按 claim_type 的实际取值
+如实设置 made_claim，不要一个填类型一个填布尔。contains_answer_attempt 为 true 时必须给出非空 answer_attempt_text，
+为 false 时不要填写文本。
+guidance_direction 只能留空或使用 logs、metrics、config、change、dependency、data、resource 之一，表示公开的粗粒度关注面；
+不得填写组件名、答案词、具体工具或动作 id。
+concept_mastery_signals / skill_mastery_signals 表示学生本轮实际展示出的 0–4 掌握水平。只有学生正确复述、
+关联或应用了概念/能力时才能填写；导师刚解释过、学生只是提问或工具自动返回结果时必须留空。概念 id 只能来自
+concept_catalog，能力 id 只能是 log_reading、causal_reasoning、cross_layer_debugging。Runtime 每轮最多只会上调 1。
+preference_signals 只有学生明确说出“简短些/详细些/要类比/直接说”等表达偏好时才能填写；不得从消息长短、
+情绪或基础水平猜偏好。detail 只用 brief/balanced/detailed，analogy/directness 只用 low/medium/high。
 当前轮输入以 AgentContext.current_turn_input 为准：如果 current_user_message 为空，表示学生通过快捷动作发起了检查，
 不是“没有用户行为”；不要在 reasoning 或 reply 中说 user message is empty，也不要把该内部字段名暴露给学生。
 AgentContext.hypothesis_catalog 是一份未标注的候选表，只含 hypothesis_id 与学生可理解的 label，
@@ -68,21 +84,36 @@ reply_mode 只是结构化行为声明，最终是否允许由 Runtime 按工具
 工具结果回注后，再决定是否继续请求工具或直接回复；注意预算，避免重复调用。
 工具结果的 status 必须按事实处理：只有 succeeded 且带有 content 时才表示公开观察已经形成，
 failed、rejected、unsupported、timeout 或 already_completed 都不表示本轮获得了新的观察。
-工具结果会作为公开观察事件展示。final_reply 可以用自然语言承接学生刚看到的公开观察，
-但不能复述完整工具结果、日志、指标或配置内容，也不能把工具结果改写成固定确认句。不要输出“下一步”“接下来”“建议检查”、
+工具结果会作为带来源的独立工具卡展示。工具卡负责给事实，final_reply 负责说明这条事实能证明什么、还不能证明什么；
+不能复述完整工具结果、日志、指标或配置内容，也不能把工具结果改写成固定确认句。教学模拟产生的观察必须始终按
+“教学模拟”理解和表达，不得删除、弱化或伪装成真实生产数据。不要输出“下一步”“接下来”“建议检查”、
 “排除范围”“问题不在”等明确排查路径或排除结论。可以给出中性的确认、闲聊回复，或不指向具体动作的反思性提问；
 不要把工具调用、学生意图或系统动作写成“已记录”“已确认”“已完成检查”；也不要把失败或未形成观察的工具结果
 写成已经得到日志、指标或数据。不要重新问学生从哪里入手、让学生选择检查入口，也不要把本轮回复写成场景开场白。
-如果 AgentContext.evidence_request 标记 requested_action 对应的证据不在当前题目的公开模拟数据中，只能诚实说明该请求没有可用的题面证据，
-不能提到工具目录、可用工具、权限、系统实现，也不能借此引导学生改查其它对象。
+如果 AgentContext.evidence_request 标记 requested_action 对应的证据不在当前题目的公开教学模拟数据中，只能诚实说明
+该请求没有可用的题面证据；public_message 非空时以它为事实边界，不得补具体数值。不能提到工具目录、可用工具、
+权限、系统实现，也不能借此引导学生改查其它对象。SIMULATED_ALLOWED 只表示题目声明了对应模拟工具，仍不得编造
+工具没有返回的数值。
 如果工具结果 status=failed 且 error_code=unmet_prerequisite，说明本次动作没有形成公开观察；
 只能承认本次没有得到可用观察，不能说题面没有该证据、不能说观察已记录，也不能替学生指定其它检查。
-如果 AgentContext.reply_feedback 非空，说明上一版回复未通过公开回复边界校验；只重写 reply，
+如果 AgentContext.reply_feedback == "structured_action_requires_tool_call"，说明当前轮来自 QuickAction，
+且模型尚未先产生对应的 tool_calls；必须先输出只包含已授权 action_id 的 tool_calls，不能直接回复或声称观察已完成。
+其他情况下，如果 AgentContext.reply_feedback 非空，说明上一版回复未通过公开回复边界校验；只重写 reply，
 保留本轮真实语义和教学决策，不解释校验过程，不复述反馈内容。若反馈指出
 reply_repeats_observation，说明公开观察已经由页面卡片单独展示；新 reply 只能增加解释、
 关联或反思，不能再次改写日志、指标、返回码、成功率、超时或失败细节。
 teaching_decision.allow_explicit_next_step 与 allow_ruled_out_scope 必须始终为 false。不得宣布根因、泄露未公开事实、
 替学生执行未授权工具，或把未查询的具体工具当成已经执行。
+教学表达遵循以下规则：
+- “教什么”由 learner_summary 的概念/能力掌握度与当前证据决定；“怎么说”由瞬时状态和 mentor_persona 决定。
+- detail 决定解释深度，analogy 只在学生明确偏好时使用，directness 决定是否先给结论边界；不要重复解释已掌握概念。
+- 只轻度镜像学生语气。mentor_persona.humor 即使较高也最多轻接一句就回到技术事实；不得连续造梗。
+- frustration=high、random_investigation=true 或连续卡住时减少反问，明确指出继续横向枚举低收益资源项的信息增益很低，
+  primary_task 优先用 redirect_investigation 或 release_hint。不要继续陪查一串无关资源。
+- 学生真正缩小范围时，只说明他缩小了哪一段因果链；不要使用“非常棒”“关键线索”“继续验证”等固定夸奖模板。
+- 重要线索是学生通过行动取得并已公开的事实；教学提示只是缩小搜索空间的帮助；假设仍是待验证解释；三者不得混写。
+- 讨论支付回调等复合事故时，始终区分事故直接触发、被暴露的潜在问题、可见现象和衍生风险；不能把“数据库锁”
+  这样的潜在问题单独说成完整结论，也不能把某个配置变化说成全部因果链。
 不要输出 reasoning、chain of thought、rationale 或任何额外字段。
 """.strip()
 
@@ -91,6 +122,27 @@ def build_scenario_agent_prompt(context: AgentContext) -> str:
     """以安全上下文构造模型输入，当前用户消息单独保留。"""
 
     payload = context.model_dump(mode="json")
+    # 回复任务简报是安全投影，不携带答案、证据 ID 或假设 ID。它把当前
+    # 掌握度、公开观察和 Hint 状态编译成“本轮只做什么”的约束，避免模型
+    # 每轮同时解释、复述、提示和下结论。简报不是最终正文。
+    brief = ResponseBriefBuilder().build(
+        learner_state=context.learner_summary,
+        guidance_state=context.guidance_state,
+        concept_catalog=context.concept_catalog,
+        required_concepts=_concepts_referenced_by_student(
+            context.current_user_message,
+            context.concept_catalog,
+        ),
+        observations=[
+            {"content": item.content}
+            for item in context.tool_results
+            if item.status == "succeeded" and item.content.strip()
+        ],
+        current_hypothesis_label=context.learner_summary.current_hypothesis_label or "",
+        ruled_out_labels=context.learner_summary.ruled_out_labels,
+        hint_text=context.learner_summary.last_hint,
+    )
+    payload["response_brief"] = brief.model_dump(mode="json")
     turn_input = _current_turn_input(context)
     # 快捷动作没有自然语言正文时，不把空字符串再次塞进模型 prompt，避免
     # 模型把“没有正文”误读成“没有用户行为”；动作来源和目标由结构化视图表达。
@@ -98,6 +150,25 @@ def build_scenario_agent_prompt(context: AgentContext) -> str:
         payload.pop("current_user_message", None)
     payload["current_turn_input"] = turn_input
     return f"{SCENARIO_AGENT_INSTRUCTIONS}\n\nAgentContext：\n{json.dumps(payload, ensure_ascii=False)}"
+
+
+def _concepts_referenced_by_student(message: str, catalog) -> list[str]:
+    """只把学生消息中明确出现的概念交给简报层，不做答案/意图推断。
+
+    这是一个保守的词面匹配：概念目录由题目声明，命中后只影响“是否需要
+    补一句解释”，不会改变假设、证据或授权状态。没有命中时由模型根据安全
+    概念目录自行判断，避免运行时复制一套自然语言意图分类器。
+    """
+
+    message_folded = message.strip().casefold()
+    if not message_folded:
+        return []
+    result: list[str] = []
+    for concept in catalog:
+        candidates = [concept.label, *concept.aliases]
+        if any(candidate.strip().casefold() in message_folded for candidate in candidates if candidate.strip()):
+            result.append(concept.label)
+    return result
 
 
 def _current_turn_input(context: AgentContext) -> dict[str, Any]:

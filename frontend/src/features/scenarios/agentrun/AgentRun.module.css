@@ -127,107 +127,137 @@
   min-width: 0;
 }
 
-/* 测试专用 Thinking/Reasoning 投影：参考 Thinking Reasoning 的
-   胶囊标题、渐变边框和可滚动正文，但不改变正式会话的 RunEvent 契约。 */
-.rawReasoningBlock {
+/* Thinking/Reasoning（aicss.dev thinking-reasoning 风格）：极简无卡片。
+   微光“思考中…”标题 + 打字机正文 + 180px 视口上下渐隐；完成后平滑折叠
+   成“思考 用时 N 秒”。只改测试调试流的视觉，不改 RunEvent 契约。 */
+.trBlock {
   min-width: 0;
-  overflow: hidden;
-  border: 1px solid rgba(142, 240, 219, 0.22);
-  border-radius: 14px;
-  background:
-    radial-gradient(circle at 0 0, rgba(142, 240, 219, 0.1), transparent 46%),
-    rgba(12, 25, 32, 0.72);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  animation: eventEnter 260ms ease both;
 }
 
-.rawReasoningActive {
-  border-color: rgba(142, 240, 219, 0.42);
-}
-
-.rawReasoningButton {
-  display: flex;
-  width: fit-content;
+.trHeader {
+  display: inline-flex;
   min-height: 20px;
   align-items: center;
   gap: 6px;
   padding: 0;
   border: 0;
+  border-radius: 4px;
   background: transparent;
-  color: rgba(220, 228, 238, 0.62);
   text-align: left;
   cursor: default;
 }
 
-.rawReasoningClickable {
+.trClickable {
   cursor: pointer;
 }
 
-.rawReasoningTitle {
+.trClickable:focus-visible {
+  outline: 1px solid rgba(142, 240, 219, 0.45);
+  outline-offset: 3px;
+}
+
+.trLabel {
+  color: rgba(220, 228, 238, 0.55);
   font-size: 13px;
   line-height: 18px;
   font-weight: 500;
   letter-spacing: -0.005em;
 }
 
-.rawReasoningTitle strong {
-  color: rgba(235, 241, 248, 0.68);
+.trVerb {
+  color: rgba(235, 241, 248, 0.78);
   font-weight: 500;
 }
 
-.rawReasoningShimmer {
+.trCount {
+  color: rgba(220, 228, 238, 0.38);
+  font-size: 11px;
+}
+
+.trHeader svg {
+  color: rgba(220, 228, 238, 0.5);
+  transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.trChevronOpen {
+  transform: rotate(180deg);
+}
+
+/* 标题微光：一条柔和的亮度谷扫过文字 */
+.trShimmer {
   color: transparent;
   background: linear-gradient(
     90deg,
-    rgba(220, 228, 238, 0.55) 0%,
-    rgba(220, 228, 238, 0.55) 30%,
-    rgba(220, 228, 238, 0.22) 45%,
-    rgba(220, 228, 238, 0.22) 55%,
-    rgba(220, 228, 238, 0.55) 70%,
-    rgba(220, 228, 238, 0.55) 100%
+    rgba(220, 228, 238, 0.6) 0%,
+    rgba(220, 228, 238, 0.6) 30%,
+    rgba(220, 228, 238, 0.24) 45%,
+    rgba(220, 228, 238, 0.24) 55%,
+    rgba(220, 228, 238, 0.6) 70%,
+    rgba(220, 228, 238, 0.6) 100%
   );
   background-size: 300% 100%;
   -webkit-background-clip: text;
   background-clip: text;
-  animation: rawReasoningShine 2.25s cubic-bezier(0.25, 0.1, 0.25, 1) infinite;
+  animation: trShine 2.25s cubic-bezier(0.25, 0.1, 0.25, 1) infinite;
 }
 
-.rawReasoningPanel {
+.trCollapsible {
   display: grid;
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transition: grid-template-rows 220ms ease, opacity 180ms ease;
-}
-
-.rawReasoningPanelOpen {
   grid-template-rows: 1fr;
   opacity: 1;
+  transition:
+    grid-template-rows 320ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 220ms ease;
 }
 
-.rawReasoningText {
+.trCollapsed {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.trInner {
   min-height: 0;
-  max-height: 180px;
   overflow: hidden;
+}
+
+/* 视口随内容生长、封顶 180px；思考中由 JS 钉在底部并配渐隐遮罩，
+   完成后用户展开时转为原生滚动，遮罩跟随滚动位置。 */
+.trViewport {
+  max-height: 180px;
   margin-top: 6px;
-  padding: 0 0 4px;
-  color: rgba(220, 228, 238, 0.52);
+  overflow: hidden;
+}
+
+.trScroll {
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.trScroll::-webkit-scrollbar {
+  display: none;
+}
+
+.trSentence {
+  margin: 0;
+  color: rgba(220, 228, 238, 0.58);
   font-size: 13px;
   line-height: 20px;
+  font-weight: 425;
+  letter-spacing: -0.005em;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.rawReasoningPanelOpen .rawReasoningText {
-  overflow-y: auto;
-}
-
-.rawReasoningCursor {
+.trCursor {
   display: inline-block;
   width: 1px;
   height: 1.08em;
   margin-left: 2px;
   vertical-align: -0.12em;
   background: var(--run-accent);
-  animation: cursorBlink 900ms steps(2, jump-none) infinite;
+  animation: cursorBlink 900ms steps(1) infinite;
 }
 
 .disclosureButton,
@@ -371,12 +401,66 @@
   font-size: 11px;
 }
 
+.toolButton > .toolSourceBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 7px;
+  border: 1px solid rgba(255, 207, 102, 0.32);
+  border-radius: 999px;
+  background: rgba(255, 207, 102, 0.10);
+  color: #ffcf66;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 .observationResult p {
   margin: 4px 0 0;
   color: rgba(220, 228, 238, 0.76);
   font-size: 13px;
   line-height: 1.6;
   overflow-wrap: anywhere;
+}
+
+.hintCard {
+  display: grid;
+  gap: 7px;
+  padding: 11px 13px;
+  border: 1px solid rgba(255, 207, 102, 0.28);
+  border-radius: 12px;
+  background: rgba(255, 207, 102, 0.075);
+  animation: eventEnter 260ms ease both;
+}
+
+.hintHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hintHeader span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #ffdc8c;
+  font-size: 12.5px;
+  font-weight: 750;
+}
+
+.hintHeader small {
+  color: rgba(255, 220, 140, 0.66);
+  font-size: 11px;
+}
+
+.hintCard p {
+  margin: 0;
+  color: rgba(235, 241, 248, 0.84);
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
 }
 
 .streamingText {
@@ -433,11 +517,22 @@
 
 /* QuickActions：Runtime 下发的结构化动作按钮。 */
 .quickActions {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 8px;
   margin-top: 4px;
   animation: eventEnter 260ms ease both;
+}
+
+.quickActionsLabel {
+  color: rgba(220, 228, 238, 0.58);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.quickActionList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .quickActionButton {
@@ -563,7 +658,7 @@
   46%, 100% { opacity: 0; }
 }
 
-@keyframes rawReasoningShine {
+@keyframes trShine {
   0%, 18% { background-position: 100% 0; }
   82%, 100% { background-position: 0% 0; }
 }
@@ -603,18 +698,22 @@
   .shimmer::after,
   .failureLine,
   .streamChunk,
-  .streamCursor {
+  .streamCursor,
+  .trCursor {
     animation: none !important;
   }
 
   .disclosureGrid,
-  .rawReasoningPanel,
-  .chevronOpen {
+  .chevronOpen,
+  .trCollapsible,
+  .trHeader svg {
     transition: none !important;
   }
 
-  .rawReasoningCursor,
-  .rawReasoningShimmer {
+  /* 微光依赖背景动画；减弱动效下退回纯色标题，避免文字不可见。 */
+  .trShimmer {
     animation: none !important;
+    background: none !important;
+    color: rgba(220, 228, 238, 0.6) !important;
   }
 }

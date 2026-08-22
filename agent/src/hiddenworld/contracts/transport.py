@@ -36,6 +36,11 @@ ProposalKind = Literal[
     "set_current_focus",
     "advance_effective_turn",
     "set_stalled_turns",
+    "increment_concept_mastery",
+    "increment_skill_mastery",
+    "set_explanation_preference",
+    "set_hint_level",
+    "set_last_hint",
     "record_opening",
 ]
 
@@ -59,6 +64,10 @@ class Proposal(BaseModel):
     fact: str = ""
     action: str = ""
     focus: str = ""
+    concept_id: str = ""
+    skill_id: str = ""
+    preference_key: Literal["", "detail", "analogy", "directness"] = ""
+    preference_value: str = ""
     value: int = 0
     text: str = ""
 
@@ -112,6 +121,7 @@ class AgentTurnRequest(BaseModel):
     public_scenario: PublicScenario = Field(description="学生可见题面；供 Interpreter 与 Mentor 使用。")
     hidden_world: HiddenWorld = Field(description="含答案。仅确定性组件消费。")
     learner_state: LearnerState
+    conversation_summary: str = ""
     transcript: list[Turn] = Field(default_factory=list)
     user_message: str
     structured_user_action: StructuredUserAction | None = None

@@ -62,6 +62,16 @@ _SEMANTIC_STOP_BIGRAMS = {
     "前后",
 }
 
+_RELATION_CUES = (
+    "对比",
+    "比较",
+    "同一个",
+    "同一",
+    "时间线",
+    "完成时间",
+    "耗时",
+)
+
 
 def normalize_user_text(value: str) -> str:
     """规范化中英文空白与大小写，保留语义字符。"""
@@ -126,6 +136,13 @@ def resolve_user_requested_actions(text: str, items: Iterable, *, action_attr: s
     if not normalized_text or not any(cue in normalized_text for cue in _OBSERVATION_CUES):
         return []
 
+    # 复合排查请求优先于单个模糊候选：例如“对比 Gateway 和 Nginx 的
+    # 完成时间”同时明确点名两个公开对象，不能被“网关”相关的单个配置
+    # 动作抢走。只有两个以上题目声明的实体词命中时才放行。
+    related = _resolve_related_entity_actions(normalized_text, items, action_attr)
+    if len(related) >= 2:
+        return related
+
     scored: list[tuple[str, int]] = []
     seen: set[str] = set()
     for item in items:
@@ -154,10 +171,53 @@ def resolve_user_requested_actions(text: str, items: Iterable, *, action_attr: s
             scored.append((action, score))
 
     if not scored:
+        # 复合排查请求经常只写出多个系统名，而不是逐字复述题目目录，
+        # 例如“对比 Gateway 和 Nginx 的完成时间”。这种情况只在明确的
+        # 关联/对比语气下放行，并且只匹配 target/alias 中声明的拉丁实体词；
+        # 不把 query_pattern 里的 request_id、SELECT 等实现字段当成动作名，
+        # 避免把一个请求扩展成无关工具枚举。
+        if not any(cue in normalized_text for cue in _RELATION_CUES):
+            return []
         return []
     best = max(score for _, score in scored)
     winners = [action for action, score in scored if score == best]
     return winners if len(winners) == 1 else []
+
+
+def _entity_tokens(value: str) -> set[str]:
+    """提取题目声明中的稳定拉丁实体词，用于复合观察的保守绑定。"""
+
+    return {
+        token
+        for token in re.findall(r"[a-z][a-z0-9_-]{2,}", value.casefold())
+        if token not in {"select", "show", "from", "where", "status"}
+    }
+
+
+def _resolve_related_entity_actions(text: str, items: Iterable, action_attr: str) -> list[str]:
+    if not any(cue in text for cue in _RELATION_CUES):
+        return []
+    text_tokens = _entity_tokens(text)
+    related: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        action = str(getattr(item, action_attr, "") or "").strip()
+        if not action or action in seen:
+            continue
+        declared_tokens = _entity_tokens(
+            normalize_user_text(
+                " ".join(
+                    [
+                        str(getattr(item, "target", "") or ""),
+                        *[str(value or "") for value in getattr(item, "aliases", ())],
+                    ]
+                )
+            )
+        )
+        if text_tokens.intersection(declared_tokens):
+            related.append(action)
+            seen.add(action)
+    return related
 
 
 def _meaningful_bigram_overlap(left: str, right: str) -> int:

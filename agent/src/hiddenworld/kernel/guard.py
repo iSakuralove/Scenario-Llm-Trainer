@@ -74,6 +74,12 @@ _OBSERVATION_RECORDING_MARKERS = (
     "记录了观察",
     "观察已记录",
 )
+_TEMPLATED_PRAISE_MARKERS = (
+    "非常棒",
+    "太棒了",
+    "关键线索",
+    "继续验证",
+)
 _POSITIVE_ACTION_RECORD_RE = re.compile(
     r"(?:已|已经|好的[，, ]*)[^。！？!?；;]{0,24}"
     r"(?:记录|记下|保存|确认|收到)[^。！？!?；;]{0,24}"
@@ -124,7 +130,23 @@ class Guard:
         constraints: TeachingConstraints,
         context: GuardContext,
     ) -> MentorAction:
-        if any(contains_forbidden_entity(action.reply, entity) for entity in context.forbidden_entities):
+        # 同一数值、状态码或组件名可能同时出现在本轮已公开观察和后续隐藏证据中。
+        # 一旦工具卡已经公开该实体，导师可以引用它；仍未公开的关系和结论继续由
+        # 其余禁词、结论与教学策略边界约束。否则合法观察会因跨证据复用实体而被
+        # 误判为泄露，导致整轮反复重写后失败。
+        public_observation_entities = {
+            entity
+            for entity in context.forbidden_entities
+            if any(
+                contains_forbidden_entity(observation, entity)
+                for observation in context.public_observation_texts
+            )
+        }
+        if any(
+            entity not in public_observation_entities
+            and contains_forbidden_entity(action.reply, entity)
+            for entity in context.forbidden_entities
+        ):
             raise GuardViolation("entity_leak", "回复包含尚未公开的信息，请只依据已公开观察重写。")
         confirmation_forbidden = any(
             item == "confirm_hypothesis" for item in constraints.must_not
@@ -168,6 +190,11 @@ class Guard:
                 "reply_internal_framing",
                 "回复不能暴露内部引导状态或把观察写成系统记录动作，请由模型重新生成。",
             )
+        if any(marker in reply for marker in _TEMPLATED_PRAISE_MARKERS):
+            raise GuardViolation(
+                "templated_praise",
+                "回复使用了固定夸奖模板，请改为说明学生实际缩小了哪一段范围。",
+            )
         # 当 Runtime 已确定本轮没有形成公开观察时，不能把动作、意图或
         # 查询结果写成“已记录/已完成”。这不是依赖某一句固定文案，而是
         # 对公开事实状态与回复中的正向行为声明做一致性校验。
@@ -179,14 +206,18 @@ class Guard:
                 "reply_claims_observation_without_result",
                 "本轮没有形成公开观察，回复不能声称已记录动作、已完成检查或已得到结果。",
             )
-        if (
-            any(marker in reply for marker in (*_EXPLICIT_GUIDANCE_MARKERS, *_EXPLICIT_CONCLUSION_MARKERS))
-            or _IMPLICIT_CONCLUSION_RE.search(reply) is not None
+        contains_guidance = (
+            any(marker in reply for marker in _EXPLICIT_GUIDANCE_MARKERS)
             or _IMPLICIT_GUIDANCE_RE.search(reply) is not None
             or _SYSTEM_CONFIRMATION_RE.search(reply) is not None
             or _SCOPE_EXCLUSION_RE.search(reply) is not None
             or _REMAINING_SCOPE_RE.search(reply) is not None
-        ):
+        )
+        contains_conclusion = (
+            any(marker in reply for marker in _EXPLICIT_CONCLUSION_MARKERS)
+            or _IMPLICIT_CONCLUSION_RE.search(reply) is not None
+        )
+        if contains_guidance or (contains_conclusion and not context.completion_allowed):
             raise GuardViolation(
                 "reply_policy_violation",
                 "回复包含明确排查路径或未获证据支持的结论，请由模型重新生成自然回复。",

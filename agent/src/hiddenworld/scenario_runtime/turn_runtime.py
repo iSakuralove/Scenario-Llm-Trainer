@@ -7,6 +7,7 @@ Runtime 持有，模型只看到 AgentContext。
 
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from time import perf_counter
 from typing import Any
@@ -21,13 +22,13 @@ from hiddenworld.contracts import (
     GuidanceState,
     TeachingDecision,
     AgentTurnResult,
-    AnswerAttempt,
     AuditTrace,
     GuardContext,
     HYPOTHESIS_OTHER,
     MentorAction,
     FinalReplyOutput,
     PublicAnswerComparison,
+    PublicObservation,
     ToolCall,
     ToolCallsOutput,
     PublicTraceEvent,
@@ -39,14 +40,17 @@ from hiddenworld.contracts import (
     validate_scenario_contract,
 )
 from .state_reducer import StateReducer
+from hiddenworld.kernel.cluegate import ClueGate
 from hiddenworld.kernel.guard import Guard
 from hiddenworld.runtime import (
-    STALL_UNLOCK_THRESHOLD,
+    PublicBoundaryRejected,
     TurnDeadlineExceeded,
     _coverage_label,
     _elapsed_ms,
     _first_release_category,
+    _fallback_mentor_action,
     _forbidden_entities,
+    _public_guard_observation_texts,
     _evidence_request_for_analysis,
     _new_items,
     _observe_actions,
@@ -59,6 +63,9 @@ from .agent_loop import AgentLoop, AgentLoopBudgetExceeded, AgentLoopEvent
 from .batch_scheduler import BatchScheduler
 from .context import project_agent_context
 from .virtual_tools import VirtualObservationExecutor
+
+
+logger = logging.getLogger("hiddenworld.turn_runtime")
 
 
 class SingleAgentRuntime:
@@ -80,6 +87,24 @@ class SingleAgentRuntime:
         if request.hidden_world.canonical_answer is not None:
             validate_scenario_contract(request.hidden_world)
         timeout_seconds = max(request.budget.deadline_ms, 1) / 1000
+        started_at = perf_counter()
+        phase_state = {"value": "deadline_guard"}
+
+        def set_phase(phase: str) -> None:
+            phase_state["value"] = phase
+
+        logger.info(
+            "[hiddenworld-turn-runtime] request_id=%s session_id=%s state_revision=%s "
+            "budget_deadline_ms=%s timeout_seconds=%s structured_action=%s quick_action=%s "
+            "phase=deadline_guard",
+            request.request_id,
+            request.session_id,
+            request.state_revision,
+            request.budget.deadline_ms,
+            timeout_seconds,
+            request.structured_user_action.action_id if request.structured_user_action else "",
+            request.structured_user_action is not None and not request.user_message.strip(),
+        )
         import asyncio
 
         try:
@@ -90,10 +115,43 @@ class SingleAgentRuntime:
                     on_public_trace=on_public_trace,
                     on_reply_delta=on_reply_delta,
                     on_reasoning_delta=on_reasoning_delta,
+                    on_phase=set_phase,
                 ),
                 timeout=timeout_seconds,
             )
+        except TurnDeadlineExceeded as exc:
+            logger.error(
+                "[hiddenworld-turn-runtime] request_id=%s session_id=%s state_revision=%s "
+                "budget_deadline_ms=%s elapsed_ms=%s phase=%s "
+                "error_type=%s detail=%s",
+                request.request_id,
+                request.session_id,
+                request.state_revision,
+                request.budget.deadline_ms,
+                int((perf_counter() - started_at) * 1000),
+                phase_state["value"],
+                type(exc).__name__,
+                str(exc),
+            )
+            raise
         except TimeoutError as exc:
+            elapsed_ms = int((perf_counter() - started_at) * 1000)
+            outer_deadline_reached = elapsed_ms >= max(1, request.budget.deadline_ms - 1000)
+            timeout_origin = "outer_wait_for" if outer_deadline_reached else "inner_timeout_propagated"
+            logger.error(
+                "[hiddenworld-turn-runtime] request_id=%s session_id=%s state_revision=%s "
+                "budget_deadline_ms=%s elapsed_ms=%s phase=%s timeout_origin=%s "
+                "error_type=%s detail=%s",
+                request.request_id,
+                request.session_id,
+                request.state_revision,
+                request.budget.deadline_ms,
+                elapsed_ms,
+                phase_state["value"],
+                timeout_origin,
+                type(exc).__name__,
+                str(exc),
+            )
             raise TurnDeadlineExceeded("turn deadline exceeded") from exc
 
     async def _run_turn(
@@ -104,7 +162,13 @@ class SingleAgentRuntime:
         on_public_trace,
         on_reply_delta,
         on_reasoning_delta,
+        on_phase=None,
     ):
+        def mark_phase(phase: str) -> None:
+            if on_phase is not None:
+                on_phase(phase)
+
+        mark_phase("context_projection")
         started = perf_counter()
         context = project_agent_context(request)
         authorization_context = context
@@ -122,68 +186,130 @@ class SingleAgentRuntime:
             if text:
                 buffered_reply_deltas.append(text)
 
+        loop_streamer = _LoopTraceStreamer(request, executor, on_public_trace)
+
+        async def on_loop_event(event: AgentLoopEvent) -> None:
+            if event.kind == "tool_batch_started":
+                await loop_streamer.emit_tool_started(
+                    [call.tool_id for call in event.payload]
+                )
+            elif event.kind == "tool_result" and isinstance(event.payload, AgentToolResult):
+                await loop_streamer.emit_tool_result(event.payload)
+
         quick_action_turn = request.structured_user_action is not None and not request.user_message.strip()
         if quick_action_turn:
-            # QuickAction 已经是用户明确授权的动作：先由 Runtime 本地执行，
-            # 再让同一个 ScenarioAgent 读取结果并生成一次最终回复，不经过
-            # tool_calls 规划，因此不会为一次点击额外请求第二轮模型。
+            # QuickAction 是用户明确授权的动作，但仍必须经过 ScenarioAgent
+            # 产生 tool_calls 后才能执行。此前这里先调用 executor，再调用模型，
+            # 导致工具卡先于模型阶段出现，页面看起来像“按钮直接查数据”。
             action_id = request.structured_user_action.action_id
-            quick_result = await executor.execute(
-                ToolCall(call_id=f"quick:{action_id}", tool_id=action_id),
-                context,
+            quick_call = ToolCall(call_id=f"quick:{action_id}", tool_id=action_id)
+            quick_rejection = scheduler.authorize_action(
+                action_id,
+                action_catalog=context.action_catalog,
+                authorized_actions=context.authorized_actions,
+                call_id=quick_call.call_id,
             )
-            model_context = context.model_copy(
-                update={
-                    "tool_results": [quick_result],
-                    "evidence_request": (
-                        EvidenceRequestView(
-                            requested_text=request.structured_user_action.normalized_scope,
-                            availability="PREREQUISITE_UNMET",
-                        )
-                        if quick_result.error_code == "unmet_prerequisite"
-                        else context.evidence_request
-                    ),
-                    # 动作已经执行完，禁止模型再次规划同一个观察。
-                    "authorized_actions": [],
-                }
-            )
-            run_stream = getattr(runner, "run_stream", None)
-            if (on_reply_delta is not None or on_reasoning_delta is not None) and callable(run_stream):
-                stream_kwargs = {}
-                if on_reply_delta is not None:
-                    stream_kwargs["on_reply_delta"] = buffer_reply_delta
-                if on_reasoning_delta is not None:
-                    stream_kwargs["on_reasoning_delta"] = on_reasoning_delta
-                final_output = await run_stream(model_context, **stream_kwargs)
-            else:
-                final_output = await runner.run(model_context)
-            if isinstance(final_output, ToolCallsOutput):
-                final_output = await _retry_final_reply(
-                    runner,
-                    model_context,
-                    feedback="tool_result_received_but_final_reply_missing",
+            if quick_rejection is not None:
+                # 无效 QuickAction 不能触碰虚拟世界；把拒绝结果作为模型输入，
+                # 让导师生成安全的失败说明，且不发出任何观察正文。
+                mark_phase("quick_action_rejected")
+                rejected_context = context.model_copy(
+                    update={"tool_results": [quick_rejection], "authorized_actions": []}
                 )
-                if final_output is None:
-                    raise TurnDeadlineExceeded("agent did not produce a final reply after the authorized observation")
-            events = [
-                AgentLoopEvent("tool_result", quick_result),
-                AgentLoopEvent("final_reply", final_output),
-            ]
+                final_output = await runner.run(rejected_context)
+                if isinstance(final_output, ToolCallsOutput):
+                    final_output = await _retry_final_reply(
+                        runner,
+                        rejected_context,
+                        feedback="tool_result_received_but_final_reply_missing",
+                        on_reasoning_delta=on_reasoning_delta,
+                    )
+                    if final_output is None:
+                        raise PublicBoundaryRejected(
+                            "agent did not produce a final reply after the rejected action"
+                        )
+                events = [
+                    AgentLoopEvent("tool_result", quick_rejection),
+                    AgentLoopEvent("final_reply", final_output),
+                ]
+            else:
+                # 合法 QuickAction 走与普通消息相同的模型→工具→模型循环，
+                # 但把预算收窄到一次授权观察，避免点击动作触发工具枚举。
+                mark_phase("quick_action_model")
+                quick_loop = AgentLoop(
+                    runner,
+                    executor,
+                    scheduler=scheduler,
+                    max_model_rounds=3,
+                    max_tool_calls=1,
+                    on_reply_delta=buffer_reply_delta if on_reply_delta is not None else None,
+                    on_reasoning_delta=on_reasoning_delta,
+                    on_loop_event=on_loop_event,
+                )
+                try:
+                    final_output, events = await quick_loop.run(context)
+                except AgentLoopBudgetExceeded as exc:
+                    raise PublicBoundaryRejected(str(exc)) from exc
+                successful_quick_actions = {
+                    item.payload.tool_id
+                    for item in events
+                    if item.kind == "tool_result"
+                    and isinstance(item.payload, AgentToolResult)
+                    and item.payload.status == "succeeded"
+                }
+                planned_quick_action = any(
+                    item.kind == "tool_result"
+                    and isinstance(item.payload, AgentToolResult)
+                    and item.payload.tool_id == action_id
+                    for item in events
+                )
+                if not planned_quick_action:
+                    # 模型首轮若误返回 final_reply，给它一次明确的结构化约束
+                    # 重试；仍不产生 tool_call 就整轮拒绝，绝不由 Runtime
+                    # 偷执行来“修正”模型行为。
+                    # 首轮可能已经通过流式接口产出了一段无效正文候选；
+                    # 该候选没有经过工具观察和最终 Guard，不得混入重试后的
+                    # 正文缓冲。提交屏障虽会再次校验，这里仍要先清空内存态，
+                    # 避免调试流/回调消费者误把两次模型输出拼成一段正文。
+                    buffered_reply_deltas.clear()
+                    retry_context = context.model_copy(
+                        update={"reply_feedback": "structured_action_requires_tool_call"}
+                    )
+                    try:
+                        retry_output, retry_events = await quick_loop.run(retry_context)
+                    except AgentLoopBudgetExceeded as exc:
+                        raise PublicBoundaryRejected(str(exc)) from exc
+                    final_output = retry_output
+                    events.extend(retry_events)
+                    successful_quick_actions = {
+                        item.payload.tool_id
+                        for item in events
+                        if item.kind == "tool_result"
+                        and isinstance(item.payload, AgentToolResult)
+                        and item.payload.status == "succeeded"
+                    }
+                if action_id not in successful_quick_actions:
+                    # 模型没有真正产生并执行点击对应的 tool_call，不能把
+                    # 任何直接/猜测结果伪装成 QuickAction 观察。
+                    raise PublicBoundaryRejected("agent did not plan the authorized quick action")
         else:
             loop = AgentLoop(
                 runner,
                 executor,
                 scheduler=scheduler,
                 max_model_rounds=11,
-                max_tool_calls=10,
+                max_tool_calls=5,
                 on_reply_delta=buffer_reply_delta if on_reply_delta is not None else None,
                 on_reasoning_delta=on_reasoning_delta,
+                on_loop_event=on_loop_event,
             )
             try:
+                mark_phase("agent_loop")
                 final_output, events = await loop.run(context)
             except AgentLoopBudgetExceeded as exc:
-                raise TurnDeadlineExceeded(str(exc)) from exc
+                raise PublicBoundaryRejected(str(exc)) from exc
 
+        mark_phase("assessment")
         successful_actions = [
             item.payload.tool_id
             for item in events
@@ -203,8 +329,8 @@ class SingleAgentRuntime:
         actions = [] if is_clarification else [item for item in successful_actions if item]
         actions = list(dict.fromkeys(actions))
         effective_analysis = analysis.model_copy(update={"actions": actions})
-        # QuickAction 已由 Runtime 直接执行，模型回注上下文里故意没有授权动作，
-        # 因此模型返回的 assessment.actions 可能为空；对外传输的结构化
+        # QuickAction 的授权动作由模型 tool_call 触发并由 Runtime 执行，模型回注
+        # 上下文里保留工具结果；对外传输的结构化
         # TurnAssessment 必须与最终 TurnAnalysis 共用同一份 Runtime 事实，
         # 否则 Go 会把它判定为跨层语义不一致。
         effective_assessment = assessment.model_copy(update={"actions": actions})
@@ -213,11 +339,13 @@ class SingleAgentRuntime:
         )
         # 先用同一个 StateReducer 入口取得本轮允许公开的证据，再过滤执行器
         # 返回；最终归约仍会在观察注入后重新计算状态、关系和教学约束。
+        mark_phase("pre_reduction")
         pre_reduction = StateReducer().reduce(
             request,
             analysis=effective_analysis,
             observations=(),
             teaching_decision=teaching_decision,
+            turn_assessment=effective_assessment,
             progress_assessment=assessment.progress_assessment,
             advance_state=False,
         )
@@ -225,39 +353,28 @@ class SingleAgentRuntime:
         observations = []
         if not is_clarification:
             # 工具执行器已经完成一次确定性观察，兼容层只做授权/ClueGate 投影，
-            # 不再重新调用 HiddenWorldEngine.observe。
-            executed = executor.executed_observations
+            # 不再重新调用 HiddenWorldEngine.observe。过滤逻辑与循环内实时旁路
+            # 共用同一助手，保证两处外发内容一致。
             for action in actions:
-                observation = executed.get(action)
-                if observation is None:
-                    continue
-                allowed_yields = [
-                    item
-                    for item in observation.yields_evidence
-                    if item in approved_releases or item in request.learner_state.collected_evidence
-                ]
-                if observation.yields_evidence and set(allowed_yields) != set(observation.yields_evidence):
-                    observation = observation.model_copy(
-                        update={
-                            "result": "本轮暂未形成新的可公开观察。",
-                            "is_negative": False,
-                            "yields_evidence": [],
-                            "rules_out": [],
-                        },
-                        deep=True,
-                    )
-                elif allowed_yields != observation.yields_evidence:
-                    observation = observation.model_copy(update={"yields_evidence": allowed_yields}, deep=True)
-                observations.append(observation)
+                observation = _filtered_observation(
+                    executor,
+                    action,
+                    approved_releases,
+                    request.learner_state.collected_evidence,
+                )
+                if observation is not None:
+                    observations.append(observation)
         if observations:
             teaching_decision = _teaching_decision_from_agent(
                 final_output, events, effective_assessment, has_observations=True
             )
+        mark_phase("state_reduction")
         reduction = StateReducer().reduce(
             request,
             analysis=effective_analysis,
             observations=observations,
             teaching_decision=teaching_decision,
+            turn_assessment=effective_assessment,
             progress_assessment=assessment.progress_assessment,
             advance_state=not is_clarification,
         )
@@ -266,16 +383,11 @@ class SingleAgentRuntime:
         answer_public: PublicAnswerComparison | None = None
         answer_attempt_id = ""
         if analysis.contains_answer_attempt:
-            attempt = AnswerAttempt(
-                answer_attempt_id=f"{request.request_id}:answer",
-                session_id=request.session_id,
-                turn_id=request.request_id,
-                revision=request.state_revision,
-                text=analysis.answer_attempt_text,
-            )
+            mark_phase("compare_answer")
             from hiddenworld.agents.tools import CompareAnswerRuntime
 
-            tool_runtime = CompareAnswerRuntime(
+            answer_attempt_id = f"{request.request_id}:answer"
+            tool_runtime = CompareAnswerRuntime.bind_user_message(
                 request_id=request.request_id,
                 session_id=request.session_id,
                 turn_id=request.request_id,
@@ -283,18 +395,19 @@ class SingleAgentRuntime:
                 world=request.hidden_world,
                 learner_state=projected_state,
                 analysis=analysis,
-                attempts={attempt.answer_attempt_id: attempt},
+                user_message=request.user_message,
             )
             answer_public = tool_runtime.execute_bound()
             answer_internal = tool_runtime.internal_result
-            answer_attempt_id = attempt.answer_attempt_id
 
+        mark_phase("final_reduction")
         reduction = StateReducer().reduce(
             request,
             analysis=effective_analysis,
             observations=observations,
             answer_comparison=answer_internal,
             teaching_decision=teaching_decision,
+            turn_assessment=effective_assessment,
             progress_assessment=assessment.progress_assessment,
             advance_state=not is_clarification,
         )
@@ -307,16 +420,33 @@ class SingleAgentRuntime:
             projected_state.ruled_out_hypotheses,
         )
         verification = VerificationResult(
-            relation=relation,
-            coverage=anti_guess.coverage,
-            completion_allowed=anti_guess.completion_allowed,
+            relation=(answer_internal.relation if answer_internal is not None else relation),
+            coverage=(answer_internal.evidence_coverage if answer_internal is not None else anti_guess.coverage),
+            completion_allowed=(
+                answer_internal.completion_allowed
+                if answer_internal is not None
+                else anti_guess.completion_allowed
+            ),
             ruled_out_this_turn=ruled_out_this_turn,
             answer_comparison=answer_internal,
         )
         constraints = reduction.constraints
         guidance_state = reduction.guidance_state
         turn_control = reduction.turn_control
-        evidence_request = _evidence_request_for_analysis(analysis)
+        normalized_primary_task = teaching_decision.primary_task
+        if normalized_primary_task == "close_investigation" and not turn_control.completion_allowed:
+            normalized_primary_task = (
+                "correct_conclusion" if effective_assessment.contains_answer_attempt else "acknowledge_progress"
+            )
+        teaching_decision = teaching_decision.model_copy(
+            update={
+                "teaching_state": guidance_state.teaching_state,
+                "primary_task": normalized_primary_task,
+                "allow_explicit_next_step": False,
+                "allow_ruled_out_scope": False,
+            }
+        )
+        evidence_request = _evidence_request_for_analysis(analysis, request)
 
         guard_context = GuardContext(
             forbidden_entities=_forbidden_entities(request, projected_state),
@@ -328,7 +458,11 @@ class SingleAgentRuntime:
                 request=request,
                 fallback=evidence_request,
             ),
-            public_observation_texts=[item.result for item in observations],
+            public_observation_texts=_public_guard_observation_texts(
+                request,
+                projected_state,
+                observations,
+            ),
         )
         analysis = analysis.model_copy(
             update={
@@ -346,26 +480,26 @@ class SingleAgentRuntime:
             guard_context,
             required_reply_mode=_required_reply_mode(events, observations),
         )
-        public_trace = _public_trace_before_mentor(
-            public_summary=analysis.public_summary,
-            observations=observations,
-            analysis_contains_answer=analysis.contains_answer_attempt,
-            answer_attempt_id=answer_attempt_id,
-            answer_public=answer_public,
-            compare_answer_ms=0,
-        )
         action = _mentor_action_from_reply(
             final_output.reply,
             teaching_decision,
             reply_mode=getattr(final_output, "reply_mode", "acknowledgement"),
             required_reply_mode=guard_context.required_reply_mode,
         )
+        mark_phase("reply_guard")
         try:
             action = Guard().validate(action, constraints=constraints, context=guard_context)
         except ValueError as exc:
+            logger.warning(
+                "[hiddenworld-reply-guard] request_id=%s session_id=%s phase=initial code=%s",
+                request.request_id,
+                request.session_id,
+                getattr(exc, "code", "reply_guard_rejected"),
+            )
             last_error = exc
             accepted = False
-            for _ in range(2):
+            for retry_index in range(1, 3):
+                mark_phase("reply_guard_retry")
                 retry_context = _reply_retry_context(
                     context,
                     events,
@@ -376,6 +510,7 @@ class SingleAgentRuntime:
                     runner,
                     retry_context,
                     feedback=retry_context.reply_feedback,
+                    on_reasoning_delta=on_reasoning_delta,
                 )
                 if retry_output is None:
                     break
@@ -390,25 +525,68 @@ class SingleAgentRuntime:
                     accepted = True
                     break
                 except ValueError as retry_error:
+                    logger.warning(
+                        "[hiddenworld-reply-guard] request_id=%s session_id=%s phase=retry "
+                        "attempt=%d code=%s",
+                        request.request_id,
+                        request.session_id,
+                        retry_index,
+                        getattr(retry_error, "code", "reply_guard_rejected"),
+                    )
                     last_error = retry_error
-            else:
-                raise TurnDeadlineExceeded(
-                    "agent did not produce a reply accepted by the public boundary"
-                ) from last_error
             if not accepted:
-                raise TurnDeadlineExceeded(
-                    "agent did not produce a reply accepted by the public boundary"
-                ) from last_error
+                mark_phase("reply_guard_fallback")
+                action = _fallback_mentor_action(
+                    request=request,
+                    analysis=analysis,
+                    observations=observations,
+                    constraints=constraints,
+                    guard_context=guard_context,
+                )
+                try:
+                    action = Guard().validate(action, constraints=constraints, context=guard_context)
+                except ValueError as fallback_error:
+                    logger.error(
+                        "[hiddenworld-reply-guard] request_id=%s session_id=%s phase=fallback code=%s",
+                        request.request_id,
+                        request.session_id,
+                        getattr(fallback_error, "code", "reply_guard_rejected"),
+                    )
+                    raise PublicBoundaryRejected(
+                        "agent did not produce a reply accepted by the public boundary"
+                    ) from fallback_error
         # 只有最终正文通过 Guard 后才把本轮结构化理解交给流式消费方；
         # 它包含模型生成的 public_summary，不能在失败/重生成前提前外发。
+        mark_phase("public_stream_replay")
         if on_turn_analysis is not None:
             await on_turn_analysis(analysis)
         # 公开理解摘要和观察必须等最终回复通过 Guard 后再发送。模型流式输出
         # 只是私有候选，Guard 拒绝或重生成时不能让旧摘要残留在学生界面。
+        # 循环内已经实时外发过的观察不再重复发送；序号接在旁路事件之后连续。
+        trace_offset = len(loop_streamer.events)
+        public_trace = _public_trace_before_mentor(
+            public_summary=analysis.public_summary,
+            observations=[
+                item for item in observations if item.action not in loop_streamer.streamed_actions
+            ],
+            analysis_contains_answer=analysis.contains_answer_attempt,
+            answer_attempt_id=answer_attempt_id,
+            answer_public=answer_public,
+            compare_answer_ms=0,
+        )
+        public_trace = [
+            item.model_copy(update={"sequence": trace_offset + item.sequence})
+            for item in public_trace
+        ]
         await _emit_trace(on_public_trace, public_trace)
-        final_trace = _public_trace_after_mentor(start_sequence=len(public_trace) + 1)
+        final_trace = _public_trace_after_mentor(
+            start_sequence=trace_offset + len(public_trace) + 1
+        )
         public_trace.extend(final_trace)
         await _emit_trace(on_public_trace, final_trace)
+        # 完整落库序列 = 循环旁路事件 + 收尾事件；非流式调用方从 result 拿到
+        # 与流式路径同一份顺序。
+        public_trace = [*loop_streamer.events, *public_trace]
         if on_reply_delta is not None:
             buffered_reply = "".join(buffered_reply_deltas)
             if buffered_reply == action.reply and buffered_reply:
@@ -421,6 +599,7 @@ class SingleAgentRuntime:
                 # Guard/归一化改变了正文时，丢弃不一致的预览，发送最终安全正文一次。
                 await _emit_stream_frames(on_reply_delta, action.reply)
 
+        mark_phase("result_build")
         return AgentTurnResult(
             request_id=request.request_id,
             expected_revision=request.state_revision,
@@ -451,6 +630,124 @@ async def _emit_trace(callback, events: list[PublicTraceEvent]) -> None:
         return
     for event in events:
         await callback(event)
+
+
+def _filtered_observation(executor, action, approved_releases, collected_evidence):
+    """按本轮 ClueGate 批准投影可公开观察；循环内旁路与收尾共用同一规则。
+
+    未获批证据对应的结果整体中性化，部分获批只裁剪 yields，正文保持不变。
+    """
+    observation = executor.executed_observations.get(action)
+    if observation is None:
+        return None
+    allowed_yields = [
+        item
+        for item in observation.yields_evidence
+        if item in approved_releases or item in collected_evidence
+    ]
+    if observation.yields_evidence and set(allowed_yields) != set(observation.yields_evidence):
+        return observation.model_copy(
+            update={
+                "result": "本轮暂未形成新的可公开观察。",
+                "is_negative": False,
+                "yields_evidence": [],
+                "rules_out": [],
+            },
+            deep=True,
+        )
+    if allowed_yields != observation.yields_evidence:
+        return observation.model_copy(update={"yields_evidence": allowed_yields}, deep=True)
+    return observation
+
+
+class _LoopTraceStreamer:
+    """循环内实时旁路：工具开始/结束即时外发，学生不再对着静默等待。
+
+    安全边界与收尾一致：观察内容仍经 ClueGate（同一确定性函数，以累计成功
+    动作调用，最终与收尾 pre_reduction 的输入完全相同）过滤后才能外发；
+    未获批时外发的是中性占位，与收尾口径一字不差。序号从 1 连续分配，
+    收尾事件必须接在旁路序号之后续编。
+    """
+
+    def __init__(self, request, executor, on_public_trace) -> None:
+        self.request = request
+        self.executor = executor
+        self.on_public_trace = on_public_trace
+        self.events: list[PublicTraceEvent] = []
+        self.streamed_actions: set[str] = set()
+        self._successful_actions: list[str] = []
+        self._sequence = 0
+
+    def _next_sequence(self) -> int:
+        self._sequence += 1
+        return self._sequence
+
+    async def _emit(self, event: PublicTraceEvent) -> None:
+        sequenced = event.model_copy(update={"sequence": self._next_sequence()})
+        self.events.append(sequenced)
+        if self.on_public_trace is not None:
+            await self.on_public_trace(sequenced)
+
+    async def emit_tool_started(self, tool_ids) -> None:
+        for tool_id in tool_ids:
+            await self._emit(
+                PublicTraceEvent(
+                    sequence=0,
+                    kind="agent_tool_started",
+                    tool_name=tool_id,
+                    status="started",
+                )
+            )
+
+    async def emit_tool_result(self, result: AgentToolResult) -> None:
+        if result.status != "succeeded":
+            await self._emit(
+                PublicTraceEvent(
+                    sequence=0,
+                    kind="agent_tool_result",
+                    tool_name=result.tool_id,
+                    status="failed",
+                )
+            )
+            return
+        if result.tool_id not in self._successful_actions:
+            self._successful_actions.append(result.tool_id)
+        approved = ClueGate().approve(
+            self.request.hidden_world,
+            actions=list(self._successful_actions),
+            collected_evidence=self.request.learner_state.collected_evidence,
+            max_releases=self.request.budget.max_releases,
+        )
+        observation = _filtered_observation(
+            self.executor,
+            result.tool_id,
+            approved,
+            self.request.learner_state.collected_evidence,
+        )
+        self.streamed_actions.add(result.tool_id)
+        if observation is None:
+            await self._emit(
+                PublicTraceEvent(
+                    sequence=0,
+                    kind="agent_tool_result",
+                    tool_name=result.tool_id,
+                    status="completed",
+                )
+            )
+            return
+        await self._emit(
+            PublicTraceEvent(
+                sequence=0,
+                kind="agent_tool_result",
+                tool_name=result.tool_id,
+                status="completed",
+                observation=PublicObservation(
+                    action=result.tool_id,
+                    result=observation.result,
+                    is_negative=observation.is_negative,
+                ),
+            )
+        )
 
 
 def _authorizations_from_context(request: AgentTurnRequest, context) -> list[UserActionAuthorization]:
@@ -489,7 +786,17 @@ def _assessment_from_single_agent(request, final_output, events, successful_acti
             confidence=0.0,
         )
     assessment = TurnAssessment.model_validate(semantic.model_dump())
+    runtime_stuck = assessment.is_stuck or assessment.intent in {
+        "stuck",
+        "help_request",
+        "request_hint",
+    }
+    if request.learner_state.stalled_turns >= 1 and assessment.progress_assessment == "no_progress":
+        runtime_stuck = True
+    if runtime_stuck != assessment.is_stuck:
+        assessment = assessment.model_copy(update={"is_stuck": runtime_stuck})
     assessment = _normalize_hypothesis_for_world(request, assessment)
+    assessment = _normalize_claim_semantics(assessment)
     if request.structured_user_action is not None:
         # QuickAction 是后端签发的用户动作，模型不能把它改判成 chat，
         # 也不能覆盖已经签发的动作范围；是否产出观察仍以工具状态为准。
@@ -509,7 +816,12 @@ def _assessment_from_single_agent(request, final_output, events, successful_acti
                 "is_noise": False,
                 "made_claim": False,
                 "claim_type": "none",
+                "contains_answer_attempt": False,
+                "answer_attempt_text": "",
                 "confidence": max(assessment.confidence, 0.95),
+                "concept_mastery_signals": {},
+                "skill_mastery_signals": {},
+                "preference_signals": {},
             }
         )
     return assessment
@@ -555,6 +867,28 @@ def _normalize_hypothesis_for_world(request, assessment: TurnAssessment) -> Turn
         )
 
     return assessment.model_copy(update={"hypothesis_id": "", "hypothesis_raw": ""})
+
+
+def _normalize_claim_semantics(assessment: TurnAssessment) -> TurnAssessment:
+    """修复模型输出的跨字段矛盾；Go 侧会把这些组合判成整轮失败。
+
+    实测模型会把"学生提出了假设方向但没有明确断言"输出成
+    claim_type=hypothesis + made_claim=false——语义上讲得通，但
+    validateScenarioAssessmentConsistency 要求两者严格联动。枚举比布尔
+    更具体、也不会被 JSON 缺省吞掉，因此以 claim_type 为准回填布尔；
+    answer_attempt 同理，以是否存在非空文本为准。
+    """
+
+    update: dict[str, object] = {}
+    expected_claim = assessment.claim_type in {"observation", "hypothesis", "answer"}
+    if assessment.made_claim != expected_claim:
+        update["made_claim"] = expected_claim
+    expected_attempt = bool(assessment.answer_attempt_text.strip())
+    if assessment.contains_answer_attempt != expected_attempt:
+        update["contains_answer_attempt"] = expected_attempt
+    if not update:
+        return assessment
+    return assessment.model_copy(update=update)
 
 
 def _analysis_from_single_agent(
@@ -634,6 +968,11 @@ def _teaching_decision_from_agent(
         update = {
             "allow_explicit_next_step": False,
             "allow_ruled_out_scope": False,
+            "primary_task": _primary_task_for_assessment(
+                assessment,
+                has_observations=has_observations,
+                fallback=decision.primary_task,
+            ),
         }
         if assessment.intent in {"investigate", "inspect"}:
             update["reply_policy"] = "tool_result_only" if has_observations else "acknowledgement"
@@ -645,25 +984,58 @@ def _teaching_decision_from_agent(
         return TeachingDecision(
             teaching_state="normal_diagnosis",
             strategy="acknowledge",
+            primary_task="interpret_evidence",
             reply_policy="tool_result_only",
         )
     if assessment.intent in {"chat", "off_topic", "garbage", "meta"}:
         return TeachingDecision(
             teaching_state="casual_chat" if assessment.intent == "chat" else ("garbage" if assessment.intent == "garbage" else "off_topic"),
             strategy="chat" if assessment.intent == "chat" else "recover",
+            primary_task=(
+                "acknowledge_progress" if assessment.intent == "chat" else "redirect_investigation"
+            ),
             reply_policy="casual_reply",
         )
     if assessment.intent in {"clarification", "explanation_request", "help_request", "stuck"}:
         return TeachingDecision(
             teaching_state="clarification" if assessment.intent in {"clarification", "explanation_request"} else "guided_inquiry",
             strategy="reflect",
+            primary_task=(
+                "explain_concept"
+                if assessment.intent in {"clarification", "explanation_request"}
+                else "release_hint"
+            ),
             reply_policy="reflective_question",
         )
     return TeachingDecision(
         teaching_state="normal_diagnosis",
         strategy="acknowledge",
+        primary_task=_primary_task_for_assessment(
+            assessment,
+            has_observations=has_observations,
+            fallback="acknowledge_progress",
+        ),
         reply_policy="acknowledgement",
     )
+
+
+def _primary_task_for_assessment(
+    assessment: TurnAssessment,
+    *,
+    has_observations: bool,
+    fallback: str,
+) -> str:
+    if assessment.random_investigation or assessment.frustration_level == "high":
+        return "redirect_investigation"
+    if assessment.is_stuck or assessment.intent in {"stuck", "help_request", "request_hint"}:
+        return "release_hint"
+    if assessment.intent in {"clarification", "explanation_request"}:
+        return "explain_concept"
+    if assessment.contains_answer_attempt:
+        return "correct_conclusion"
+    if has_observations:
+        return "interpret_evidence"
+    return fallback
 
 
 def _normalize_single_agent_reply(
@@ -745,6 +1117,7 @@ def _reply_retry_context(context, events, *, feedback: str, evidence_request=Non
         update["evidence_request"] = EvidenceRequestView(
             requested_text=evidence_request.requested_text,
             availability=evidence_request.availability,
+            public_message=evidence_request.public_message,
         )
     return context.model_copy(
         update={
@@ -781,10 +1154,14 @@ def _evidence_request_after_tool_results(
             else ""
         )
     )
-    return EvidenceRequest(requested_text=requested, availability="PREREQUISITE_UNMET")
+    return EvidenceRequest(
+        requested_text=requested,
+        availability="PREREQUISITE_UNMET",
+        public_message="本次检查缺少形成观察所需的已知对象或前置信息。",
+    )
 
 
-async def _retry_final_reply(runner, context, *, feedback: str):
+async def _retry_final_reply(runner, context, *, feedback: str, on_reasoning_delta=None):
     """在安全边界拒绝正文时请求一次新的 final_reply；不执行工具。"""
 
     retry_context = context
@@ -793,7 +1170,16 @@ async def _retry_final_reply(runner, context, *, feedback: str):
             update={"reply_feedback": _reply_guard_feedback(feedback)},
             deep=True,
         )
-    output = await runner.run(retry_context)
+    run_stream = getattr(runner, "run_stream", None)
+    if on_reasoning_delta is not None and callable(run_stream):
+        # 正文仍留在私有结果中，只有显式测试开关开启的原始 thinking 旁路继续
+        # 输出，避免 Guard 重写阶段只剩一个没有内容的“思考中…”占位。
+        output = await run_stream(
+            retry_context,
+            on_reasoning_delta=on_reasoning_delta,
+        )
+    else:
+        output = await runner.run(retry_context)
     return output if isinstance(output, FinalReplyOutput) else None
 
 

@@ -112,7 +112,7 @@
 .scenario-session-page .investigation-state-heading,
 .scenario-session-page .investigation-state-grid > div {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
 }
@@ -143,9 +143,13 @@
 }
 
 .scenario-session-page .investigation-state-grid strong {
+  max-width: 68%;
   color: rgba(230, 237, 245, 0.90);
   font-size: 12px;
   font-weight: 750;
+  line-height: 1.55;
+  text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .scenario-session-page .clue-release-heading,
@@ -251,6 +255,11 @@
 .scenario-session-page .mermaid-diagram svg {
   color: #e6edf5;
   font-family: inherit !important;
+  /* mermaid 会把图形自然宽度写进内联 max-width；用 !important 压掉它，
+     让架构图随快照面板/全屏视图的真实宽度伸缩，拖宽即可看清。 */
+  width: 100% !important;
+  max-width: none !important;
+  height: auto !important;
 }
 
 .scenario-session-page .mermaid-diagram svg .node rect,
@@ -548,6 +557,12 @@
   min-height: 112px;
 }
 
+.scenario-review-page .scenario-review-score-summary .metric {
+  min-height: 84px;
+  background: rgba(255, 255, 255, 0.035);
+  box-shadow: none;
+}
+
 .scenario-review-page .metric span,
 .scenario-review-page .report-overview span,
 .scenario-review-page .report-detail-block > span,
@@ -580,9 +595,60 @@
   color: #8ef0db;
 }
 
+.scenario-review-page .scenario-debrief-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.scenario-review-page .scenario-debrief-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.scenario-review-page .scenario-debrief-card {
+  min-width: 0;
+  padding: 15px 16px;
+  border: 1px solid rgba(142, 240, 219, 0.16);
+  border-radius: 14px;
+  background: rgba(142, 240, 219, 0.045);
+}
+
+.scenario-review-page .scenario-debrief-card.is-trigger {
+  border-color: rgba(255, 207, 102, 0.30);
+  background: rgba(255, 207, 102, 0.07);
+}
+
+.scenario-review-page .scenario-debrief-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #8ef0db;
+}
+
+.scenario-review-page .scenario-debrief-card.is-trigger .scenario-debrief-card-title {
+  color: #ffcf66;
+}
+
+.scenario-review-page .scenario-debrief-card ul,
+.scenario-review-page .scenario-debrief-card ol {
+  margin: 10px 0 0;
+  padding-left: 20px;
+  color: rgba(230, 237, 245, 0.84);
+  line-height: 1.7;
+}
+
+.scenario-review-page .scenario-debrief-card li + li {
+  margin-top: 5px;
+}
+
 .scenario-review-page .report-overview {
   grid-template-columns: minmax(0, 1.5fr) repeat(2, minmax(150px, 0.55fr));
   gap: 16px;
+}
+
+.scenario-review-page .user-conclusion-overview {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .scenario-review-page .report-overview > div {
@@ -600,6 +666,13 @@
 .scenario-review-page .matched-document strong,
 .scenario-review-page .evidence-event strong {
   color: #f6fafe;
+}
+
+.scenario-review-page .user-conclusion-overview strong {
+  display: block;
+  margin-top: 8px;
+  line-height: 1.7;
+  white-space: pre-wrap;
 }
 
 .scenario-review-page .score-metric-grid {
@@ -667,6 +740,7 @@
   }
 
   .scenario-review-page .report-overview,
+  .scenario-review-page .scenario-debrief-grid,
   .scenario-review-page .score-metric-grid {
     grid-template-columns: 1fr;
   }
@@ -688,6 +762,7 @@
   .scenario-review-page .metric,
   .scenario-review-page .panel,
   .scenario-review-page .report-overview > div,
+  .scenario-review-page .scenario-debrief-card,
   .scenario-review-page .score-metric-grid .metric,
   .scenario-review-page .standard-answer {
     background: #ffffff;
