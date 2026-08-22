@@ -109,6 +109,88 @@
   border-top: 1px solid rgba(255, 255, 255, 0.10);
 }
 
+.scenario-session-page .available-tools-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.scenario-session-page .available-tools-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.scenario-session-page .available-tools-heading strong {
+  color: #f6fafe;
+  font-size: 14px;
+}
+
+.scenario-session-page .available-tools-heading span {
+  color: rgba(220, 228, 238, 0.50);
+  font-size: 11px;
+}
+
+.scenario-session-page .available-tools-list {
+  display: grid;
+  gap: 7px;
+}
+
+.scenario-session-page .available-tool-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(142, 240, 219, 0.16);
+  border-radius: 9px;
+  background: rgba(142, 240, 219, 0.045);
+  color: rgba(230, 237, 245, 0.82);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.scenario-session-page .available-tool-item svg {
+  flex: 0 0 auto;
+  color: #8ef0db;
+}
+
+.scenario-session-page .available-tool-item span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.scenario-session-page .available-tool-button {
+  width: 100%;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.scenario-session-page .available-tool-button:hover:not(:disabled) {
+  border-color: rgba(142, 240, 219, 0.42);
+  background: rgba(142, 240, 219, 0.12);
+  transform: translateY(-1px);
+}
+
+.scenario-session-page .available-tool-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.scenario-session-page .available-tools-empty {
+  margin: 0;
+  padding: 10px 11px;
+  border: 1px dashed rgba(142, 240, 219, 0.20);
+  border-radius: 9px;
+  color: rgba(220, 228, 238, 0.58);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .scenario-session-page .investigation-state-heading,
 .scenario-session-page .investigation-state-grid > div {
   display: flex;

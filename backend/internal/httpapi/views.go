@@ -97,6 +97,9 @@ type scenarioSessionResponse struct {
 	CurrentTurn        int                         `json:"current_turn"`
 	MaxTurns           int                         `json:"max_turns"`
 	RevealedClueCount  int                         `json:"revealed_clue_count"`
+	// 当前仍可执行的公开观察工具。只返回题目声明且满足当前状态前置条件的
+	// 工具，不包含参数、证据 ID、隐藏答案或内部比较能力。
+	AvailableTools     []domain.ScenarioAllowedAction `json:"available_tools,omitempty"`
 	InvestigationState scenarioInvestigationState  `json:"investigation_state"`
 	UserAnswer         string                      `json:"user_answer,omitempty"`
 	EvaluationResult   *domain.ScenarioEvaluation  `json:"evaluation_result,omitempty"`
@@ -137,6 +140,11 @@ func scenarioSessionView(session *domain.ScenarioSession) scenarioSessionRespons
 		CurrentTurn:     session.CurrentTurn,
 		MaxTurns:       session.MaxTurns,
 		RevealedClueCount: scenarioPublicClueCount(session),
+		AvailableTools: scenarioAvailableTools(
+			session.QuestionSnapshot.Content.HiddenWorld,
+			session.LearnerState,
+			session.QuestionID+":"+session.QuestionSnapshot.Content.ModelVersion,
+		),
 		InvestigationState: scenarioInvestigationState{
 			CurrentFocus:           session.LearnerState.CurrentFocus,
 			CurrentHypothesis:      safeScenarioHypothesisLabel(session),

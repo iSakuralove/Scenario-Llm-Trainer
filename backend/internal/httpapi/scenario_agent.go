@@ -2222,6 +2222,79 @@ func scenarioAllowedActions(
 	return actions
 }
 
+// scenarioAvailableTools 返回当前会话实际可以请求的公开观察目录。
+// 它与 turn_completed 的 next_actions 有意分开：next_actions 是当前教学策略
+// 选出的少量推荐；available_tools 是题目数据库经过状态/前置条件过滤后的
+// 可调用入口，供 Agent 和学生界面理解“现在到底有哪些工具”。
+func scenarioAvailableTools(
+	world *domain.HiddenWorld,
+	state domain.ScenarioLearnerState,
+	catalogVersion string,
+) []domain.ScenarioAllowedAction {
+	if world == nil {
+		return nil
+	}
+	taken := stringSet(state.ActionsTaken)
+	seen := map[string]bool{}
+	tools := make([]domain.ScenarioAllowedAction, 0, len(world.VirtualTools))
+	if len(world.VirtualTools) > 0 {
+		for _, tool := range world.VirtualTools {
+			actionID := strings.TrimSpace(tool.ObservationAction)
+			if actionID == "" || seen[actionID] || taken[actionID] || !scenarioPublicVirtualTool(tool) {
+				continue
+			}
+			if !scenarioActionPrerequisitesMet(world, state, tool) {
+				continue
+			}
+			seen[actionID] = true
+			tools = append(tools, domain.ScenarioAllowedAction{
+				ActionID:       actionID,
+				CatalogVersion: catalogVersion,
+				ToolKind:       tool.Kind,
+				Title:          strings.TrimSpace(tool.Target),
+			})
+		}
+		return tools
+	}
+	for _, observation := range world.Observations {
+		actionID := strings.TrimSpace(observation.Action)
+		if actionID == "" || seen[actionID] || taken[actionID] || !scenarioPublicObservationAction(actionID) {
+			continue
+		}
+		seen[actionID] = true
+		tools = append(tools, domain.ScenarioAllowedAction{
+			ActionID:       actionID,
+			CatalogVersion: catalogVersion,
+			ToolKind:       scenarioActionKind(actionID),
+			Title:          actionID,
+		})
+	}
+	return tools
+}
+
+func scenarioPublicVirtualTool(tool domain.VirtualTool) bool {
+	action := strings.ToLower(strings.TrimSpace(tool.ObservationAction))
+	kind := strings.ToLower(strings.TrimSpace(tool.Kind))
+	return scenarioPublicObservationAction(action) && kind != "internal" && kind != "answer" && kind != "answer_comparison"
+}
+
+func scenarioPublicObservationAction(action string) bool {
+	action = strings.ToLower(strings.TrimSpace(action))
+	return action != "" && !strings.Contains(action, "compare_answer")
+}
+
+func scenarioActionKind(action string) string {
+	parts := strings.SplitN(action, ":", 2)
+	if len(parts) != 2 {
+		return "observation"
+	}
+	remainder := strings.SplitN(parts[1], ".", 2)
+	if strings.TrimSpace(remainder[0]) == "" {
+		return "observation"
+	}
+	return remainder[0]
+}
+
 func scenarioActionPrerequisitesMet(world *domain.HiddenWorld, state domain.ScenarioLearnerState, tool domain.VirtualTool) bool {
 	if len(tool.EvidenceIDs) == 0 {
 		return true

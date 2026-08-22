@@ -13,6 +13,8 @@ interface ToolCallStatusIconProps {
  */
 export function ToolCallStatusIcon({ state, size = 15 }: ToolCallStatusIconProps) {
   const visualState = visualStateFor(state)
+  // 保持四个 glyph 在同一个槽位内，仅切换 data-state；调用方不要按状态加 key，
+  // 否则 React 会重建整棵图标树，pending/running/completed 的交叉淡入会被打断。
   return (
     <span
       className={styles.toolStatusIcon}

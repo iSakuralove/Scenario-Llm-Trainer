@@ -803,6 +803,7 @@ function normalizeScenarioSession(session: ScenarioSession): ScenarioSession {
       ruled_out_labels: session.investigation_state?.ruled_out_labels ?? [],
       hint_level: session.investigation_state?.hint_level ?? 0,
     },
+    available_tools: session.available_tools ?? [],
     state_revision: session.state_revision ?? 0,
     evaluation_result: normalizeScenarioEvaluation(session.evaluation_result),
   }

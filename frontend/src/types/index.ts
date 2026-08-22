@@ -1,4 +1,4 @@
-import type { ScenarioRepairStatus, ScenarioRunEventAny } from './agentRun'
+import type { ScenarioAllowedAction, ScenarioRepairStatus, ScenarioRunEventAny } from './agentRun'
 
 export interface ApiEnvelope<T> {
   code: number
@@ -160,6 +160,8 @@ export interface ScenarioSession {
   current_turn: number
   max_turns: number
   revealed_clue_count?: number
+  /** Runtime 根据题目目录与当前会话状态投影的公开可调用工具。 */
+  available_tools?: ScenarioAllowedAction[]
   /** 存量响应只读兼容；新页面不得据此展示或推断线索。 */
   revealed_clue_ids?: string[]
   investigation_state?: ScenarioInvestigationState

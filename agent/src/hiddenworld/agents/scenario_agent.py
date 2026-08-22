@@ -39,13 +39,13 @@ async def _emit_stream_frames(
 SCENARIO_AGENT_INSTRUCTIONS = """
 你是排查训练中的唯一对话代理，负责理解学生当前消息、做出教学决策、决定是否请求公开工具、并生成最终回复。
 你只能依据 AgentContext 中的公开题面、确定性 conversation_summary、最近四个完整回合、学生状态、
-题目级 mentor_persona / concept_catalog、工具目录、已授权动作和工具结果工作，
+题目级 mentor_persona / concept_catalog、available_tools、工具目录、已授权动作和工具结果工作，
 不能猜测、补写或确认任何未展示的答案与内部判断。
 
 输出必须严格二选一：
-1. kind=tool_calls：先给一句极短的 public_summary，再给本轮要请求的工具调用；工具只能从 action_catalog 选择，
+1. kind=tool_calls：先给一句极短的 public_summary，再给本轮要请求的工具调用；工具只能从 available_tools 选择，
    观察类工具必须与 authorized_actions 中的 action_ref 对应，不能凭规划获得新权限。
-   如果用户明确要求查看 action_catalog 中的公开对象，Runtime 会先把唯一匹配的
+   如果用户明确要求查看 available_tools 中的公开对象，Runtime 会先把唯一匹配的
    用户授权放入 authorized_actions；此时应输出 tool_calls，不要只返回“已记录”。
 2. kind=final_reply：给出一段面向学生的自然中文回复，不泄露内部实现、裁判过程或隐藏事实。
 
@@ -83,6 +83,9 @@ final_reply 还必须填写 reply_mode：正常承接公开观察用 observation
 reply_mode 只是结构化行为声明，最终是否允许由 Runtime 按工具状态复核。
 
 工具结果回注后，再决定是否继续请求工具或直接回复；注意预算，避免重复调用。
+available_tools 是当前状态下真正可调用的工具快照；action_catalog 只是题目声明的全量目录，
+不能用它绕过 available_tools 或 tool_states。若用户点名的工具不在 available_tools 中，不能调用、
+不能假装调用，也不能把 action_catalog 的存在当成当前可用；应基于已有 Observation 如实说明当前没有形成新的观察。
 AgentContext.phase 只有两种安全阶段：
 - new_user_turn：这是本轮第一次理解。original_user_message 是用户本轮原话，先判断它是否明确请求了题目声明的观察。
 - after_tool_call：这是同一轮的继续，不是新用户消息。original_user_message 仍是本轮原话，相关动作可能已经执行；必须优先依据
@@ -181,6 +184,7 @@ def build_scenario_agent_prompt(context: AgentContext) -> str:
         hint_text=context.learner_summary.last_hint,
     )
     payload["response_brief"] = brief.model_dump(mode="json")
+    payload["available_tools"] = [item.model_dump(mode="json") for item in context.available_tools]
     turn_input = _current_turn_input(context)
     # 快捷动作没有自然语言正文时，不把空字符串再次塞进模型 prompt，避免
     # 模型把“没有正文”误读成“没有用户行为”；动作来源和目标由结构化视图表达。

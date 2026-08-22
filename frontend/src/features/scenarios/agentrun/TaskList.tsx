@@ -29,7 +29,7 @@ export function TaskList({ tasks, active }: TaskListProps) {
             ].filter(Boolean).join(' ')}
             data-tool-state={task.state}
           >
-            <ToolCallStatusIcon key={task.state} state={task.state} />
+            <ToolCallStatusIcon state={task.state} />
             <span>{task.title}</span>
             <small>{taskStateLabel(task.state)}</small>
           </li>

@@ -147,7 +147,11 @@ class AgentContext(BaseModel):
     mentor_persona: MentorPersona = Field(default_factory=MentorPersona)
     concept_catalog: list[ConceptDefinition] = Field(default_factory=list)
     teaching_navigation: list[TeachingDimensionRef] = Field(default_factory=list)
+    # action_catalog 是题目声明的全量目录；available_tools 是 Runtime 按当前
+    # 会话状态过滤后的本轮可调用目录。模型必须优先从后者选择，不能把已消费、
+    # 被阻断或不存在的工具当成可用入口。
     action_catalog: list[ActionCatalogEntry] = Field(default_factory=list)
+    available_tools: list[ActionCatalogEntry] = Field(default_factory=list)
     hypothesis_catalog: list[HypothesisCatalogEntry] = Field(default_factory=list)
     authorized_actions: list[AuthorizedActionRef] = Field(default_factory=list)
     tool_results: list[AgentToolResult] = Field(default_factory=list)

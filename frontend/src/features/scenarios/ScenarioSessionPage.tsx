@@ -12,6 +12,7 @@ import { redactSensitiveText } from '../../lib/redaction'
 import { useScenarioSessionStore } from '../../stores/scenarioSessionStore'
 import { AgentRun, collectProactiveClues, resolveQuickActionUserLabel } from './agentrun'
 import type { ObservationRelease } from './agentrun'
+import { AvailableToolsPanel } from './AvailableToolsPanel'
 import { repairStatusLabel, resolveRepairStatus } from '../../types/agentRun'
 import type { ScenarioAllowedAction, ScenarioRepairStatus } from '../../types/agentRun'
 import './ScenarioSessionPage.css'
@@ -271,6 +272,11 @@ export function ScenarioSessionPage() {
             <span>重要线索 {importantClueCount}</span>
           </div>
           <InvestigationStatePanel state={activeSession.investigation_state} repairStatus={repairStatus} />
+          <AvailableToolsPanel
+            tools={activeSession.available_tools ?? []}
+            disabled={isSending || isQuitting || isSubmittingAnswer}
+            onSelect={handleQuickAction}
+          />
           <ClueReleaseTimeline clues={clueReleases} animatedKeys={animatedClueKeys} snapshotText={snapshotText} />
         </div>
       </aside>

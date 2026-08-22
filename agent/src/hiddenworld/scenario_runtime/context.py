@@ -135,6 +135,11 @@ def project_agent_context(
         for item in catalog
         if item.tool_id in default_tool_states
     }
+    available_tools = [
+        item.model_copy(deep=True)
+        for item in catalog
+        if tool_states.get(item.tool_id, ToolStateView(state="unavailable")).state == "available"
+    ]
     # 上一轮 GuidanceState 是跨轮教学状态的唯一安全切片。没有它时才从
     # LearnerState 的公开字段构造最小兼容值；不能每轮无条件重置为默认状态。
     current_focus = prior_guidance.current_focus or learner.current_focus
@@ -175,6 +180,7 @@ def project_agent_context(
             if item.concept_id.strip() and item.label.strip() and item.summary.strip()
         ],
         action_catalog=catalog,
+        available_tools=available_tools,
         hypothesis_catalog=hypothesis_catalog,
         authorized_actions=authorized,
         action_history=[item.model_copy(deep=True) for item in getattr(request, "action_history", [])],

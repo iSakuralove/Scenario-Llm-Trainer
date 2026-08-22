@@ -227,7 +227,7 @@ function ToolChipRow({ chip }: { chip: ToolChip }) {
         aria-expanded={open}
       >
         <ToolKindIcon kind={chip.toolKind} size={14} />
-        <ToolCallStatusIcon key={chip.state} state={chip.state} />
+        <ToolCallStatusIcon state={chip.state} />
         <span className={styles.toolTitle}>{chip.title}</span>
         {sourceLabel && <span className={styles.toolSourceBadge}>{sourceLabel}</span>}
         <small>{chipStatusLabel(chip)}</small>
