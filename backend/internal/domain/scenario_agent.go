@@ -24,7 +24,7 @@ type ScenarioLearnerState struct {
 	HintLevel              int                            `json:"hint_level"`
 	LastHint               string                         `json:"last_hint,omitempty"`
 	// RepairStatus 是仅供教学导航的三值抽象；不保存内部 solution coverage。
-	RepairStatus           string                         `json:"repair_status"`
+	RepairStatus string `json:"repair_status"`
 }
 
 type ScenarioExplanationPreferences struct {
@@ -145,10 +145,24 @@ type ScenarioToolResultPayload struct {
 // ScenarioPublicContent 是 observation / clue 的统一外发内容层，
 // markdown_ready 是前端唯一渲染源。
 type ScenarioPublicContent struct {
-	ContentType    string                     `json:"content_type"`
-	MarkdownReady  string                     `json:"markdown_ready"`
-	DisplayVariant string                     `json:"display_variant,omitempty"`
-	Meta           *ScenarioPublicContentMeta `json:"meta,omitempty"`
+	ContentType    string                        `json:"content_type"`
+	MarkdownReady  string                        `json:"markdown_ready"`
+	DisplayVariant string                        `json:"display_variant,omitempty"`
+	Meta           *ScenarioPublicContentMeta    `json:"meta,omitempty"`
+	Details        *ScenarioPublicContentDetails `json:"details,omitempty"`
+}
+
+// ScenarioPublicContentDetails 是工具卡可展开的固定安全 JSON。
+// 只包含公开工具身份、执行终态、耗时、来源和公开摘要；不允许把参数、
+// 授权标识、证据 ID、答案比较或内部错误细节塞进这个对象。
+type ScenarioPublicContentDetails struct {
+	ToolID       string `json:"tool_id"`
+	ToolKind     string `json:"tool_kind"`
+	ResultStatus string `json:"result_status"`
+	DurationMS   int    `json:"duration_ms"`
+	SourceKind   string `json:"source_kind,omitempty"`
+	SourceLabel  string `json:"source_label,omitempty"`
+	Summary      string `json:"summary,omitempty"`
 }
 
 type ScenarioPublicContentMeta struct {
@@ -161,8 +175,8 @@ type ScenarioPublicContentMeta struct {
 
 // ScenarioCluePayload 是 clue_published 的负载。
 type ScenarioCluePayload struct {
-	ClueID    string                    `json:"clue_id"`
-	Content   ScenarioPublicContent     `json:"content"`
+	ClueID    string                     `json:"clue_id"`
+	Content   ScenarioPublicContent      `json:"content"`
 	Dimension *ScenarioTeachingDimension `json:"dimension,omitempty"`
 }
 

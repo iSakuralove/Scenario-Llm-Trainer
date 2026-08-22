@@ -81,11 +81,14 @@ export function buildAgentRunViewModel(events: ScenarioRunEventAny[]): AgentRunV
         upsertTask(task) {
           tasksById.set(task.task_id, { ...tasksById.get(task.task_id), ...task })
         },
-        linkTaskResult(callId) {
+        linkTaskResult(callId, resultStatus) {
           for (const [taskId, task] of tasksById) {
-            if (task.state === 'completed') continue
+            if (task.state === 'completed' || task.state === 'failed') continue
             if (task.call_id === callId || taskId === callId) {
-              tasksById.set(taskId, { ...task, state: 'completed' })
+              tasksById.set(taskId, {
+                ...task,
+                state: resultStatus === 'succeeded' ? 'completed' : 'failed',
+              })
               return
             }
           }
@@ -125,7 +128,7 @@ function applyV2Event(
   event: ScenarioRunEventAny & { schema_version: string },
   callbacks: ViewModelCallbacks & {
     upsertTask: (task: ScenarioTaskPayload) => void
-    linkTaskResult: (callId: string) => void
+    linkTaskResult: (callId: string, resultStatus: ScenarioToolResultPayload['result_status']) => void
   },
 ): void {
   const v2 = event as import('../../../types/agentRun').ScenarioRunEventV2
@@ -156,7 +159,7 @@ function applyV2Event(
       }
       // 工具结果到达即补齐对应任务的终态：即使 task_upserted(completed)
       // 事件丢失或乱序，芯片也不会永远停在“查询中”。
-      callbacks.linkTaskResult(toolResult.call_id)
+      callbacks.linkTaskResult(toolResult.call_id, toolResult.result_status)
       model.lastSignal = 'tool'
       break
     }

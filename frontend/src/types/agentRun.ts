@@ -126,12 +126,24 @@ export interface ScenarioPublicContentMeta {
   title?: string
 }
 
+/** 工具详情面板的固定安全 JSON；不包含参数、授权 ID 或隐藏证据。 */
+export interface ScenarioPublicContentDetails {
+  tool_id: string
+  tool_kind: string
+  result_status: string
+  duration_ms: number
+  source_kind?: string
+  source_label?: string
+  summary?: string
+}
+
 /** observation / clue / hint 的统一外发内容层；markdown_ready 是唯一渲染源。 */
 export interface ScenarioPublicContent {
   content_type: 'observation' | 'clue' | 'hint'
   markdown_ready: string
   display_variant?: 'log' | 'tool_return' | 'clue' | 'hint'
   meta?: ScenarioPublicContentMeta
+  details?: ScenarioPublicContentDetails
 }
 
 /** task_upserted 的负载：工具调用生命周期状态。 */

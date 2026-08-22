@@ -1922,7 +1922,7 @@ func projectScenarioTraceEvents(
 			return nil, false
 		}
 		return []domain.ScenarioRunEvent{
-			scenarioObservationToolResultEvent(requestID, stateRevision, world, trace.Observation),
+			scenarioObservationToolResultEvent(requestID, stateRevision, world, trace.Observation, 0),
 		}, true
 	case "agent_tool_started":
 		if !scenarioPublicObservationToolName(world, trace.ToolName) {
@@ -1955,7 +1955,7 @@ func projectScenarioTraceEvents(
 			}),
 		}
 		if trace.Observation != nil {
-			events = append(events, scenarioObservationToolResultEvent(requestID, stateRevision, world, trace.Observation))
+			events = append(events, scenarioObservationToolResultEvent(requestID, stateRevision, world, trace.Observation, trace.DurationMS))
 		}
 		return events, true
 	case "tool_started":
@@ -2013,6 +2013,7 @@ func scenarioObservationToolResultEvent(
 	stateRevision int,
 	world *domain.HiddenWorld,
 	observation *agentclient.PublicObservation,
+	durationMS int,
 ) domain.ScenarioRunEvent {
 	toolKind := scenarioToolKindForAction(world, observation.Action)
 	return scenarioToolResultEvent(requestID, stateRevision, 0, domain.ScenarioToolResultPayload{
@@ -2020,10 +2021,20 @@ func scenarioObservationToolResultEvent(
 		ToolID:       observation.Action,
 		ToolKind:     toolKind,
 		ResultStatus: "succeeded",
+		DurationMS:   durationMS,
 		Content: &domain.ScenarioPublicContent{
 			ContentType:    "observation",
 			MarkdownReady:  scenarioPublicObservationMarkdown(observation.Result),
 			DisplayVariant: scenarioObservationDisplayVariant(toolKind),
+			Details: &domain.ScenarioPublicContentDetails{
+				ToolID:       observation.Action,
+				ToolKind:     toolKind,
+				ResultStatus: "succeeded",
+				DurationMS:   durationMS,
+				SourceKind:   "teaching_simulation",
+				SourceLabel:  "教学模拟",
+				Summary:      observation.Result,
+			},
 			Meta: &domain.ScenarioPublicContentMeta{
 				ToolKind:    toolKind,
 				IsNegative:  observation.IsNegative,

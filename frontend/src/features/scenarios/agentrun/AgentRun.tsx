@@ -1,7 +1,8 @@
-import { Bot, ChevronDown, Clock3, Lightbulb, Loader2, UserRound, XCircle } from 'lucide-react'
+import { Bot, ChevronDown, Clock3, Lightbulb, UserRound, XCircle } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type {
   ScenarioAllowedAction,
+  ScenarioPublicContentDetails,
   ScenarioRunEventAny,
   ScenarioTaskPayload,
   ScenarioToolResultPayload,
@@ -9,6 +10,7 @@ import type {
 import { buildAgentRunViewModel } from './LegacyEventAdapter'
 import { QuickActions } from './QuickActions'
 import { TaskList } from './TaskList'
+import { ToolCallStatusIcon } from './ToolCallStatusIcon'
 import { ToolKindIcon } from './ToolKindIcon'
 import { StreamingText } from './StreamingText'
 import { ThinkingReasoning } from './ThinkingReasoning'
@@ -181,7 +183,7 @@ function mergeTasksAndResults(
     return {
       key: task.task_id,
       title: task.title,
-      state: result && result.result_status === 'succeeded' ? 'completed' : task.state,
+      state: result ? toolResultToTaskState(result.result_status) : task.state,
       toolKind: result?.tool_kind || toolKindFromToolRef(task.tool_ref),
       result,
     }
@@ -192,7 +194,7 @@ function mergeTasksAndResults(
     chips.push({
       key: result.call_id,
       title: toolRowTitle(result),
-      state: 'completed',
+      state: toolResultToTaskState(result.result_status),
       toolKind: result.tool_kind,
       result,
     })
@@ -211,8 +213,13 @@ function ToolChipRow({ chip }: { chip: ToolChip }) {
   const [open, setOpen] = useState(false)
   const content = chip.result?.content
   const sourceLabel = publicSourceLabel(content?.meta?.source_kind, content?.meta?.source_label)
+  const detailJson = toolDetailJson(chip)
   return (
-    <div className={styles.toolLine} data-testid="agent-run-tool-chip">
+    <div
+      className={`${styles.toolLine} ${chip.state === 'running' ? styles.toolLineRunning : ''}`}
+      data-testid="agent-run-tool-chip"
+      data-tool-state={chip.state}
+    >
       <button
         className={styles.toolButton}
         type="button"
@@ -220,12 +227,11 @@ function ToolChipRow({ chip }: { chip: ToolChip }) {
         aria-expanded={open}
       >
         <ToolKindIcon kind={chip.toolKind} size={14} />
-        <span>{chip.title}</span>
+        <ToolCallStatusIcon key={chip.state} state={chip.state} />
+        <span className={styles.toolTitle}>{chip.title}</span>
         {sourceLabel && <span className={styles.toolSourceBadge}>{sourceLabel}</span>}
         <small>{chipStatusLabel(chip)}</small>
-        {chip.state === 'running'
-          ? <Loader2 className={styles.taskSpinner} size={14} aria-hidden="true" />
-          : <ChevronDown className={open ? styles.chevronOpen : ''} size={14} aria-hidden="true" />}
+        <ChevronDown className={open ? styles.chevronOpen : ''} size={14} aria-hidden="true" />
       </button>
       {content && (
         <div className={`${styles.disclosureGrid} ${open ? styles.disclosureGridOpen : ''}`}>
@@ -248,6 +254,15 @@ function ToolChipRow({ chip }: { chip: ToolChip }) {
                 )}
               </div>
               <p>{content.markdown_ready}</p>
+              {open && detailJson && (
+                <pre
+                  className={styles.toolJson}
+                  data-testid="agent-run-tool-json"
+                  aria-label="工具调用 JSON 详情"
+                >
+                  {detailJson}
+                </pre>
+              )}
             </div>
           </div>
         </div>
@@ -256,11 +271,36 @@ function ToolChipRow({ chip }: { chip: ToolChip }) {
   )
 }
 
+function toolResultToTaskState(resultStatus: ScenarioToolResultPayload['result_status']): ScenarioTaskPayload['state'] {
+  return resultStatus === 'succeeded' ? 'completed' : 'failed'
+}
+
+function toolDetailJson(chip: ToolChip): string {
+  if (!chip.result) return ''
+  const content = chip.result.content
+  const details: ScenarioPublicContentDetails = {
+    tool_id: content?.details?.tool_id || chip.result.tool_id,
+    tool_kind: content?.details?.tool_kind || chip.result.tool_kind || chip.toolKind,
+    result_status: content?.details?.result_status || chip.result.result_status,
+    duration_ms: content?.details?.duration_ms ?? chip.result.duration_ms ?? 0,
+    ...(content?.details?.source_kind || content?.meta?.source_kind
+      ? { source_kind: content?.details?.source_kind || content?.meta?.source_kind }
+      : {}),
+    ...(content?.details?.source_label || content?.meta?.source_label
+      ? { source_label: content?.details?.source_label || content?.meta?.source_label }
+      : {}),
+    ...(content?.details?.summary || content?.markdown_ready
+      ? { summary: content?.details?.summary || content?.markdown_ready }
+      : {}),
+  }
+  return JSON.stringify(details, null, 2)
+}
+
 function chipStatusLabel(chip: ToolChip): string {
-  if (chip.state === 'running') return '查询中'
-  if (chip.state === 'failed') return '失败'
-  if (chip.state === 'rejected' || chip.state === 'unsupported' || chip.state === 'expired') return '已跳过'
   if (chip.result?.result_status === 'timeout') return '超时'
+  if (chip.result?.result_status === 'failed' || chip.state === 'failed') return '失败'
+  if (chip.state === 'running') return '查询中'
+  if (chip.state === 'rejected' || chip.state === 'unsupported' || chip.state === 'expired') return '已跳过'
   if (chip.result && chip.result.duration_ms > 0) return `${chip.result.duration_ms} ms · 已返回`
   return '已返回'
 }
