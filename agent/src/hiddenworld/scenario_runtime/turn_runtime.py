@@ -795,6 +795,14 @@ def _assessment_from_single_agent(request, final_output, events, successful_acti
             confidence=0.0,
         )
     assessment = TurnAssessment.model_validate(semantic.model_dump())
+    # 模型有时把未规范化的用户动作填到 requested_action，却漏掉
+    # requested_action_raw。TurnAnalysis 会用 requested_action 兜底生成原话，
+    # 所以这里先补齐 raw，保证 Go 的 assessment/analysis 一致性校验不会把
+    # 合法的闲聊或偏题回合误判成跨层语义冲突。
+    if assessment.requested_action.strip() and not assessment.requested_action_raw.strip():
+        assessment = assessment.model_copy(
+            update={"requested_action_raw": assessment.requested_action.strip()}
+        )
     runtime_stuck = assessment.is_stuck or assessment.intent in {
         "stuck",
         "help_request",
