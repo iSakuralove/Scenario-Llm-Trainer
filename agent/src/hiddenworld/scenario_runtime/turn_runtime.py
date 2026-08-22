@@ -520,6 +520,7 @@ class SingleAgentRuntime:
             required_reply_mode=guard_context.required_reply_mode,
         )
         mark_phase("reply_guard")
+        guard_retry_count = 0
         try:
             action = Guard().validate(action, constraints=constraints, context=guard_context)
         except ValueError as exc:
@@ -532,6 +533,7 @@ class SingleAgentRuntime:
             last_error = exc
             accepted = False
             for retry_index in range(1, 2):
+                guard_retry_count += 1
                 mark_phase("reply_guard_retry")
                 retry_context = _reply_retry_context(
                     context,
@@ -652,6 +654,7 @@ class SingleAgentRuntime:
             internal_audit=AuditTrace(
                 reason_codes=["single_agent_runtime", *_reason_codes(analysis, observations, answer_public)],
                 mentor_rationale="single_agent_runtime",
+                guard_retries=guard_retry_count,
                 interpreter_ms=0,
                 mentor_ms=_elapsed_ms(started),
             ),

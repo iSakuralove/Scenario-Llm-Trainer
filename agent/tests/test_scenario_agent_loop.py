@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -95,6 +96,19 @@ async def test_agent_loop_can_finish_without_tool_call(public_scenario) -> None:
     assert result.reply == "先从公开现象开始看。"
     assert [item.kind for item in events] == ["final_reply"]
     assert executor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_emits_structured_round_telemetry(public_scenario, caplog) -> None:
+    caplog.set_level(logging.INFO, logger="hiddenworld.agent_loop")
+    agent = SequenceAgent(FinalReplyOutput(kind="final_reply", reply="本轮已收束。"))
+
+    await AgentLoop(agent, RecordingExecutor()).run(_context(public_scenario))
+
+    assert "[hiddenworld-agent-round]" in caplog.text
+    assert "round=1" in caplog.text
+    assert "model_attempt=1" in caplog.text
+    assert "tool_call_count=0" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -306,6 +320,27 @@ def test_agent_context_prompt_exposes_turn_phase_history_and_tool_state(public_s
     assert payload["original_user_message"] == "先看看 CPU"
     assert payload["action_history"][1]["tool_name"] == "inspect:metrics.cpu"
     assert payload["tool_states"]["inspect:metrics.cpu"]["state"] == "consumed"
+
+
+def test_continuation_prompt_omits_long_history_and_keeps_structured_state(public_scenario) -> None:
+    context = _context(public_scenario).model_copy(
+        update={
+            "phase": "after_tool_call",
+            "turn_context": _context(public_scenario).turn_context.model_copy(
+                update={"phase": "after_tool_call", "continuation": True}
+            ),
+            "transcript": [{"role": "user", "content": "旧消息"}],
+            "conversation_summary": "旧的长摘要",
+        }
+    )
+
+    prompt = build_scenario_agent_prompt(context)
+    payload = json.loads(prompt.split("AgentContext：", 1)[1])
+
+    assert "transcript" not in payload
+    assert "conversation_summary" not in payload
+    assert payload["turn_context"]["phase"] == "after_tool_call"
+    assert "Raw Chain-of-Thought" in prompt
 
 
 def test_response_brief_marks_only_concepts_explicitly_named_by_student(public_scenario) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from time import perf_counter
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -210,6 +211,11 @@ def build_scenario_agent_prompt(context: AgentContext) -> str:
     )
     payload["response_brief"] = brief.model_dump(mode="json")
     payload["available_tools"] = [item.model_dump(mode="json") for item in context.available_tools]
+    if context.turn_context.phase != "new_user_turn":
+        # continuation Round 只需消费 Runtime 已回注的结构化状态；历史转录和
+        # 长摘要不再重复发送，避免中间请求变成第二次完整理解。
+        payload.pop("transcript", None)
+        payload.pop("conversation_summary", None)
     turn_input = _current_turn_input(context)
     # 快捷动作没有自然语言正文时，不把空字符串再次塞进模型 prompt，避免
     # 模型把“没有正文”误读成“没有用户行为”；动作来源和目标由结构化视图表达。
@@ -293,14 +299,23 @@ class PydanticScenarioAgentRunner:
     ) -> None:
         self.agent = agent
         self.fallback_agent = fallback_agent
+        self.last_call_telemetry: dict[str, object] = {}
 
     async def run(self, context: AgentContext) -> AgentModelOutput:
+        started = perf_counter()
+        telemetry = _model_call_telemetry(self.agent)
         try:
             result = await self.agent.run(_model_prompt(context), deps=context)
         except Exception:
             if self.fallback_agent is None:
+                telemetry["elapsed_ms"] = _elapsed_ms(started)
+                self.last_call_telemetry = telemetry
                 raise
+            telemetry["fallback_used"] = True
             result = await self.fallback_agent.run(_model_prompt(context), deps=context)
+        telemetry.update(_run_usage_telemetry(result))
+        telemetry["elapsed_ms"] = _elapsed_ms(started)
+        self.last_call_telemetry = telemetry
         return result.output.to_contract()
 
     async def run_stream(
@@ -365,6 +380,48 @@ class PydanticScenarioAgentRunner:
                         piece = extractor.feed(delta.content_delta)
                         await _emit_stream_frames(on_reply_delta, piece)
             return run.result.output.to_contract()
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int(round((perf_counter() - started) * 1000)))
+
+
+def _model_call_telemetry(agent: Agent) -> dict[str, object]:
+    model = getattr(agent, "model", None)
+    provider = getattr(model, "provider", None)
+    return {
+        "provider": _safe_model_label(provider),
+        "model": _safe_model_label(model),
+        "fallback_used": False,
+        "schema_retry_count": 0,
+        "prompt_tokens": 0,
+        "output_tokens": 0,
+    }
+
+
+def _run_usage_telemetry(result) -> dict[str, object]:
+    usage = getattr(result, "usage", None)
+    if callable(usage):
+        try:
+            usage = usage()
+        except Exception:
+            usage = None
+    if usage is None:
+        return {}
+    return {
+        "prompt_tokens": int(getattr(usage, "request_tokens", 0) or 0),
+        "output_tokens": int(getattr(usage, "response_tokens", 0) or 0),
+    }
+
+
+def _safe_model_label(value) -> str:
+    if value is None:
+        return "unknown"
+    for attribute in ("model_name", "name", "model_id"):
+        label = getattr(value, attribute, None)
+        if isinstance(label, str) and label.strip():
+            return label.strip()[:120]
+    return type(value).__name__
 
 
 def _model_prompt(context: AgentContext) -> str:

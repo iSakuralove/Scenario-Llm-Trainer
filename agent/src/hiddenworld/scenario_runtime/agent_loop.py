@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from collections.abc import Awaitable, Callable
+from time import perf_counter
 from typing import Literal, Protocol
 
 from hiddenworld.contracts import (
@@ -21,6 +23,9 @@ from hiddenworld.contracts import (
 from hiddenworld.contracts.assessment import direction_status_for_assessment
 
 from .batch_scheduler import BatchScheduler, _fingerprint
+
+
+logger = logging.getLogger("hiddenworld.agent_loop")
 
 
 class ScenarioAgentRunner(Protocol):
@@ -93,9 +98,11 @@ class AgentLoop:
         self.on_reply_delta = on_reply_delta
         self.on_reasoning_delta = on_reasoning_delta
         self.on_loop_event = on_loop_event
+        self.last_run_telemetry: list[dict[str, object]] = []
 
     async def run(self, context: AgentContext) -> tuple[FinalReplyOutput, list[AgentLoopEvent]]:
         events: list[AgentLoopEvent] = []
+        self.last_run_telemetry = []
         current = context.model_copy(deep=True)
         tool_calls_used = 0
         completed_fingerprints: set[str] = set()
@@ -116,6 +123,7 @@ class AgentLoop:
                     )
                 }
             )
+            model_started = perf_counter()
             run_stream = getattr(self.agent, "run_stream", None)
             if (self.on_reply_delta is not None or self.on_reasoning_delta is not None) and callable(run_stream):
                 stream_kwargs = {}
@@ -126,7 +134,24 @@ class AgentLoop:
                 output = await run_stream(current, **stream_kwargs)
             else:
                 output = await self.agent.run(current)
+            call_telemetry = dict(getattr(self.agent, "last_call_telemetry", {}) or {})
+            round_telemetry = {
+                "turn_id": current.turn_context.turn_id or current.turn_id,
+                "round": round_index + 1,
+                "model_attempt": round_index + 1,
+                "provider": call_telemetry.get("provider", "unknown"),
+                "model": call_telemetry.get("model", "unknown"),
+                "elapsed_ms": call_telemetry.get("elapsed_ms", _elapsed_ms(model_started)),
+                "fallback_used": bool(call_telemetry.get("fallback_used", False)),
+                "schema_retry_count": int(call_telemetry.get("schema_retry_count", 0) or 0),
+                "prompt_tokens": int(call_telemetry.get("prompt_tokens", 0) or 0),
+                "output_tokens": int(call_telemetry.get("output_tokens", 0) or 0),
+                "tool_call_count": 0,
+                "phase": current.turn_context.phase,
+                "decision": output.kind,
+            }
             if isinstance(output, FinalReplyOutput):
+                self._record_round_telemetry(round_telemetry)
                 events.append(AgentLoopEvent("final_reply", output))
                 return output, events
 
@@ -150,6 +175,8 @@ class AgentLoop:
                     else None
                 ),
             )
+            round_telemetry["tool_call_count"] = len(plan.accepted)
+            self._record_round_telemetry(round_telemetry)
             events.extend(AgentLoopEvent("tool_rejected", item) for item in plan.rejected)
             events.extend(AgentLoopEvent("tool_deferred", item) for item in plan.deferred)
 
@@ -218,6 +245,31 @@ class AgentLoop:
         raise AgentLoopBudgetExceeded(
             f"ScenarioAgent did not return final_reply within {self.max_model_rounds} model rounds"
         )
+
+    def _record_round_telemetry(self, record: dict[str, object]) -> None:
+        self.last_run_telemetry.append(dict(record))
+        logger.info(
+            "[hiddenworld-agent-round] turn_id=%s round=%s model_attempt=%s provider=%s "
+            "model=%s elapsed_ms=%s fallback_used=%s schema_retry_count=%s "
+            "prompt_tokens=%s output_tokens=%s tool_call_count=%s phase=%s decision=%s",
+            record["turn_id"],
+            record["round"],
+            record["model_attempt"],
+            record["provider"],
+            record["model"],
+            record["elapsed_ms"],
+            record["fallback_used"],
+            record["schema_retry_count"],
+            record["prompt_tokens"],
+            record["output_tokens"],
+            record["tool_call_count"],
+            record["phase"],
+            record["decision"],
+        )
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int(round((perf_counter() - started) * 1000)))
 
 
 def _append_action_history(
