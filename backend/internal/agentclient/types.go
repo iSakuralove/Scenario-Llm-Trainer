@@ -20,6 +20,9 @@ type TurnRequest struct {
 	OriginalUserMessage string                   `json:"original_user_message,omitempty"`
 	ActionHistory       []ActionHistoryEntry     `json:"action_history,omitempty"`
 	ToolStates          map[string]ToolStateView `json:"tool_states,omitempty"`
+	// GuidanceState 是上一轮 Go 已归约的安全教学导航；不包含答案、证据 ID
+	// 或内部裁判结果，只用于让下一轮 Agent 知道是否需要收拢方向。
+	GuidanceState *GuidanceState `json:"guidance_state,omitempty"`
 	// StructuredUserAction 是 QuickAction 点击产生的一等用户动作；
 	// Python Runtime 只把它签发成 UserActionAuthorization，Agent 自身
 	// 的 tool_call 不能充当授权。与自然语言共用 request_id / state_revision。
@@ -166,6 +169,7 @@ type GuidanceState struct {
 	Navigation         []TeachingDimensionRef `json:"navigation"`
 	StalledTurns       int                    `json:"stalled_turns"`
 	CurrentFocus       string                 `json:"current_focus"`
+	DirectionStatus    string                 `json:"direction_status"`
 	RepairStatus       string                 `json:"repair_status"`
 }
 

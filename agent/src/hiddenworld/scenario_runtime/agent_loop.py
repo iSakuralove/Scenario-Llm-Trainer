@@ -17,6 +17,7 @@ from hiddenworld.contracts import (
     ToolCallsOutput,
     ToolStateView,
 )
+from hiddenworld.contracts.assessment import direction_status_for_assessment
 
 from .batch_scheduler import BatchScheduler, _fingerprint
 
@@ -180,7 +181,10 @@ class AgentLoop:
                 )
             if output.turn_assessment is not None:
                 guidance_state = guidance_state.model_copy(
-                    update={"progress_assessment": output.turn_assessment.progress_assessment}
+                    update={
+                        "progress_assessment": output.turn_assessment.progress_assessment,
+                        "direction_status": direction_status_for_assessment(output.turn_assessment),
+                    }
                 )
             current = current.model_copy(
                 update={

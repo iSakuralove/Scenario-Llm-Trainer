@@ -105,6 +105,7 @@ IntensityLevel = Literal["low", "medium", "high"]
 MasterySignal = Annotated[int, Field(ge=0, le=4)]
 PreferenceSignalKey = Literal["detail", "analogy", "directness"]
 PreferenceSignalValue = Literal["brief", "balanced", "detailed", "low", "medium", "high"]
+DirectionStatus = Literal["aligned", "exploring", "needs_refocus", "off_topic"]
 
 
 class TurnAssessment(BaseModel):
@@ -157,6 +158,24 @@ class TurnAssessment(BaseModel):
         return self
 
 
+def direction_status_for_assessment(assessment: TurnAssessment | None) -> DirectionStatus:
+    """把本轮行为归约成下一轮可安全回注的粗粒度方向信号。"""
+
+    if assessment is None:
+        return "exploring"
+    if assessment.is_off_topic or assessment.intent == "off_topic":
+        return "off_topic"
+    if (
+        assessment.is_stuck
+        or assessment.random_investigation
+        or assessment.progress_assessment in {"no_progress", "unsupported", "contradictory"}
+    ):
+        return "needs_refocus"
+    if assessment.progress_assessment == "progress":
+        return "aligned"
+    return "exploring"
+
+
 class TeachingDecision(BaseModel):
     """ScenarioAgent 的教学策略裁决。
 
@@ -185,6 +204,8 @@ class GuidanceState(BaseModel):
     navigation: list[TeachingDimensionRef] = Field(default_factory=list)
     stalled_turns: int = Field(default=0, ge=0)
     current_focus: str = ""
+    # 只表达下一轮应如何调整教学节奏，不说明具体哪个假设错误。
+    direction_status: DirectionStatus = "exploring"
     # 只表达修复闭环是否仍缺一段；不携带内部覆盖率或缺失要求。
     repair_status: RepairStatus = "none"
 

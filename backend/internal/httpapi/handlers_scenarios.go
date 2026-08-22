@@ -667,6 +667,7 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 		OriginalUserMessage:  input.Content,
 		ActionHistory:        scenarioActionHistoryForAgent(existingMessages, question.Content.HiddenWorld),
 		ToolStates:           scenarioToolStatesForAgent(existingMessages, session.LearnerState, question.Content.HiddenWorld),
+		GuidanceState:        scenarioPriorGuidanceState(existingMessages),
 		StructuredUserAction: structuredAction,
 		Budget:               agentclient.Budget{DeadlineMS: s.scenarioTurnDeadlineMS, MaxReleases: 3},
 	}

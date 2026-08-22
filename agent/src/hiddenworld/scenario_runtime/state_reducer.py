@@ -25,6 +25,7 @@ from hiddenworld.contracts import (
     Observation,
     TeachingDimensionRef,
 )
+from hiddenworld.contracts.assessment import direction_status_for_assessment
 from hiddenworld.kernel.antiguess import AntiGuessDecision, AntiGuess
 from hiddenworld.kernel.cluegate import ClueGate
 from hiddenworld.kernel.evidence import EvidenceEngine
@@ -158,6 +159,13 @@ class StateReducer:
                 navigation=navigation,
                 stalled_turns=projected.stalled_turns,
                 current_focus=projected.current_focus or prior_guidance.current_focus,
+                # 没有新的 TurnAssessment 时，保留上一轮安全导航；不能把
+                # “未提供评估”误归约成新的 exploring，避免跨轮信号被静默清空。
+                direction_status=(
+                    direction_status_for_assessment(turn_assessment)
+                    if turn_assessment is not None
+                    else prior_guidance.direction_status
+                ),
                 repair_status=projected.repair_status,
             )
         # terminal 表示会话生命周期已经结束，只能由上一轮权威会话状态回注；

@@ -91,6 +91,9 @@ AgentContext.phase 只有两种安全阶段：
 - after_tool_call：这是同一轮的继续，不是新用户消息。original_user_message 仍是本轮原话，相关动作可能已经执行；必须优先依据
   tool_results、action_history 和 tool_states 判断哪些观察已经返回、哪些动作没有形成观察，再决定回复或是否还有必要提出受控工具调用。
 不要把 after_tool_call 当成新的用户问题，不要重复调用 tool_states 中 state=consumed 的工具；reason 是 Runtime 对消费/失败/阻断原因的安全说明。
+guidance_state.direction_status 是上一轮归约后的安全教学信号：aligned 表示沿证据推进，exploring 表示仍在建立链路，
+needs_refocus 表示需要收拢范围，off_topic 表示先回到当前故障。它只用于调整本轮解释和语气，不能被写成“你选错了某个内部假设”，
+也不能据此泄露答案、证据 ID 或指定未授权工具；如果当前用户消息提供了新的公开事实，应以当前轮事实覆盖旧信号。
 工具结果的 status 必须按事实处理：只有 succeeded 且带有 content 时才表示公开观察已经形成，
 failed、rejected、unsupported、timeout 或 already_completed 都不表示本轮获得了新的观察。
 工具结果会作为带来源的独立工具卡展示。工具卡负责给事实，final_reply 负责说明这条事实能证明什么、还不能证明什么；

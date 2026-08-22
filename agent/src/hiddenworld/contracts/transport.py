@@ -130,6 +130,8 @@ class AgentTurnRequest(BaseModel):
     original_user_message: str = ""
     action_history: list[ActionHistoryEntry] = Field(default_factory=list)
     tool_states: dict[str, ToolStateView] = Field(default_factory=dict)
+    # 上一轮 Go 归约后的安全教学导航；缺失时 Runtime 从 learner_state 构造兼容默认值。
+    guidance_state: GuidanceState | None = None
     structured_user_action: StructuredUserAction | None = None
     budget: Budget = Field(default_factory=Budget)
 

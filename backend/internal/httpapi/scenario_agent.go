@@ -101,6 +101,7 @@ func (deterministicScenarioAgentClient) Turn(_ context.Context, request agentcli
 			TeachingState:      "normal_diagnosis",
 			ProgressAssessment: "no_progress",
 			Navigation:         []agentclient.TeachingDimensionRef{},
+			DirectionStatus:    "exploring",
 		},
 		TurnControl: agentclient.TurnControl{AllowedActionIDs: []string{}},
 		TurnAnalysis: agentclient.TurnAnalysis{
@@ -618,6 +619,33 @@ func scenarioTeachingProjection(
 	return projection
 }
 
+// scenarioPriorGuidanceState 从最近一条已持久化的安全教学投影回注下一轮
+// Agent。旧消息没有投影时返回 nil，让 Python Runtime 从 LearnerState 构造
+// 兼容默认值；不把完整 ResponseMeta 或原始评估对象塞回模型。
+func scenarioPriorGuidanceState(messages []domain.ScenarioMessage) *agentclient.GuidanceState {
+	for index := len(messages) - 1; index >= 0; index-- {
+		projection := messages[index].ResponseMeta.TeachingProjection
+		if projection == nil {
+			continue
+		}
+		teachingState := scenarioTeachingStateForProjection(projection.TeachingState)
+		progress := scenarioProgressForProjection(projection.ProgressAssessment)
+		direction := projection.DirectionStatus
+		if direction != "aligned" && direction != "exploring" && direction != "needs_refocus" && direction != "off_topic" {
+			direction = "exploring"
+		}
+		return &agentclient.GuidanceState{
+			TeachingState:      teachingState,
+			ProgressAssessment: progress,
+			Navigation:         []agentclient.TeachingDimensionRef{},
+			CurrentFocus:       scenarioFocusForProjection(projection.Focus),
+			DirectionStatus:    direction,
+			RepairStatus:       "none",
+		}
+	}
+	return nil
+}
+
 func scenarioTeachingStateForProjection(value string) string {
 	switch value {
 	case "guided_inquiry", "unsupported_hypothesis", "anti_guess_detected", "premature_conclusion",
@@ -776,7 +804,8 @@ func validateScenarioStructuredTurn(result agentclient.TurnResult, world *domain
 		return errors.New("guidance state stalled_turns is invalid")
 	} else if (!legacy && (state.TeachingState == "" || state.ProgressAssessment == "")) ||
 		(state.TeachingState != "" && !scenarioTeachingStateAllowed(state.TeachingState)) ||
-		(state.ProgressAssessment != "" && !scenarioProgressAssessmentAllowed(state.ProgressAssessment)) {
+		(state.ProgressAssessment != "" && !scenarioProgressAssessmentAllowed(state.ProgressAssessment)) ||
+		(state.DirectionStatus != "" && !scenarioDirectionStatusAllowed(state.DirectionStatus)) {
 		return errors.New("guidance state enum is invalid")
 	} else {
 		if state.RepairStatus != "" && !scenarioRepairStatusAllowed(state.RepairStatus) {
@@ -795,6 +824,10 @@ func validateScenarioStructuredTurn(result agentclient.TurnResult, world *domain
 		}
 		if result.GuidanceState.ProgressAssessment != result.TurnAssessment.ProgressAssessment {
 			return errors.New("guidance state progress_assessment disagrees with turn assessment")
+		}
+		if result.GuidanceState.DirectionStatus != "" &&
+			result.GuidanceState.DirectionStatus != scenarioDirectionForProjection(*result.TurnAssessment) {
+			return errors.New("guidance state direction_status disagrees with turn assessment")
 		}
 	}
 	if err := validateScenarioTurnControl(result, world, legacy); err != nil {
@@ -977,6 +1010,15 @@ func scenarioInstantLevelAllowed(value string, allowed ...string) bool {
 func scenarioProgressAssessmentAllowed(value string) bool {
 	switch value {
 	case "progress", "partial", "no_progress", "unsupported", "contradictory", "leak_risk", "unknown":
+		return true
+	default:
+		return false
+	}
+}
+
+func scenarioDirectionStatusAllowed(value string) bool {
+	switch value {
+	case "aligned", "exploring", "needs_refocus", "off_topic":
 		return true
 	default:
 		return false
