@@ -66,8 +66,36 @@ function emptyState() {
   }
 }
 
-export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) => ({
-  ...emptyState(),
+export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) => {
+  let hydrateGeneration = 0
+
+  const isCurrentRun = (sessionId: string, requestId: string) => {
+    const state = get()
+    return state.sessionId === sessionId && state.activeRun?.requestId === requestId
+  }
+
+  const failActiveRun = (
+    sessionId: string,
+    requestId: string,
+    err: unknown,
+    fallbackMessage: string,
+  ) => {
+    // 无论错误来自 turn_failed、网络断流、超时还是 finish 缺失，
+    // 都先按 request_id 回收临时重连凭据，避免失败轮刷新后再次自动执行。
+    clearPendingRun(sessionId, requestId)
+    set((state) => {
+      if (state.sessionId !== sessionId || state.activeRun?.requestId !== requestId) return state
+      return {
+        ...state,
+        activeRun: null,
+        isSending: false,
+        sendError: err instanceof Error ? err.message : fallbackMessage,
+      }
+    })
+  }
+
+  return {
+    ...emptyState(),
 
   // Keep the request identity across a browser refresh. The server owns idempotency;
   // the client only stores public run events needed to resume the visible stream.
@@ -76,9 +104,10 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
       // SSE 过程事件来自可演进的 Agent 旁路。只把满足公开事件最小边界
       // 的帧写入当前回合；坏帧被丢弃，不让它污染重连游标或页面状态。
       if (!isPublicScenarioRunEvent(event)) return
+      if (event.request_id !== run.requestId) return
       let nextRun: ScenarioActiveRun | null = null
       set((state) => {
-        if (state.activeRun?.requestId !== run.requestId) return state
+        if (state.sessionId !== sessionId || state.activeRun?.requestId !== run.requestId) return state
         nextRun = {
           ...state.activeRun,
           events: appendRunEvent(state.activeRun.events, event),
@@ -90,7 +119,7 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
     const onDebugTrace = (trace: ScenarioDebugTraceEvent) => {
       if (trace.kind !== 'reasoning_raw_delta' || trace.text === '') return
       set((state) => {
-        if (state.activeRun?.requestId !== run.requestId) return state
+        if (state.sessionId !== sessionId || state.activeRun?.requestId !== run.requestId) return state
         return {
           ...state,
           activeRun: {
@@ -117,6 +146,7 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
       )
     } catch (err) {
       if (err instanceof ScenarioRunFailure) throw err
+      if (!isCurrentRun(sessionId, run.requestId)) throw err
       const afterSequence = latestSequence(get().activeRun?.events ?? run.events)
       return api.sendScenarioMessageStream(
         token,
@@ -129,8 +159,13 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
   },
 
   _applyRunResult: (sessionId, requestId, result) => {
+    if (!isCurrentRun(sessionId, requestId)) {
+      clearPendingRun(sessionId, requestId)
+      return
+    }
     clearPendingRun(sessionId, requestId)
     set((state) => {
+      if (state.sessionId !== sessionId || state.activeRun?.requestId !== requestId) return state
       const debugReasoning = state.activeRun?.reasoningChunks ?? []
       return {
         ...state,
@@ -166,6 +201,7 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
   },
 
   hydrate: async (token, sessionId, optimistic) => {
+    const generation = ++hydrateGeneration
     const hasOptimistic = Boolean(optimistic?.question && optimistic?.session)
     const pendingRun = readPendingRun(sessionId)
     set(() => ({
@@ -188,34 +224,39 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
     }))
     try {
       const detail = await api.scenarioSessionDetail(token, sessionId)
+      if (generation !== hydrateGeneration || get().sessionId !== sessionId) return
       const committedPendingRun = pendingRun && (detail.messages ?? []).some(
         (message) => message.response_meta.request_id === pendingRun.requestId,
       )
       const stalePendingRun = pendingRun && !committedPendingRun && detail.session.state_revision > pendingRun.stateRevision
-      set((state) => ({
-        ...state,
-        sessionId,
-        question: detail.session.question_snapshot,
-        session: detail.session,
-        messages: detail.messages ?? [],
-        activeRun: committedPendingRun || stalePendingRun || !pendingRun
-          ? null
-          : {
-              requestId: pendingRun.requestId,
-              userContent: pendingRun.userContent,
-              events: pendingRun.events,
-              reasoningChunks: [],
-              reasoningStartedAt: Date.now(),
-              structuredAction: pendingRun.structuredAction,
-            },
-        isSending: Boolean(pendingRun && !committedPendingRun && !stalePendingRun),
-        completedRuns: Object.fromEntries(
-          (detail.messages ?? [])
-            .filter((message) => (message.response_meta.run_events?.length ?? 0) > 0)
-            .map((message) => [message.id, normalizeRunEvents(message.response_meta.run_events ?? [])]),
-        ),
-        isLoading: false,
-      }))
+      set((state) => {
+        if (generation !== hydrateGeneration || state.sessionId !== sessionId) return state
+        return {
+          ...state,
+          sessionId,
+          question: detail.session.question_snapshot,
+          session: detail.session,
+          messages: detail.messages ?? [],
+          activeRun: committedPendingRun || stalePendingRun || !pendingRun
+            ? null
+            : {
+                requestId: pendingRun.requestId,
+                userContent: pendingRun.userContent,
+                events: pendingRun.events,
+                reasoningChunks: [],
+                reasoningStartedAt: Date.now(),
+                structuredAction: pendingRun.structuredAction,
+              },
+          isSending: Boolean(pendingRun && !committedPendingRun && !stalePendingRun),
+          completedRuns: Object.fromEntries(
+            (detail.messages ?? [])
+              .filter((message) => (message.response_meta.run_events?.length ?? 0) > 0)
+              .map((message) => [message.id, normalizeRunEvents(message.response_meta.run_events ?? [])]),
+          ),
+          isLoading: false,
+        }
+      })
+      if (generation !== hydrateGeneration || get().sessionId !== sessionId) return
       if (committedPendingRun) {
         clearPendingRun(sessionId, pendingRun.requestId)
       } else if (stalePendingRun) {
@@ -230,19 +271,21 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
           const result = await get()._connectRun(token, sessionId, pendingActiveRun, pendingRun.stateRevision)
           get()._applyRunResult(sessionId, pendingRun.requestId, result)
         } catch (err) {
-          if (err instanceof ScenarioRunFailure) clearPendingRun(sessionId, pendingRun.requestId)
-          set((state) => ({
-            ...state,
-            isSending: false,
-            sendError: err instanceof Error ? err.message : '恢复排查消息失败',
-          }))
+          failActiveRun(sessionId, pendingRun.requestId, err, '恢复排查消息失败')
         }
       }
     } catch (err) {
+      if (pendingRun) failActiveRun(sessionId, pendingRun.requestId, err, '读取排查会话失败')
       set((state) => ({
         ...state,
-        isLoading: false,
-        sendError: hasOptimistic ? '' : (err instanceof Error ? err.message : '读取排查会话失败'),
+        ...(state.sessionId === sessionId && generation === hydrateGeneration
+          ? {
+              isLoading: false,
+              sendError: hasOptimistic && !pendingRun
+                ? ''
+                : (err instanceof Error ? err.message : '读取排查会话失败'),
+            }
+          : {}),
       }))
       throw err
     }
@@ -279,12 +322,7 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
       const result = await get()._connectRun(token, sessionId, activeRun, stateRevision)
       get()._applyRunResult(sessionId, requestId, result)
     } catch (err) {
-      if (err instanceof ScenarioRunFailure) clearPendingRun(sessionId, requestId)
-      set((state) => ({
-        ...state,
-        isSending: false,
-        sendError: err instanceof Error ? err.message : '消息发送失败',
-      }))
+      failActiveRun(sessionId, requestId, err, '消息发送失败')
       throw err
     }
   },
@@ -315,12 +353,7 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
       const result = await get()._connectRun(token, sessionId, activeRun, stateRevision)
       get()._applyRunResult(sessionId, requestId, result)
     } catch (err) {
-      if (err instanceof ScenarioRunFailure) clearPendingRun(sessionId, requestId)
-      set((state) => ({
-        ...state,
-        isSending: false,
-        sendError: err instanceof Error ? err.message : '快捷操作失败',
-      }))
+      failActiveRun(sessionId, requestId, err, '快捷操作失败')
       throw err
     }
   },
@@ -346,8 +379,12 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
     }
   },
 
-  clear: () => set(emptyState()),
-}))
+  clear: () => {
+    hydrateGeneration += 1
+    set(emptyState())
+  },
+  }
+})
 
 function createRequestId() {
   return globalThis.crypto?.randomUUID?.() ?? `scenario-${Date.now()}-${Math.random().toString(16).slice(2)}`
