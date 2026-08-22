@@ -236,7 +236,7 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
       const detail = await api.scenarioSessionDetail(token, sessionId)
       if (generation !== hydrateGeneration || get().sessionId !== sessionId) return
       const committedPendingRun = pendingRun && (detail.messages ?? []).some(
-        (message) => message.response_meta.request_id === pendingRun.requestId,
+        (message) => message.response_meta?.request_id === pendingRun.requestId,
       )
       const stalePendingRun = pendingRun && !committedPendingRun && detail.session.state_revision > pendingRun.stateRevision
       set((state) => {
@@ -260,8 +260,9 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
           isSending: Boolean(pendingRun && !committedPendingRun && !stalePendingRun),
           completedRuns: Object.fromEntries(
             (detail.messages ?? [])
-              .filter((message) => (message.response_meta.run_events?.length ?? 0) > 0)
-              .map((message) => [message.id, normalizeRunEvents(message.response_meta.run_events ?? [])]),
+              .filter((message) => Array.isArray(message.response_meta?.run_events)
+                && message.response_meta.run_events.length > 0)
+              .map((message) => [message.id, normalizeRunEvents(message.response_meta?.run_events ?? [])]),
           ),
           isLoading: false,
         }
