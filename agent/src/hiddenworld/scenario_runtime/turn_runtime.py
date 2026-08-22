@@ -42,6 +42,7 @@ from hiddenworld.contracts import (
 from .state_reducer import StateReducer
 from hiddenworld.kernel.cluegate import ClueGate
 from hiddenworld.kernel.guard import Guard
+from hiddenworld.contracts.assessment import direction_status_for_assessment
 from hiddenworld.runtime import (
     PublicBoundaryRejected,
     TurnDeadlineExceeded,
@@ -65,7 +66,7 @@ from .agent_loop import (
     AgentLoopEvent,
     context_after_tool_results,
 )
-from .batch_scheduler import BatchScheduler
+from .batch_scheduler import BatchScheduler, compile_tool_dependency_map
 from .context import project_agent_context
 from .virtual_tools import VirtualObservationExecutor
 
@@ -183,7 +184,9 @@ class SingleAgentRuntime:
             runner = self.agent
         # 题库当前没有可执行的工具依赖图字段；不把 query_patterns 误当成依赖。
         # 真正的跨轮依赖在下一阶段由 Runtime-owned ToolDependencyGraph 注入。
-        scheduler = BatchScheduler()
+        scheduler = BatchScheduler(
+            dependency_map=compile_tool_dependency_map(request.hidden_world),
+        )
         executor = VirtualObservationExecutor(request)
         buffered_reply_deltas: list[str] = []
 
@@ -301,12 +304,13 @@ class SingleAgentRuntime:
                     # 任何直接/猜测结果伪装成 QuickAction 观察。
                     raise PublicBoundaryRejected("agent did not plan the authorized quick action")
         else:
+            scope = context.investigation_scope
             loop = AgentLoop(
                 runner,
                 executor,
                 scheduler=scheduler,
-                max_model_rounds=11,
-                max_tool_calls=5,
+                max_model_rounds=(scope.max_tool_calls + 2 if scope is not None else 6),
+                max_tool_calls=(scope.max_tool_calls if scope is not None else 3),
                 on_reply_delta=buffer_reply_delta if on_reply_delta is not None else None,
                 on_reasoning_delta=on_reasoning_delta,
                 on_loop_event=on_loop_event,
@@ -345,8 +349,13 @@ class SingleAgentRuntime:
         # TurnAssessment 必须与最终 TurnAnalysis 共用同一份 Runtime 事实，
         # 否则 Go 会把它判定为跨层语义不一致。
         effective_assessment = assessment.model_copy(update={"actions": actions})
+        guidance_scope = _guidance_scope_for_turn(request, effective_assessment)
         teaching_decision = _teaching_decision_from_agent(
-            final_output, events, effective_assessment, has_observations=False
+            final_output,
+            events,
+            effective_assessment,
+            guidance_scope=guidance_scope,
+            has_observations=False,
         )
         # 先用同一个 StateReducer 入口取得本轮允许公开的证据，再过滤执行器
         # 返回；最终归约仍会在观察注入后重新计算状态、关系和教学约束。
@@ -377,7 +386,11 @@ class SingleAgentRuntime:
                     observations.append(observation)
         if observations:
             teaching_decision = _teaching_decision_from_agent(
-                final_output, events, effective_assessment, has_observations=True
+                final_output,
+                events,
+                effective_assessment,
+                guidance_scope=guidance_scope,
+                has_observations=True,
             )
         mark_phase("state_reduction")
         reduction = StateReducer().reduce(
@@ -442,7 +455,15 @@ class SingleAgentRuntime:
             answer_comparison=answer_internal,
         )
         constraints = reduction.constraints
-        guidance_state = reduction.guidance_state
+        guidance_state = reduction.guidance_state.model_copy(
+            update={
+                # Go 侧会把公开 GuidanceState 与本轮 TurnAssessment 做同构复核；
+                # 这里显式以 Runtime 当前归约的 assessment 覆盖旧导航信号，
+                # 避免上一轮方向状态污染本轮正式提议。
+                "direction_status": direction_status_for_assessment(effective_assessment),
+                "progress_assessment": effective_assessment.progress_assessment,
+            }
+        )
         turn_control = reduction.turn_control
         normalized_primary_task = teaching_decision.primary_task
         if normalized_primary_task == "close_investigation" and not turn_control.completion_allowed:
@@ -453,8 +474,7 @@ class SingleAgentRuntime:
             update={
                 "teaching_state": guidance_state.teaching_state,
                 "primary_task": normalized_primary_task,
-                "allow_explicit_next_step": False,
-                "allow_ruled_out_scope": False,
+                "guidance_scope": guidance_scope,
             }
         )
         evidence_request = _evidence_request_for_analysis(analysis, request)
@@ -462,6 +482,7 @@ class SingleAgentRuntime:
         guard_context = GuardContext(
             forbidden_entities=_forbidden_entities(request, projected_state),
             completion_allowed=verification.completion_allowed,
+            guidance_scope=guidance_scope,
             may_release=reduction.approved_releases,
             current_user_message=request.user_message,
             evidence_request=_evidence_request_after_tool_results(
@@ -510,7 +531,7 @@ class SingleAgentRuntime:
             )
             last_error = exc
             accepted = False
-            for retry_index in range(1, 3):
+            for retry_index in range(1, 2):
                 mark_phase("reply_guard_retry")
                 retry_context = _reply_retry_context(
                     context,
@@ -985,6 +1006,7 @@ def _teaching_decision_from_agent(
     events,
     assessment: TurnAssessment,
     *,
+    guidance_scope: str,
     has_observations: bool,
 ) -> TeachingDecision:
     decision = getattr(final_output, "teaching_decision", None)
@@ -994,10 +1016,9 @@ def _teaching_decision_from_agent(
             if decision is not None:
                 break
     if decision is not None:
-        # 结构化模型已经表达策略；权限字段仍由 Runtime 强制关闭。
+        # 结构化模型已经表达策略；引导等级仍由 Runtime 按当前学生状态复核。
         update = {
-            "allow_explicit_next_step": False,
-            "allow_ruled_out_scope": False,
+            "guidance_scope": guidance_scope,
             "primary_task": _primary_task_for_assessment(
                 assessment,
                 has_observations=has_observations,
@@ -1016,6 +1037,7 @@ def _teaching_decision_from_agent(
             strategy="acknowledge",
             primary_task="interpret_evidence",
             reply_policy="tool_result_only",
+            guidance_scope=guidance_scope,
         )
     if assessment.intent in {"chat", "off_topic", "garbage", "meta"}:
         return TeachingDecision(
@@ -1025,6 +1047,7 @@ def _teaching_decision_from_agent(
                 "acknowledge_progress" if assessment.intent == "chat" else "redirect_investigation"
             ),
             reply_policy="casual_reply",
+            guidance_scope=guidance_scope,
         )
     if assessment.intent in {"clarification", "explanation_request", "help_request", "stuck"}:
         return TeachingDecision(
@@ -1036,6 +1059,7 @@ def _teaching_decision_from_agent(
                 else "release_hint"
             ),
             reply_policy="reflective_question",
+            guidance_scope=guidance_scope,
         )
     return TeachingDecision(
         teaching_state="normal_diagnosis",
@@ -1046,7 +1070,27 @@ def _teaching_decision_from_agent(
             fallback="acknowledge_progress",
         ),
         reply_policy="acknowledgement",
+        guidance_scope=guidance_scope,
     )
+
+
+def _guidance_scope_for_turn(request: AgentTurnRequest, assessment: TurnAssessment) -> str:
+    """按公开学生状态计算教学引导上限，不从模型布尔字段放权。"""
+
+    if request.structured_user_action is not None:
+        return "none"
+    if assessment.intent in {"chat", "off_topic", "garbage", "meta"}:
+        return "none"
+    if assessment.intent in {"help_request", "stuck", "request_hint"} or assessment.is_stuck:
+        user_message = request.user_message.strip()
+        if assessment.is_stuck and any(
+            marker in user_message for marker in ("具体步骤", "具体检查", "直接告诉我", "给我步骤", "查什么")
+        ):
+            return "explicit"
+        return "directional"
+    if assessment.intent in {"clarification", "explanation_request"}:
+        return "conceptual"
+    return "none"
 
 
 def _primary_task_for_assessment(

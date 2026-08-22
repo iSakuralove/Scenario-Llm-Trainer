@@ -12,6 +12,7 @@ from hiddenworld.contracts import (
     AgentContext,
     AgentModelOutput,
     AgentToolResult,
+    AuthorizedActionRef,
     FinalReplyOutput,
     ToolCall,
     ToolCallsOutput,
@@ -62,11 +63,12 @@ AgentLoopEvent = ScenarioRunFrame
 
 
 class AgentLoop:
-    """最多 11 次模型轮次、最多 5 次逻辑工具调用。
+    """在 Runtime 传入的模型轮次与工具调用预算内执行一个 Turn。
 
     一个 Turn 可以包含多个受控工具子循环，但默认预算必须足够小，避免
-    模型把“继续看看”误当成无限枚举。证据已经足够时由模型返回 final_reply
-    提前收束，5 只是安全上限而不是必须消耗的数量。
+    模型把“继续看看”误当成无限枚举。每个 Round 都重新发起模型请求，
+    但下一 Round 只读取 Runtime 维护的结构化上下文，不读取 Raw Chain-of-Thought。
+    证据已经足够时由模型返回 final_reply 提前收束。
     """
 
     def __init__(
@@ -137,6 +139,16 @@ class AgentLoop:
                 remaining_tool_calls=self.max_tool_calls - tool_calls_used,
                 completed_fingerprints=completed_fingerprints,
                 tool_states=current.tool_states,
+                parameter_bindings=(
+                    current.investigation_scope.parameter_bindings
+                    if current.investigation_scope is not None
+                    else None
+                ),
+                scope_action_ids=(
+                    set(current.investigation_scope.allowed_action_ids)
+                    if current.investigation_scope is not None
+                    else None
+                ),
             )
             events.extend(AgentLoopEvent("tool_rejected", item) for item in plan.rejected)
             events.extend(AgentLoopEvent("tool_deferred", item) for item in plan.deferred)
@@ -274,6 +286,11 @@ def context_after_tool_results(
             "round": effective_round,
             "phase": next_phase,
             "continuation": True,
+            "user_message": (
+                context.turn_context.user_message
+                or context.original_user_message
+                or context.current_user_message
+            ),
             "continuation_note": (
                 "这是同一用户轮次的继续；上一动作未形成公开观察，请基于失败状态决定是否收束。"
                 if has_error
@@ -283,8 +300,33 @@ def context_after_tool_results(
             "last_action_status": last_result.status if last_result is not None else None,
         }
     )
+    authorized_actions = _remove_consumed_authorizations(
+        context.authorized_actions,
+        tool_states,
+    )
+    if context.investigation_scope is not None:
+        authorized_actions = _advance_investigation_scope(
+            context,
+            tool_states,
+            authorized_actions,
+            effective_round,
+        )
+    available_tools = [
+        item.model_copy(deep=True)
+        for item in context.action_catalog
+        if tool_states.get(item.tool_id, ToolStateView(state="available")).state == "available"
+        and (
+            context.investigation_scope is None
+            or item.tool_id in {item.action_ref for item in authorized_actions}
+        )
+    ]
     return context.model_copy(
         update={
+            "original_user_message": (
+                context.original_user_message
+                or context.turn_context.user_message
+                or context.current_user_message
+            ),
             "tool_results": [*context.tool_results, *results],
             "current_turn_observations": [
                 *context.current_turn_observations,
@@ -292,14 +334,67 @@ def context_after_tool_results(
             ],
             "action_history": action_history,
             "tool_states": tool_states,
-            "authorized_actions": _remove_consumed_authorizations(
-                context.authorized_actions,
-                tool_states,
-            ),
+            "authorized_actions": authorized_actions,
+            "available_tools": available_tools,
             "phase": next_phase if results else context.phase,
             "turn_context": envelope,
         },
         deep=True,
+    )
+
+
+def _advance_investigation_scope(
+    context: AgentContext,
+    tool_states: dict[str, ToolStateView],
+    authorized_actions: list[AuthorizedActionRef],
+    current_round: int,
+) -> list:
+    """成功完成前置动作后，只解锁声明链上的直接后继动作。"""
+
+    scope = context.investigation_scope
+    if scope is None or scope.allowed_followup_policy != "declared_chain":
+        return authorized_actions
+    if current_round > scope.expires_at_turn:
+        return authorized_actions
+    total_calls = sum(
+        tool_states.get(action_id, ToolStateView(state="available")).call_count
+        for action_id in scope.allowed_action_ids
+    )
+    if total_calls >= scope.max_tool_calls:
+        return authorized_actions
+    existing = {item.action_ref for item in authorized_actions}
+    consumed = {
+        action_id
+        for action_id in scope.allowed_action_ids
+        if tool_states.get(action_id, ToolStateView(state="available")).state == "consumed"
+    }
+    bindings = ";".join(
+        f"{key}={value}" for key, value in scope.parameter_bindings.items()
+    )
+    for action_id in scope.allowed_action_ids:
+        if action_id in existing or action_id in consumed:
+            continue
+        dependencies = set(scope.dependency_map.get(action_id, []))
+        if not dependencies or not dependencies.issubset(consumed):
+            continue
+        authorized_actions.append(_authorized_action_from_scope(context, action_id, bindings))
+        existing.add(action_id)
+    return authorized_actions
+
+
+def _authorized_action_from_scope(
+    context: AgentContext,
+    action_id: str,
+    bindings: str,
+) -> AuthorizedActionRef:
+    return AuthorizedActionRef(
+        authorization_id=f"{context.investigation_scope.scope_id}:followup:{action_id}",
+        action_ref=action_id,
+        tool_kind=next(
+            (item.kind for item in context.action_catalog if item.tool_id == action_id),
+            "observation",
+        ),
+        normalized_scope=bindings,
     )
 
 
@@ -330,7 +425,8 @@ def _update_tool_states(
         if not result.tool_id:
             continue
         previous = states.get(result.tool_id, ToolStateView(state="available"))
-        call_count = previous.call_count + 1
+        is_dependency_deferred = result.error_code == "dependency_deferred"
+        call_count = previous.call_count if is_dependency_deferred else previous.call_count + 1
         common = {
             "call_count": call_count,
             "last_call_id": result.call_id,
@@ -352,6 +448,16 @@ def _update_tool_states(
                     "state": "unavailable",
                     "reason": "题目当前没有声明该工具",
                     "blocked_reason": "题目当前没有声明该工具",
+                    "can_call": False,
+                }
+            )
+        elif result.status == "rejected" and is_dependency_deferred:
+            states[result.tool_id] = previous.model_copy(
+                update={
+                    **common,
+                    "state": "available",
+                    "reason": "等待范围内前置动作完成",
+                    "blocked_reason": "等待范围内前置动作完成",
                     "can_call": False,
                 }
             )

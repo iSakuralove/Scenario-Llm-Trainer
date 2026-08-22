@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 
 from hiddenworld.action_resolver import (
@@ -19,6 +20,7 @@ from hiddenworld.contracts import (
     EvidenceRequestView,
     GuidanceState,
     HypothesisCatalogEntry,
+    InvestigationScope,
     LearnerStateView,
     TurnEnvelope,
     TurnControl,
@@ -30,6 +32,19 @@ from hiddenworld.evidence_availability import resolve_evidence_request
 
 _ALLOWED_SKILL_IDS = frozenset({"log_reading", "causal_reasoning", "cross_layer_debugging"})
 _RECENT_COMPLETE_TURNS = 4
+_TRACE_REQUEST_ID_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9]*_[A-Za-z0-9]+)(?![A-Za-z0-9])")
+_TRACE_REQUEST_MARKERS = (
+    "为什么这么慢",
+    "怎么这么慢",
+    "请求慢",
+    "慢请求",
+    "追踪",
+    "串起来",
+    "链路",
+    "耗时",
+)
+_TRACE_REQUEST_MAX_DEPTH = 2
+_TRACE_REQUEST_MAX_TOOL_CALLS = 2
 
 
 def project_agent_context(
@@ -80,7 +95,8 @@ def project_agent_context(
         if item.hypothesis_id.strip() and item.label.strip()
     ]
 
-    authorized = _project_authorized_actions(request)
+    investigation_scope = _resolve_investigation_scope(request)
+    authorized = _project_authorized_actions(request, investigation_scope)
     evidence_request = _project_evidence_request(request)
     labels = {item.hypothesis_id: item.label for item in request.hidden_world.hypotheses}
     learner = request.learner_state
@@ -136,10 +152,15 @@ def project_agent_context(
         for item in catalog
         if item.tool_id in default_tool_states
     }
+    authorized_ids = {item.action_ref for item in authorized}
     available_tools = [
         item.model_copy(deep=True)
         for item in catalog
         if tool_states.get(item.tool_id, ToolStateView(state="unavailable")).state == "available"
+        and (
+            investigation_scope is None
+            or item.tool_id in authorized_ids
+        )
     ]
     # 上一轮 GuidanceState 是跨轮教学状态的唯一安全切片。没有它时才从
     # LearnerState 的公开字段构造最小兼容值；不能每轮无条件重置为默认状态。
@@ -214,6 +235,7 @@ def project_agent_context(
         available_tools=available_tools,
         hypothesis_catalog=hypothesis_catalog,
         authorized_actions=authorized,
+        investigation_scope=investigation_scope,
         action_history=[item.model_copy(deep=True) for item in getattr(request, "action_history", [])],
         tool_states=tool_states,
         turn_context=turn_envelope,
@@ -324,7 +346,10 @@ def _normalize_guidance(value: GuidanceState) -> GuidanceState:
     return value.model_copy(update={"navigation": navigation}, deep=True)
 
 
-def _project_authorized_actions(request: AgentTurnRequest) -> list[AuthorizedActionRef]:
+def _project_authorized_actions(
+    request: AgentTurnRequest,
+    investigation_scope: InvestigationScope | None = None,
+) -> list[AuthorizedActionRef]:
     result: list[AuthorizedActionRef] = []
     consumed_actions = _consumed_action_ids(request)
     action = request.structured_user_action
@@ -371,7 +396,150 @@ def _project_authorized_actions(request: AgentTurnRequest) -> list[AuthorizedAct
                 tool_kind=_tool_kind(request, action_ref),
             )
         )
+    if investigation_scope is not None:
+        for action_ref in investigation_scope.entry_action_ids:
+            if (
+                any(item.action_ref == action_ref for item in result)
+                or action_ref in consumed_actions
+                or not _has_action(request, action_ref)
+            ):
+                continue
+            result.append(
+                AuthorizedActionRef(
+                    authorization_id=f"{investigation_scope.scope_id}:entry:{action_ref}",
+                    action_ref=action_ref,
+                    tool_kind=_tool_kind(request, action_ref),
+                    normalized_scope=";".join(
+                        f"{key}={value}"
+                        for key, value in investigation_scope.parameter_bindings.items()
+                    ),
+                )
+            )
     return result
+
+
+def _resolve_investigation_scope(request: AgentTurnRequest) -> InvestigationScope | None:
+    """把明确的单请求追踪表达式归约为一次有限、可回放的范围授权。"""
+
+    if request.structured_user_action is not None:
+        return None
+    message = request.user_message.strip()
+    if not message or not any(marker in message for marker in _TRACE_REQUEST_MARKERS):
+        return None
+    match = _TRACE_REQUEST_ID_RE.search(message)
+    if match is None:
+        return None
+    subject_id = match.group(1)
+    action_tools = {
+        item.observation_action: item
+        for item in request.hidden_world.virtual_tools
+        if _is_public_observation_tool(item)
+    }
+    if not action_tools:
+        return None
+    evidence_by_id = {
+        item.evidence_id: item for item in request.hidden_world.evidence_graph
+    }
+    dependencies: dict[str, set[str]] = {action: set() for action in action_tools}
+    for node in evidence_by_id.values():
+        target_actions = [action for action in node.obtained_by if action in action_tools]
+        prerequisite_actions = {
+            action
+            for prerequisite_id in node.prerequisites
+            for action in getattr(evidence_by_id.get(prerequisite_id), "obtained_by", [])
+            if action in action_tools
+        }
+        for action in target_actions:
+            dependencies[action].update(prerequisite_actions)
+
+    collected_evidence = set(request.learner_state.collected_evidence)
+    consumed_actions = _consumed_action_ids(request)
+    evidence_for_action = {
+        action: {
+            evidence_id
+            for evidence_id, node in evidence_by_id.items()
+            if action in node.obtained_by
+        }
+        for action in action_tools
+    }
+
+    def action_is_ready(action: str) -> bool:
+        evidence_ids = evidence_for_action.get(action, set())
+        if not evidence_ids:
+            return True
+        return any(
+            set(evidence_by_id[evidence_id].prerequisites).issubset(collected_evidence)
+            for evidence_id in evidence_ids
+        )
+
+    entry_action = _trace_entry_action(
+        action_tools,
+        eligible_actions={
+            action
+            for action in action_tools
+            if action not in consumed_actions and action_is_ready(action)
+        },
+    )
+    if entry_action is None:
+        return None
+    allowed = {entry_action}
+    depths = {entry_action: 0}
+    changed = True
+    while changed:
+        changed = False
+        for action, prerequisites in dependencies.items():
+            if action in allowed or not prerequisites or not prerequisites.issubset(allowed):
+                continue
+            depth = max(depths[item] for item in prerequisites) + 1
+            if depth > _TRACE_REQUEST_MAX_DEPTH:
+                continue
+            allowed.add(action)
+            depths[action] = depth
+            changed = True
+    dependency_map = {
+        action: sorted(item for item in dependencies[action] if item in allowed)
+        for action in allowed
+        if dependencies[action]
+    }
+    return InvestigationScope(
+        scope_id=f"trace:{subject_id}",
+        source="user_message",
+        intent="trace_request_latency",
+        subject_type="request",
+        subject_id=subject_id,
+        entry_action_ids=[entry_action],
+        allowed_action_ids=sorted(allowed, key=lambda item: (depths.get(item, 0), item)),
+        max_depth=max(depths.values(), default=0),
+        max_tool_calls=min(_TRACE_REQUEST_MAX_TOOL_CALLS, len(allowed)),
+        parameter_bindings={"request_id": subject_id},
+        expires_at_turn=3,
+        allowed_followup_policy="declared_chain",
+        dependency_map=dependency_map,
+    )
+
+
+def _trace_entry_action(action_tools, *, eligible_actions=None) -> str | None:
+    eligible = set(action_tools) if eligible_actions is None else set(eligible_actions)
+    preferred = (
+        "inspect:logs.service_callback",
+        "inspect:logs.callback_timeout",
+        "inspect:logs.nginx_callback",
+        "inspect:config.route_diff",
+        "inspect:database.lock_wait",
+    )
+    for action in preferred:
+        if action in action_tools and action in eligible:
+            return action
+    candidates = [
+        action
+        for action, tool in action_tools.items()
+        if action in eligible
+        if any(
+            marker in f"{tool.target} {' '.join(tool.aliases)}"
+            for marker in ("回调", "callback", "gateway", "网关", "访问日志")
+        )
+    ]
+    return sorted(candidates)[0] if candidates else None
 
 
 def _consumed_action_ids(request: AgentTurnRequest) -> set[str]:

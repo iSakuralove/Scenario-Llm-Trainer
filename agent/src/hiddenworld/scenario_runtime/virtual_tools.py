@@ -13,6 +13,7 @@ class VirtualObservationExecutor:
     def __init__(self, request: AgentTurnRequest) -> None:
         self.request = request
         self.executed_observations: dict[str, object] = {}
+        self.collected_evidence = set(request.learner_state.collected_evidence)
 
     async def execute(self, call: ToolCall, context: AgentContext) -> AgentToolResult:
         entry = next((item for item in context.action_catalog if item.tool_id == call.tool_id), None)
@@ -58,12 +59,12 @@ class VirtualObservationExecutor:
         result = HiddenWorldEngine().observe(
             self.request.hidden_world,
             action=call.tool_id,
-            collected_evidence=self.request.learner_state.collected_evidence,
+            collected_evidence=sorted(self.collected_evidence),
         )
         self.executed_observations[call.tool_id] = result
         # 前置条件未满足时，世界只返回了“无法形成观察”的内部状态，不能
         # 伪装成成功工具结果，也不能让 Runtime 将它投影为新的公开证据。
-        collected = set(self.request.learner_state.collected_evidence)
+        collected = self.collected_evidence
         configured = next(
             item for item in self.request.hidden_world.observations if item.action == call.tool_id
         )
@@ -81,6 +82,7 @@ class VirtualObservationExecutor:
                 status="failed",
                 error_code="unmet_prerequisite",
             )
+        self.collected_evidence.update(configured.yields_evidence)
         return AgentToolResult(
             call_id=call.call_id,
             tool_id=call.tool_id,

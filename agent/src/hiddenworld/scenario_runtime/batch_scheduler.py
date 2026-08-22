@@ -36,16 +36,35 @@ class BatchScheduler:
         remaining_tool_calls: int,
         completed_fingerprints: set[str] | None = None,
         tool_states: dict[str, ToolStateView] | None = None,
+        parameter_bindings: dict[str, str] | None = None,
+        scope_action_ids: set[str] | None = None,
     ) -> BatchPlan:
         catalog = {item.tool_id: item for item in action_catalog}
         authorized = {item.action_ref for item in authorized_actions}
         seen: set[str] = set()
         completed = completed_fingerprints or set()
         states = tool_states or {}
+        scoped_actions = scope_action_ids or set()
         candidates: list[ToolCall] = []
         rejected: list[AgentToolResult] = []
 
-        for call in calls:
+        bindings = parameter_bindings or {}
+        for raw_call in calls:
+            call = raw_call
+            entry = catalog.get(call.tool_id)
+            if entry is not None and bindings:
+                call = call.model_copy(
+                    update={
+                        "arguments": {
+                            **call.arguments,
+                            **{
+                                key: value
+                                for key, value in bindings.items()
+                                if key in entry.parameter_names and value
+                            },
+                        }
+                    }
+                )
             fingerprint = _fingerprint(call)
             if fingerprint in seen or fingerprint in completed:
                 rejected.append(
@@ -60,7 +79,6 @@ class BatchScheduler:
                 continue
             seen.add(fingerprint)
 
-            entry = catalog.get(call.tool_id)
             if entry is None:
                 rejected.append(_rejected(call, "unsupported_tool"))
                 continue
@@ -68,7 +86,15 @@ class BatchScheduler:
                 rejected.append(_rejected(call, "already_completed", entry.kind))
                 continue
             if entry.kind != "compare_answer" and call.tool_id not in authorized:
-                rejected.append(_rejected(call, "user_action_required", entry.kind))
+                rejected.append(
+                    _rejected(
+                        call,
+                        "dependency_deferred"
+                        if call.tool_id in scoped_actions and self._dependency_map.get(call.tool_id)
+                        else "user_action_required",
+                        entry.kind,
+                    )
+                )
                 continue
             candidates.append(call)
 
@@ -157,3 +183,28 @@ def _rejected(call: ToolCall, error_code: str, tool_kind: str = "unknown") -> Ag
         status="rejected" if error_code != "unsupported_tool" else "unsupported",
         error_code=error_code,
     )
+
+
+def compile_tool_dependency_map(hidden_world) -> dict[str, set[str]]:
+    """从 EvidenceGraph 编译 Runtime 执行视图，避免维护第二份因果图。"""
+
+    public_actions = {
+        item.observation_action
+        for item in getattr(hidden_world, "virtual_tools", [])
+        if item.observation_action and "compare_answer" not in item.observation_action
+    }
+    evidence_by_id = {
+        item.evidence_id: item for item in getattr(hidden_world, "evidence_graph", [])
+    }
+    dependency_map: dict[str, set[str]] = {action: set() for action in public_actions}
+    for node in evidence_by_id.values():
+        target_actions = [action for action in node.obtained_by if action in public_actions]
+        prerequisite_actions = {
+            action
+            for prerequisite_id in node.prerequisites
+            for action in getattr(evidence_by_id.get(prerequisite_id), "obtained_by", [])
+            if action in public_actions
+        }
+        for action in target_actions:
+            dependency_map[action].update(prerequisite_actions)
+    return dependency_map

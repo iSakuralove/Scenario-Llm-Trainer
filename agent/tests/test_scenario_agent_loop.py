@@ -664,6 +664,120 @@ def test_fixed_vip_bank_natural_language_can_authorize_related_log_pair(
     ]
 
 
+def test_fixed_vip_latency_scope_starts_from_the_deepest_ready_action() -> None:
+    path = Path(__file__).parents[1] / "src" / "hiddenworld" / "bank" / "fixed" / "hw-network-vip-001.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    request = AgentTurnRequest(
+        request_id="fixed-bank-pay-b72-scope",
+        session_id="session-1",
+        state_revision=9,
+        public_scenario=payload["public_scenario"],
+        hidden_world=payload["hidden_world"],
+        learner_state={
+            "collected_evidence": ["E_CALLBACK_TIMEOUT", "E_NGINX_LATE_200"],
+            "actions_taken": [
+                "inspect:logs.callback_timeout",
+                "inspect:logs.nginx_callback",
+            ],
+        },
+        user_message="看看 pay_b72 为什么这么慢",
+    )
+
+    context = project_agent_context(request)
+
+    assert context.investigation_scope is not None
+    assert context.investigation_scope.subject_id == "pay_b72"
+    assert context.investigation_scope.entry_action_ids == ["inspect:logs.service_callback"]
+    assert context.investigation_scope.allowed_action_ids == [
+        "inspect:logs.service_callback",
+        "inspect:database.lock_wait",
+    ]
+    assert context.investigation_scope.max_depth == 1
+    assert context.investigation_scope.max_tool_calls == 2
+    assert [item.action_ref for item in context.authorized_actions] == [
+        "inspect:logs.service_callback",
+    ]
+    assert [item.tool_id for item in context.available_tools] == [
+        "inspect:logs.service_callback",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fixed_vip_latency_scope_runs_service_then_lock_then_stops() -> None:
+    path = Path(__file__).parents[1] / "src" / "hiddenworld" / "bank" / "fixed" / "hw-network-vip-001.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    class PayB72Runner:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.contexts: list[AgentContext] = []
+
+        async def run(self, context: AgentContext):
+            self.calls += 1
+            self.contexts.append(context)
+            if self.calls == 1:
+                assert context.investigation_scope is not None
+                assert [item.tool_id for item in context.available_tools] == [
+                    "inspect:logs.service_callback",
+                ]
+                return ToolCallsOutput(
+                    kind="tool_calls",
+                    public_summary="先拆开 pay_b72 的回调服务耗时。",
+                    calls=[ToolCall(call_id="pay-b72-service", tool_id="inspect:logs.service_callback")],
+                )
+            if self.calls == 2:
+                assert context.turn_context.phase == "after_tool_call"
+                assert [item.tool_id for item in context.current_turn_observations] == [
+                    "inspect:logs.service_callback",
+                ]
+                assert [item.action_ref for item in context.authorized_actions] == [
+                    "inspect:database.lock_wait",
+                ]
+                return ToolCallsOutput(
+                    kind="tool_calls",
+                    public_summary="数据库阶段占主要耗时，继续看锁等待。",
+                    calls=[ToolCall(call_id="pay-b72-lock", tool_id="inspect:database.lock_wait")],
+                )
+            assert self.calls == 3
+            assert context.turn_context.phase == "after_tool_call"
+            assert [item.tool_id for item in context.current_turn_observations] == [
+                "inspect:logs.service_callback",
+                "inspect:database.lock_wait",
+            ]
+            return FinalReplyOutput(
+                kind="final_reply",
+                reply="pay_b72 的主要耗时在数据库阶段，其中锁等待约 3.31 秒。",
+            )
+
+    request = AgentTurnRequest(
+        request_id="fixed-bank-pay-b72-runtime",
+        session_id="session-1",
+        state_revision=9,
+        public_scenario=payload["public_scenario"],
+        hidden_world=payload["hidden_world"],
+        learner_state={
+            "collected_evidence": ["E_CALLBACK_TIMEOUT", "E_NGINX_LATE_200"],
+            "actions_taken": [
+                "inspect:logs.callback_timeout",
+                "inspect:logs.nginx_callback",
+            ],
+        },
+        user_message="看看 pay_b72 为什么这么慢",
+    )
+    runner = PayB72Runner()
+
+    result = await SingleAgentRuntime(runner).run_turn(request)
+
+    assert runner.calls == 3
+    assert result.reply.startswith("pay_b72")
+    successful = [
+        item.tool_name
+        for item in result.public_trace
+        if item.kind == "agent_tool_result" and item.observation is not None
+    ]
+    assert successful == ["inspect:logs.service_callback", "inspect:database.lock_wait"]
+
+
 def test_database_status_question_does_not_resolve_as_observation_request() -> None:
     path = Path(__file__).parents[1] / "src" / "hiddenworld" / "bank" / "fixed" / "hw-network-vip-001.json"
     payload = json.loads(path.read_text(encoding="utf-8"))

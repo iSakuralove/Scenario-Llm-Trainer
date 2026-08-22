@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .authorization import AuthorizedActionRef
+from .authorization import AuthorizedActionRef, InvestigationScope
 from .assessment import GuidanceState
 from .dimensions import TeachingDimensionRef
 from .learner import LearnerStateView, Turn
@@ -196,6 +196,7 @@ class AgentContext(BaseModel):
     available_tools: list[ActionCatalogEntry] = Field(default_factory=list)
     hypothesis_catalog: list[HypothesisCatalogEntry] = Field(default_factory=list)
     authorized_actions: list[AuthorizedActionRef] = Field(default_factory=list)
+    investigation_scope: InvestigationScope | None = None
     tool_results: list[AgentToolResult] = Field(default_factory=list)
     current_turn_observations: list[AgentToolResult] = Field(default_factory=list)
     action_history: list[ActionHistoryEntry] = Field(default_factory=list)

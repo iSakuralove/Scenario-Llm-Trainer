@@ -12,6 +12,29 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 AuthorizationSource = Literal["user_message", "structured_user_action"]
+InvestigationIntent = Literal["trace_request_latency"]
+InvestigationSubjectType = Literal["request"]
+AllowedFollowupPolicy = Literal["none", "declared_chain"]
+
+
+class InvestigationScope(BaseModel):
+    """Runtime 为一次明确调查范围签发的有限补查授权。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scope_id: str
+    source: AuthorizationSource
+    intent: InvestigationIntent
+    subject_type: InvestigationSubjectType
+    subject_id: str
+    entry_action_ids: list[str] = Field(default_factory=list)
+    allowed_action_ids: list[str] = Field(default_factory=list)
+    max_depth: int = Field(default=0, ge=0)
+    max_tool_calls: int = Field(default=0, ge=0)
+    parameter_bindings: dict[str, str] = Field(default_factory=dict)
+    expires_at_turn: int = Field(default=0, ge=0)
+    allowed_followup_policy: AllowedFollowupPolicy = "none"
+    dependency_map: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class UserActionAuthorization(BaseModel):

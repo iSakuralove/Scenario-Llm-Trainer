@@ -29,7 +29,12 @@ from .agent_context import (
     TurnPhase,
     ToolStateView,
 )
-from .authorization import AuthorizedActionRef, StructuredUserAction, UserActionAuthorization
+from .authorization import (
+    AuthorizedActionRef,
+    InvestigationScope,
+    StructuredUserAction,
+    UserActionAuthorization,
+)
 from .debug_trace import DebugTraceEvent
 from .dimensions import TeachingDimensionCategory, TeachingDimensionRef
 from .model_output import (
@@ -77,6 +82,7 @@ from .version import (
     CONTRACT_VERSION,
     AllowedDirection,
     EvidenceCategory,
+    GuidanceScope,
     HypothesisRelation,
     MustNotConstraint,
     StudentAffect,
@@ -208,12 +214,14 @@ __all__ = [
     "ContractVersionMismatch",
     "DebugTraceEvent",
     "EvidenceCategory",
+    "GuidanceScope",
     "EvidenceAvailabilityRule",
     "EvidenceNode",
     "ExplanationPreferences",
     "ExpectedEffort",
     "FinalReplyOutput",
     "GuardContext",
+    "InvestigationScope",
     "EvidenceRequest",
     "HiddenWorld",
     "HintStep",
