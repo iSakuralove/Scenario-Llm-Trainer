@@ -304,6 +304,7 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
   sendMessage: async (token, sessionId, content) => {
     const userContent = content.trim()
     if (!userContent) return
+    if (get().isSending) return
 
     set((state) => ({
       ...state,

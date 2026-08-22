@@ -127,6 +127,7 @@ replay_reply_mismatch = 0
 - 已新增安全 `repair_status` 投影，仅允许 `none` / `partial` / `sufficient`；Agent 和学生侧不接收 `solution_coverage`、`missing_solution_requirements`、`CanonicalAnswer`、`root_cause` 或内部 ID。
 - 答案修复/验证覆盖已从整句字符串包含升级为按分句、行为类别和否定边界匹配，覆盖 Gateway timeout、数据库锁等待、幂等、索引、缓存隔离、临时存储、驱逐监控和慢查询等题库表达；未知要求仍保留精确匹配兜底。
 - 前端失败回收已统一：网络断流、超时、`turn_failed`、CAS 冲突和完成事件缺失都会清理活动回合及刷新凭据；会话代次、`sessionId`、`requestId` 和公开事件请求归属均受保护，旧页面响应不能回写新会话。
+- 自然语言发送路径与 QuickAction 一样增加同页 `isSending` 互斥；快速重复点击不会覆盖当前 `activeRun` 或制造第二个同页请求，不影响不同页面之间的 CAS 冲突路径。
 - 前端失败终态进一步收紧：失败事件会撤回当前轮所有候选正文、任务、工具结果、线索和 Hint；SSE `error`、HTTP 业务错误、损坏/缺失 `finish` 不再盲目重复提交，只有底层读取中断允许同一 `request_id` 续接；pending run 只恢复归属于自身请求且形状合法的公开事件，完成响应也复核会话与请求归属。
 - 响应归属校验继续 fail-closed：完成响应中的 `run_events` 现在先通过公开事件形状校验，再比较 `request_id`；malformed 事件不会在清理/恢复阶段触发异常或写回当前会话。
 - 历史与 pending-run 归一化也复用同一公开事件校验：刷新恢复时的非法 `run_events` 会被丢弃，不再因为坏帧让会话恢复流程抛异常。
