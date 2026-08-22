@@ -161,9 +161,11 @@ func prepareHiddenWorldScenarioContent(content domain.ScenarioContent, question 
 		publicScenario = &prepared
 	}
 	return (domain.ScenarioContent{
-		ModelVersion:   strings.TrimSpace(content.ModelVersion),
-		PublicScenario: publicScenario,
-		HiddenWorld:    content.HiddenWorld,
+		ModelVersion:     strings.TrimSpace(content.ModelVersion),
+		ContractVersion:  strings.TrimSpace(content.ContractVersion),
+		ContractChecksum: strings.TrimSpace(content.ContractChecksum),
+		PublicScenario:   publicScenario,
+		HiddenWorld:      content.HiddenWorld,
 	}).WithHiddenWorldCompatibility()
 }
 

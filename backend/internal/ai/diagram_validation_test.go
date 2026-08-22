@@ -29,6 +29,29 @@ func TestPrepareScenarioQuestionNormalizesFencedMermaid(t *testing.T) {
 	}
 }
 
+func TestPrepareScenarioQuestionPreservesScenarioContract(t *testing.T) {
+	question := domain.ScenarioQuestion{
+		Title:       "查询变慢",
+		Description: "延迟上升",
+		Content: domain.ScenarioContent{
+			ModelVersion:    domain.HiddenWorldContractVersion,
+			ContractVersion: domain.ScenarioV3ContractVersion,
+			PublicScenario: &domain.PublicScenario{
+				Title:       "查询变慢",
+				Description: "延迟上升",
+			},
+			HiddenWorld: &domain.HiddenWorld{
+				RootCause: domain.RootCause{ID: "RC_INDEX", Description: "联合索引缺失"},
+			},
+		},
+	}
+
+	prepared := PrepareScenarioQuestion(question)
+	if prepared.Content.ContractVersion != domain.ScenarioV3ContractVersion {
+		t.Fatalf("expected contract version %q after preparation, got %q", domain.ScenarioV3ContractVersion, prepared.Content.ContractVersion)
+	}
+}
+
 func TestPrepareScenarioQuestionUsesFallbackForInvalidMermaid(t *testing.T) {
 	question := validScenarioQuestionSample()
 	question.Content.ArchitectureDiagramSpec = nil
