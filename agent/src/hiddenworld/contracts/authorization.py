@@ -12,8 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 AuthorizationSource = Literal["user_message", "structured_user_action"]
-InvestigationIntent = Literal["trace_request_latency"]
-InvestigationSubjectType = Literal["request"]
+InvestigationIntent = Literal["trace_request_latency", "discover_request_latency"]
+InvestigationSubjectType = Literal["request", "request_collection"]
 AllowedFollowupPolicy = Literal["none", "declared_chain"]
 
 

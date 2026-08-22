@@ -703,6 +703,41 @@ def test_fixed_vip_bank_natural_language_can_authorize_related_log_pair(
     ]
 
 
+def test_fixed_vip_broad_latency_message_authorizes_only_safe_discovery_entry() -> None:
+    path = Path(__file__).parents[1] / "src" / "hiddenworld" / "bank" / "fixed" / "hw-network-vip-001.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    request = AgentTurnRequest(
+        request_id="fixed-bank-latency-discovery",
+        session_id="session-1",
+        state_revision=1,
+        public_scenario=payload["public_scenario"],
+        hidden_world=payload["hidden_world"],
+        learner_state={"collected_evidence": [], "actions_taken": []},
+        user_message="支付回调偶发超时，帮我定位一下原因",
+    )
+
+    context = project_agent_context(request)
+
+    assert context.investigation_scope is not None
+    assert context.investigation_scope.intent == "discover_request_latency"
+    assert context.investigation_scope.subject_type == "request_collection"
+    assert context.investigation_scope.subject_id == "unresolved"
+    assert context.investigation_scope.parameter_bindings == {}
+    assert context.investigation_scope.entry_action_ids == [
+        "inspect:logs.callback_timeout",
+    ]
+    assert context.investigation_scope.allowed_action_ids == [
+        "inspect:logs.callback_timeout",
+    ]
+    assert context.investigation_scope.max_tool_calls == 1
+    assert [item.action_ref for item in context.authorized_actions] == [
+        "inspect:logs.callback_timeout",
+    ]
+    assert [item.tool_id for item in context.available_tools] == [
+        "inspect:logs.callback_timeout",
+    ]
+
+
 def test_fixed_vip_latency_scope_starts_from_the_deepest_ready_action() -> None:
     path = Path(__file__).parents[1] / "src" / "hiddenworld" / "bank" / "fixed" / "hw-network-vip-001.json"
     payload = json.loads(path.read_text(encoding="utf-8"))

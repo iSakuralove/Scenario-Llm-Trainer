@@ -38,6 +38,9 @@ _TRACE_REQUEST_MARKERS = (
     "怎么这么慢",
     "请求慢",
     "慢请求",
+    "超时",
+    "延迟",
+    "偶发",
     "追踪",
     "串起来",
     "链路",
@@ -45,6 +48,7 @@ _TRACE_REQUEST_MARKERS = (
 )
 _TRACE_REQUEST_MAX_DEPTH = 2
 _TRACE_REQUEST_MAX_TOOL_CALLS = 2
+_DISCOVERY_REQUEST_MAX_TOOL_CALLS = 1
 
 
 def project_agent_context(
@@ -419,17 +423,18 @@ def _project_authorized_actions(
 
 
 def _resolve_investigation_scope(request: AgentTurnRequest) -> InvestigationScope | None:
-    """把明确的单请求追踪表达式归约为一次有限、可回放的范围授权。"""
+    """把延迟排查表达式归约为有限、可回放的范围授权。
+
+    带 request_id 的消息进入单请求追踪链；没有 request_id 时只签发一个
+    聚合入口观察授权。聚合入口只能发现公开候选，不能凭空把某个请求绑定
+    到隐藏世界，也不能继续调用需要 request_id 的下游工具。
+    """
 
     if request.structured_user_action is not None:
         return None
     message = request.user_message.strip()
     if not message or not any(marker in message for marker in _TRACE_REQUEST_MARKERS):
         return None
-    match = _TRACE_REQUEST_ID_RE.search(message)
-    if match is None:
-        return None
-    subject_id = match.group(1)
     action_tools = {
         item.observation_action: item
         for item in request.hidden_world.virtual_tools
@@ -437,6 +442,10 @@ def _resolve_investigation_scope(request: AgentTurnRequest) -> InvestigationScop
     }
     if not action_tools:
         return None
+    match = _TRACE_REQUEST_ID_RE.search(message)
+    if match is None:
+        return _resolve_request_latency_discovery_scope(request, action_tools)
+    subject_id = match.group(1)
     evidence_by_id = {
         item.evidence_id: item for item in request.hidden_world.evidence_graph
     }
@@ -515,6 +524,32 @@ def _resolve_investigation_scope(request: AgentTurnRequest) -> InvestigationScop
         expires_at_turn=3,
         allowed_followup_policy="declared_chain",
         dependency_map=dependency_map,
+    )
+
+
+def _resolve_request_latency_discovery_scope(
+    request: AgentTurnRequest,
+    action_tools: dict[str, object],
+) -> InvestigationScope | None:
+    """为没有 request_id 的排查消息只授权一次聚合入口观察。"""
+
+    entry_action = "inspect:logs.callback_timeout"
+    if entry_action not in action_tools or entry_action in _consumed_action_ids(request):
+        return None
+    return InvestigationScope(
+        scope_id=f"discover:request-latency:{request.request_id}",
+        source="user_message",
+        intent="discover_request_latency",
+        subject_type="request_collection",
+        subject_id="unresolved",
+        entry_action_ids=[entry_action],
+        allowed_action_ids=[entry_action],
+        max_depth=0,
+        max_tool_calls=_DISCOVERY_REQUEST_MAX_TOOL_CALLS,
+        parameter_bindings={},
+        expires_at_turn=1,
+        allowed_followup_policy="none",
+        dependency_map={},
     )
 
 
