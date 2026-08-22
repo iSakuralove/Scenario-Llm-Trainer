@@ -128,6 +128,7 @@ replay_reply_mismatch = 0
 - 答案修复/验证覆盖已从整句字符串包含升级为按分句、行为类别和否定边界匹配，覆盖 Gateway timeout、数据库锁等待、幂等、索引、缓存隔离、临时存储、驱逐监控和慢查询等题库表达；未知要求仍保留精确匹配兜底。
 - 前端失败回收已统一：网络断流、超时、`turn_failed`、CAS 冲突和完成事件缺失都会清理活动回合及刷新凭据；会话代次、`sessionId`、`requestId` 和公开事件请求归属均受保护，旧页面响应不能回写新会话。
 - 前端失败终态进一步收紧：失败事件会撤回当前轮所有候选正文、任务、工具结果、线索和 Hint；SSE `error`、HTTP 业务错误、损坏/缺失 `finish` 不再盲目重复提交，只有底层读取中断允许同一 `request_id` 续接；pending run 只恢复归属于自身请求且形状合法的公开事件，完成响应也复核会话与请求归属。
+- 响应归属校验继续 fail-closed：完成响应中的 `run_events` 现在先通过公开事件形状校验，再比较 `request_id`；malformed 事件不会在清理/恢复阶段触发异常或写回当前会话。
 - 提交失败错误边界已补齐：Go 将存储提交错误映射为稳定的 `scenario_commit_failed`，未知内部错误不再把数据库/网络/驱动原文返回学生；前端同时净化数据库连接、主机解析和驱动错误。真实浏览器停止 PostgreSQL 注入后只显示“本轮处理失败，请重试”，刷新仍停在第 20 轮且未自动重放。
 - 导师正文回显防线已补齐：Python 私有 `GuardContext` 对当前用户原文做 NFKC/空白归一化的完全回显拦截，Runtime fallback 不再使用用户问题或题面描述作为正文兜底；Go 在状态提议与落库前增加独立的 `reply_echoed_user_message` 最终防线。该改动已在本地 `main` 的 `02bbdc9` 提交，未 push。
 - Python 全量回归在闭环修复后为 `225 passed, 8 deselected`；Go 全量 `go test ./...`、前端 `npm run lint`/`npm run build` 和场景流式 E2E 7 条关键用例均通过。

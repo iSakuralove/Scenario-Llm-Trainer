@@ -503,7 +503,9 @@ function scenarioResponseBelongsToRun(
   const responseRequestId = message.response_meta?.request_id ?? candidate?.response_meta?.request_id
   if (responseRequestId !== requestId) return false
   const events = candidate?.run_events ?? message.response_meta?.run_events ?? []
-  return Array.isArray(events) && events.every((event) => event.request_id === requestId)
+  return Array.isArray(events) && events.every((event) => (
+    isPublicScenarioRunEvent(event) && event.request_id === requestId
+  ))
 }
 
 function pendingRunStorageKey(sessionId: string) {
