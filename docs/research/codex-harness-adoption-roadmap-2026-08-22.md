@@ -188,6 +188,7 @@ replay_reply_mismatch = 0
 - 真实浏览器再次复现 Python/Go 结果契约漏字段：`state_revision=24` 的请求已收到公开 trace 和候选正文，但旧 API 镜像在 result 收尾阶段因 `repair_status` 严格解码失败，页面只显示“排查服务返回了无效结果”，轮次仍为 24；源码已补 `TurnAssessment.repair_status`，待后续正常构建 API 镜像后再复验。
 - 已捕获连续卡住的部分 Hint 递进：同一活动会话中观察到 Hint 1→3；中间的概念澄清不会机械升级，Hint 不进入学生事实。Sol 只读审查确认固定题库、Python reducer、Go 审批、SSE 与前端均可达 Hint 4，并支持进展后的单步回落；独立 Hint 4/回落浏览器 artifact 仍待验收。本轮同步了 Python/Go 对 `stuck`、`help_request`、`request_hint` 意图的升级判定。
 - 真实浏览器补了同页快速双击发送观察：同一页面只产生一条用户消息和一个活动回合，失败后轮次仍为 0/50 且没有第二条消息或残留过程事件；证据记录在 `phase6-same-page-double-submit-2026-08-22.md`，跨页面 CAS 仍需独立证据。
+- 真实浏览器补了 raw reasoning 旁路部分证据：调试开关打开时 raw reasoning 只出现在当前处理中调试区；失败终态和刷新后没有进入正式历史或学生消息。独立开关关闭后的完整闭环仍待后续验收，证据记录在 `phase6-raw-reasoning-sidechannel-2026-08-22.md`。
 - 将基础学生、工程学生、知识碎片化学生、未提供数据、跑偏、卡住、过早结论、修复后复盘、重放、未授权工具和伪造结果整理为行为快照；本轮不运行自动化测试，后续仍需按用户要求以真实交互为主补证据。
 - 失败注入和行为快照矩阵仍未完成；全部完成后再更新 Phase 6 收口结论并提交路线图/代码的最终本地 `main` commit。按当前用户要求不执行 `git push`。Phase 7 离线 AIJob 继续后置，不能提前进入学生实时 Turn。
 
