@@ -1,7 +1,8 @@
 import { create } from 'zustand'
-import { api, ScenarioRunFailure } from '../api/client'
+import { api, ScenarioStreamReconnectable } from '../api/client'
 import type { ScenarioMessageResponse } from '../api/client'
 import type { ScenarioMessage, ScenarioQuestion, ScenarioSession } from '../types'
+import { SCENARIO_RUN_EVENT_SCHEMA_V2 } from '../types/agentRun'
 import type { ScenarioAllowedAction, ScenarioDebugTraceEvent, ScenarioRunEventAny } from '../types/agentRun'
 
 interface ScenarioActiveRun {
@@ -145,7 +146,7 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
         onDebugTrace,
       )
     } catch (err) {
-      if (err instanceof ScenarioRunFailure) throw err
+      if (!(err instanceof ScenarioStreamReconnectable)) throw err
       if (!isCurrentRun(sessionId, run.requestId)) throw err
       const afterSequence = latestSequence(get().activeRun?.events ?? run.events)
       return api.sendScenarioMessageStream(
@@ -161,6 +162,15 @@ export const useScenarioSessionStore = create<ScenarioSessionState>((set, get) =
   _applyRunResult: (sessionId, requestId, result) => {
     if (!isCurrentRun(sessionId, requestId)) {
       clearPendingRun(sessionId, requestId)
+      return
+    }
+    if (!scenarioResponseBelongsToRun(sessionId, requestId, result)) {
+      failActiveRun(
+        sessionId,
+        requestId,
+        new Error('流式响应归属无效'),
+        '本轮响应归属无效，请重试',
+      )
       return
     }
     clearPendingRun(sessionId, requestId)
@@ -427,18 +437,73 @@ const PUBLIC_SCENARIO_RUN_EVENT_KINDS = new Set([
 
 function isPublicScenarioRunEvent(event: unknown): event is ScenarioRunEventAny {
   if (!event || typeof event !== 'object') return false
-  const candidate = event as { request_id?: unknown; sequence?: unknown; kind?: unknown }
-  return typeof candidate.request_id === 'string'
+  const candidate = event as { request_id?: unknown; sequence?: unknown; kind?: unknown; schema_version?: unknown; payload?: unknown }
+  const baseValid = typeof candidate.request_id === 'string'
     && candidate.request_id.trim() !== ''
     && typeof candidate.sequence === 'number'
     && Number.isInteger(candidate.sequence)
     && candidate.sequence > 0
     && typeof candidate.kind === 'string'
     && PUBLIC_SCENARIO_RUN_EVENT_KINDS.has(candidate.kind)
+  if (!baseValid) return false
+  if (candidate.schema_version === undefined) return true
+  if (candidate.schema_version !== SCENARIO_RUN_EVENT_SCHEMA_V2) return false
+  return isWellFormedV2PublicEvent(candidate.kind, candidate.payload)
+}
+
+function isWellFormedV2PublicEvent(kind: unknown, payload: unknown): boolean {
+  if (!payload || typeof payload !== 'object') return false
+  const value = payload as Record<string, unknown>
+  const hasObject = (key: string) => Boolean(value[key] && typeof value[key] === 'object')
+  const hasString = (object: unknown, key: string) => (
+    Boolean(object && typeof object === 'object' && typeof (object as Record<string, unknown>)[key] === 'string')
+  )
+  switch (kind) {
+    case 'turn_started':
+    case 'turn_completed':
+    case 'turn_failed':
+      return true
+    case 'task_upserted':
+      return hasObject('task') && hasString(value.task, 'task_id') && hasString(value.task, 'title')
+    case 'tool_result': {
+      const result = value.tool_result
+      return hasString(result, 'call_id') && hasString(result, 'tool_id') && hasString(result, 'tool_kind')
+    }
+    case 'clue_published':
+      return hasObject('clue') && hasString(value.clue, 'clue_id') && hasObjectField(value.clue, 'content')
+    case 'hint_published':
+      return hasObject('hint') && hasString(value.hint, 'hint_id') && hasObjectField(value.hint, 'content')
+    case 'assistant_delta':
+      return value.phase === 'understanding' || value.phase === 'replying'
+        ? typeof value.markdown_ready_delta === 'string'
+        : false
+    default:
+      return false
+  }
+}
+
+function hasObjectField(object: unknown, key: string): boolean {
+  return Boolean(object && typeof object === 'object' && (object as Record<string, unknown>)[key]
+    && typeof (object as Record<string, unknown>)[key] === 'object')
 }
 
 function latestSequence(events: ScenarioRunEventAny[]) {
   return events.reduce((latest, event) => Math.max(latest, event.sequence), 0)
+}
+
+function scenarioResponseBelongsToRun(
+  sessionId: string,
+  requestId: string,
+  result: ScenarioMessageResponse,
+): boolean {
+  const candidate = result as ScenarioMessageResponse | null | undefined
+  const message = candidate?.message
+  const session = candidate?.session
+  if (!message || !session || session.id !== sessionId || message.session_id !== sessionId) return false
+  const responseRequestId = message.response_meta?.request_id ?? candidate?.response_meta?.request_id
+  if (responseRequestId !== requestId) return false
+  const events = candidate?.run_events ?? message.response_meta?.run_events ?? []
+  return Array.isArray(events) && events.every((event) => event.request_id === requestId)
 }
 
 function pendingRunStorageKey(sessionId: string) {
@@ -455,7 +520,10 @@ function readPendingRun(sessionId: string): PersistedScenarioRun | null {
       typeof parsed.requestId !== 'string'
       || typeof parsed.userContent !== 'string'
       || typeof parsed.stateRevision !== 'number'
+      || !Number.isInteger(parsed.stateRevision)
+      || parsed.stateRevision < 0
       || typeof parsed.updatedAt !== 'number'
+      || !Number.isFinite(parsed.updatedAt)
       || !Array.isArray(parsed.events)
     ) {
       clearPendingRun(sessionId)
@@ -465,10 +533,14 @@ function readPendingRun(sessionId: string): PersistedScenarioRun | null {
       clearPendingRun(sessionId)
       return null
     }
+    const events = parsed.events.filter((event): event is ScenarioRunEventAny => (
+      isPublicScenarioRunEvent(event)
+      && event.request_id === parsed.requestId
+    ))
     return {
       requestId: parsed.requestId,
       userContent: parsed.userContent,
-      events: normalizeRunEvents(parsed.events as ScenarioRunEventAny[]),
+      events: normalizeRunEvents(events),
       structuredAction: parsed.structuredAction,
       stateRevision: parsed.stateRevision,
       updatedAt: parsed.updatedAt,

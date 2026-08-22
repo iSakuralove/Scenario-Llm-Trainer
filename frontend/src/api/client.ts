@@ -102,6 +102,14 @@ export class ScenarioRunFailure extends Error {
   }
 }
 
+/** 仅表示读取连接中途断开，允许 Store 用同一 request_id 续接一次。 */
+export class ScenarioStreamReconnectable extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'ScenarioStreamReconnectable'
+  }
+}
+
 export interface ScenarioGenerationJobResponse {
   job: AIJob
   question_id?: string
@@ -435,10 +443,12 @@ async function requestScenarioMessageStream(
       return requestScenarioMessageStream(session.access_token, sessionId, payload, onRunEvent, onDebugTrace, false)
     }
     if (!response.ok) {
-      throw new Error(await readErrorMessage(response, '流式消息请求失败'))
+      // HTTP 业务错误已经是服务端的终态，不应被 _connectRun 当成断线
+      // 自动再次提交；用户可以在界面上用新的 request_id 主动重试。
+      throw new ScenarioRunFailure('http_error', await readErrorMessage(response, '流式消息请求失败'))
     }
     if (!response.body) {
-      throw new Error('浏览器不支持流式响应')
+      throw new ScenarioRunFailure('stream_unavailable', '浏览器不支持流式响应')
     }
 
     const reader = response.body.getReader()
@@ -477,10 +487,31 @@ async function requestScenarioMessageStream(
           // 调试 reasoning 是旁路信息，格式异常时静默丢弃，不影响正文。
         }
       }
+      if (parsed.event === 'error') {
+        let message = '本轮处理失败，请重试。'
+        let code = 'stream_error'
+        try {
+          const errorData = parsed.data ? JSON.parse(parsed.data) as { message?: unknown; error_code?: unknown; code?: unknown } : null
+          if (typeof errorData?.message === 'string' && errorData.message.trim()) message = errorData.message
+          if (typeof errorData?.error_code === 'string' && errorData.error_code.trim()) code = errorData.error_code
+          else if (typeof errorData?.code === 'string' && errorData.code.trim()) code = errorData.code
+        } catch {
+          // 保留稳定失败文案；错误事件本身不能阻止清理失败轮次。
+        }
+        throw new ScenarioRunFailure(code, message)
+      }
       if (parsed.event === 'finish') {
         // finish 是正式完成契约，损坏时必须让调用方感知，而不是把
         // 一个只有思考过程的半成品当作成功回合。
-        finalPayload = JSON.parse(parsed.data) as ScenarioMessageResponse
+        try {
+          const candidate = JSON.parse(parsed.data) as unknown
+          if (!isScenarioMessageResponseShape(candidate)) {
+            throw new Error('invalid scenario finish payload')
+          }
+          finalPayload = candidate
+        } catch {
+          throw new ScenarioRunFailure('stream_invalid', '本轮流式响应无效，请重试。')
+        }
       }
     }
 
@@ -501,7 +532,7 @@ async function requestScenarioMessageStream(
     buffer = buffer.replace(/\r\n/g, '\n')
     if (buffer.trim()) consumeScenarioEvent(buffer)
     if (!finalPayload) {
-      throw new Error('流式响应缺少完成事件')
+      throw new ScenarioRunFailure('stream_incomplete', '流式响应缺少完成事件，请重试。')
     }
     // TypeScript 无法追踪嵌套 SSE 消费函数对 finalPayload 的赋值，显式固定
     // 完成边界，避免它被错误收窄为 never；运行时检查仍在上一行保留。
@@ -511,7 +542,13 @@ async function requestScenarioMessageStream(
       session: normalizeScenarioSession(completedPayload.session),
     }
   } catch (err) {
-    throw normalizeFetchError(err)
+    const normalized = normalizeFetchError(err)
+    if (normalized instanceof ScenarioRunFailure || normalized instanceof ScenarioStreamReconnectable) {
+      throw normalized
+    }
+    // 只有底层 reader/fetch 读取异常才允许 Store 用同一 request_id 续接；
+    // HTTP、SSE error 和协议帧问题在上面均已转换为不可重放失败。
+    throw new ScenarioStreamReconnectable(normalized.message, { cause: normalized })
   } finally {
     window.clearTimeout(timeout)
   }
@@ -602,6 +639,23 @@ function normalizeFetchError(err: unknown): Error {
     return new Error('无法连接后端 API，请确认服务已启动后刷新页面重试', { cause: err })
   }
   return err instanceof Error ? err : new Error('请求失败')
+}
+
+function isScenarioMessageResponseShape(value: unknown): value is ScenarioMessageResponse {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Record<string, unknown>
+  const message = candidate.message
+  const session = candidate.session
+  const responseMeta = candidate.response_meta
+  if (!message || typeof message !== 'object' || !session || typeof session !== 'object') return false
+  if (typeof (message as Record<string, unknown>).session_id !== 'string') return false
+  if (typeof (message as Record<string, unknown>).id !== 'string') return false
+  if (typeof (session as Record<string, unknown>).id !== 'string') return false
+  if (!responseMeta || typeof responseMeta !== 'object') return false
+  const requestId = (responseMeta as Record<string, unknown>).request_id
+  if (requestId !== undefined && typeof requestId !== 'string') return false
+  const runEvents = candidate.run_events ?? (responseMeta as Record<string, unknown>).run_events
+  return runEvents === undefined || Array.isArray(runEvents)
 }
 
 function isNetworkFetchError(message: string) {

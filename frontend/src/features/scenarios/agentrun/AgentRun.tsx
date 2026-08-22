@@ -40,14 +40,25 @@ export function AgentRun({
   quickActionDisabled = false,
 }: AgentRunProps) {
   const model = useMemo(() => buildAgentRunViewModel(events), [events])
+  // 统一工具芯片：任务（运行中状态）与工具结果按 call_id 合并成一行，
+  // 点击展开查看返回内容——与 Codex 的 MCP 工具行同构。
+  const toolChips = useMemo(() => mergeTasksAndResults(model.tasks, model.toolResults), [model])
+  const failed = Boolean(model.failure)
   const userText = model.userText || fallbackUser
-  const isProcessing = active && !model.complete && !model.failure
-  const hasPublicObservation = model.toolResults.length > 0 || model.clues.length > 0 || model.hints.length > 0
+  const isProcessing = active && !model.complete && !failed
+  // 失败事件代表本轮没有通过提交屏障；此前收到的旁路候选全部撤回，
+  // 避免失败回合留下半截工具卡、线索或 Hint。raw reasoning 仍由显式
+  // 本地调试开关单独控制，不属于正式学生事件。
+  const visibleUnderstandingModel = failed ? null : model.understanding
+  const visibleTasks = failed ? [] : model.tasks
+  const visibleToolChips = failed ? [] : toolChips
+  const visibleHints = failed ? [] : model.hints
+  const hasPublicObservation = visibleToolChips.length > 0 || model.clues.length > 0 || visibleHints.length > 0
   const historicalUnderstanding = model.understanding && !active
     ? model.understanding.chunks.join('').trim()
     : ''
   const showUnderstanding = Boolean(
-    model.understanding
+    visibleUnderstandingModel
     && (!historicalUnderstanding || !isTransientHistoricalStatus(historicalUnderstanding)),
   )
   const replyChunks = model.replyChunks.length > 0
@@ -59,13 +70,9 @@ export function AgentRun({
   )
   // 本轮失败时不渲染任何正文。turn_failed 意味着回复没通过安全校验或状态审批，
   // 此前流出的分片属于未获批内容，必须从屏幕上撤回而不是留在失败提示上方。
-  const visibleReply = model.failure
+  const visibleReply = failed
     ? []
     : visibleReplyChunks
-  // 统一工具芯片：任务（运行中状态）与工具结果按 call_id 合并成一行，
-  // 点击展开查看返回内容——与 Codex 的 MCP 工具行同构。
-  const toolChips = useMemo(() => mergeTasksAndResults(model.tasks, model.toolResults), [model])
-
   return (
     <div className={styles.run} data-testid="scenario-agent-run">
       {userText && (
@@ -87,29 +94,29 @@ export function AgentRun({
         <div className={styles.agentFlow}>
           {isProcessing && shouldShowThinking(model) && <ThinkingState label={thinkingLabel(model)} />}
 
-          {showUnderstanding && model.understanding && (
+          {showUnderstanding && visibleUnderstandingModel && (
             <div className={styles.reasoningLine} aria-live="polite" data-testid="agent-run-understanding">
               <StreamingText
-                chunks={model.understanding.chunks}
-                active={isProcessing && !model.understanding.settled}
+                chunks={visibleUnderstandingModel.chunks}
+                active={isProcessing && !visibleUnderstandingModel.settled}
               />
             </div>
           )}
 
           <ThinkingReasoning
-            items={model.legacyReasoningItems.map((text) => ({ stage: 'composing_reply' as const, text }))}
+            items={failed ? [] : model.legacyReasoningItems.map((text) => ({ stage: 'composing_reply' as const, text }))}
             rawChunks={rawReasoningChunks}
             rawActive={rawReasoningActive}
             rawElapsedSeconds={rawReasoningElapsedSeconds}
           />
 
-          {model.tasks.length > 1 && <TaskList tasks={model.tasks} active={isProcessing} />}
+          {visibleTasks.length > 1 && <TaskList tasks={visibleTasks} active={isProcessing} />}
 
-          {toolChips.map((chip) => (
+          {visibleToolChips.map((chip) => (
             <ToolChipRow key={chip.key} chip={chip} />
           ))}
 
-          {model.hints.map((hint) => (
+          {visibleHints.map((hint) => (
             <HintCard key={hint.hintId} level={hint.level} content={hint.content} />
           ))}
 

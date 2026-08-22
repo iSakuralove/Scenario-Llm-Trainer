@@ -79,7 +79,9 @@ export function ScenarioSessionPage() {
   const visibleRunEvents = useMemo(
     () => [
       ...messages.flatMap((message) => completedRuns[message.id] ?? message.response_meta.run_events ?? []),
-      ...(activeRun?.events ?? []),
+      // turn_failed 表示本轮没有提交成功；其旁路事件只能用于当前失败
+      // 状态的诊断，不能继续污染常驻线索板。
+      ...(activeRun?.events.some((event) => event.kind === 'turn_failed') ? [] : (activeRun?.events ?? [])),
     ],
     [activeRun?.events, completedRuns, messages],
   )
