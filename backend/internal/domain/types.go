@@ -416,10 +416,11 @@ type ScenarioMessage struct {
 }
 
 type ResponseMeta struct {
-	ResponseType string             `json:"response_type"`
-	RequestID    string             `json:"request_id,omitempty"`
-	Revision     int                `json:"revision"`
-	RunEvents    []ScenarioRunEvent `json:"run_events,omitempty"`
+	ResponseType       string                      `json:"response_type"`
+	RequestID          string                      `json:"request_id,omitempty"`
+	Revision           int                         `json:"revision"`
+	RunEvents          []ScenarioRunEvent          `json:"run_events,omitempty"`
+	TeachingProjection *ScenarioTeachingProjection `json:"teaching_projection,omitempty"`
 }
 
 type AgentTrace struct {

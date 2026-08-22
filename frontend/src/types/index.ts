@@ -190,6 +190,31 @@ export interface ScenarioInvestigationState {
   repair_status?: ScenarioRepairStatus
 }
 
+/** 学生侧安全教学投影；不包含原始情绪、假设 ID、证据 ID 或答案比较结果。 */
+export interface ScenarioTeachingProjection {
+  teaching_state: string
+  progress_assessment: string
+  direction_status: 'aligned' | 'exploring' | 'needs_refocus' | 'off_topic' | string
+  detail_level: 'brief' | 'balanced' | 'detailed' | string
+  focus?: string
+  mastery: ScenarioMasteryProjection
+}
+
+export interface ScenarioMasteryProjection {
+  concepts?: ScenarioMasteryItem[]
+  skills?: ScenarioMasteryItem[]
+  concepts_covered: number
+  concepts_total: number
+  skills_covered: number
+  skills_total: number
+}
+
+export interface ScenarioMasteryItem {
+  label: string
+  level: number
+  weight: number
+}
+
 export interface ScenarioMessage {
   id: string
   session_id: string
@@ -206,6 +231,7 @@ export interface ResponseMeta {
   request_id?: string
   revision: number
   run_events?: ScenarioRunEventAny[]
+  teaching_projection?: ScenarioTeachingProjection
 }
 
 export interface ScenarioSessionDetailResponse {

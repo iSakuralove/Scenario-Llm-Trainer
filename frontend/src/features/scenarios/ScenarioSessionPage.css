@@ -117,6 +117,140 @@
   border-top: 1px solid rgba(255, 255, 255, 0.10);
 }
 
+.scenario-session-page .teaching-state-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.scenario-session-page .teaching-state-heading,
+.scenario-session-page .mastery-summary-heading,
+.scenario-session-page .mastery-item-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.scenario-session-page .teaching-state-heading strong {
+  color: #f6fafe;
+  font-size: 14px;
+}
+
+.scenario-session-page .teaching-state-heading span {
+  max-width: 68%;
+  color: #8ef0db;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.4;
+  text-align: right;
+}
+
+.scenario-session-page .teaching-state-grid {
+  display: grid;
+  gap: 7px;
+  padding: 10px 11px;
+  border: 1px solid rgba(87, 143, 255, 0.20);
+  border-radius: 9px;
+  background: rgba(87, 143, 255, 0.055);
+}
+
+.scenario-session-page .teaching-state-grid > div {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.scenario-session-page .teaching-state-grid span,
+.scenario-session-page .mastery-summary-heading span {
+  color: rgba(220, 228, 238, 0.55);
+  font-size: 11px;
+}
+
+.scenario-session-page .teaching-state-grid strong {
+  max-width: 68%;
+  color: rgba(230, 237, 245, 0.90);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.5;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.scenario-session-page .teaching-state-grid strong[data-direction='needs_refocus'],
+.scenario-session-page .teaching-state-grid strong[data-direction='off_topic'] {
+  color: #ffcc8a;
+}
+
+.scenario-session-page .teaching-state-grid strong[data-direction='aligned'] {
+  color: #8ef0db;
+}
+
+.scenario-session-page .teaching-state-empty,
+.scenario-session-page .mastery-empty {
+  margin: 0;
+  padding: 10px 11px;
+  border: 1px dashed rgba(87, 143, 255, 0.22);
+  border-radius: 9px;
+  color: rgba(220, 228, 238, 0.58);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.scenario-session-page .mastery-summary {
+  display: grid;
+  gap: 8px;
+}
+
+.scenario-session-page .mastery-summary-heading strong {
+  color: rgba(230, 237, 245, 0.84);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.scenario-session-page .mastery-list {
+  display: grid;
+  gap: 7px;
+}
+
+.scenario-session-page .mastery-item {
+  display: grid;
+  gap: 4px;
+}
+
+.scenario-session-page .mastery-item-label span {
+  min-width: 0;
+  color: rgba(230, 237, 245, 0.78);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.scenario-session-page .mastery-item-label strong {
+  flex: 0 0 auto;
+  color: rgba(142, 240, 219, 0.82);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.scenario-session-page .mastery-track {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.scenario-session-page .mastery-fill {
+  display: block;
+  width: var(--mastery-width, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(87, 143, 255, 0.82), #8ef0db);
+  transition: width 360ms ease;
+}
+
 .scenario-session-page .available-tools-heading {
   display: flex;
   align-items: center;

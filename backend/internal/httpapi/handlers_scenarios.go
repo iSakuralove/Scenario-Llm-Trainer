@@ -885,6 +885,7 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 	nextSession.LastActiveAt = time.Now()
 	nextSession.LearnerState = nextState
 	nextSession.RevealedClueIDs = append([]string{}, nextState.CollectedEvidence...)
+	teachingProjection := scenarioTeachingProjection(result, nextState, question.Content.HiddenWorld)
 	reply := strings.TrimSpace(result.Reply)
 	if nextSession.CurrentTurn >= nextSession.MaxTurns {
 		reply += " 当前会话已达到最大轮次，请提交排查结论。"
@@ -916,10 +917,11 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 		UserContent:      userDisplayContent,
 		AssistantContent: reply,
 		ResponseMeta: domain.ResponseMeta{
-			ResponseType: "mentor_reply",
-			RequestID:    input.RequestID,
-			Revision:     expectedRevision + 1,
-			RunEvents:    runEvents,
+			ResponseType:       "mentor_reply",
+			RequestID:          input.RequestID,
+			Revision:           expectedRevision + 1,
+			RunEvents:          runEvents,
+			TeachingProjection: teachingProjection,
 		},
 	}
 	nextMessages := append(append([]domain.ScenarioMessage{}, existingMessages...), message)

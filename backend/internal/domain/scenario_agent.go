@@ -27,6 +27,34 @@ type ScenarioLearnerState struct {
 	RepairStatus string `json:"repair_status"`
 }
 
+// ScenarioTeachingProjection 是学生侧可见的教学状态投影。
+//
+// 它只保留“导师如何承接本轮”和“解释深度如何调整”的安全摘要，不能替代
+// LearnerState，也不携带原始情绪、假设 ID、答案比较、证据 ID 或内部裁判结果。
+type ScenarioTeachingProjection struct {
+	TeachingState      string                    `json:"teaching_state"`
+	ProgressAssessment string                    `json:"progress_assessment"`
+	DirectionStatus    string                    `json:"direction_status"`
+	DetailLevel        string                    `json:"detail_level"`
+	Focus              string                    `json:"focus,omitempty"`
+	Mastery            ScenarioMasteryProjection `json:"mastery"`
+}
+
+type ScenarioMasteryProjection struct {
+	Concepts        []ScenarioMasteryItem `json:"concepts,omitempty"`
+	Skills          []ScenarioMasteryItem `json:"skills,omitempty"`
+	ConceptsCovered int                   `json:"concepts_covered"`
+	ConceptsTotal   int                   `json:"concepts_total"`
+	SkillsCovered   int                   `json:"skills_covered"`
+	SkillsTotal     int                   `json:"skills_total"`
+}
+
+type ScenarioMasteryItem struct {
+	Label  string  `json:"label"`
+	Level  int     `json:"level"`
+	Weight float64 `json:"weight"`
+}
+
 type ScenarioExplanationPreferences struct {
 	Detail     string `json:"detail"`
 	Analogy    string `json:"analogy"`

@@ -1780,12 +1780,25 @@ func cloneScenarioMasteryMap(values map[string]int) map[string]int {
 
 func cloneScenarioAgentTurnRecord(record domain.ScenarioAgentTurnRecord) domain.ScenarioAgentTurnRecord {
 	record.Message.ResponseMeta.RunEvents = cloneScenarioRunEvents(record.Message.ResponseMeta.RunEvents)
+	if record.Message.ResponseMeta.TeachingProjection != nil {
+		record.Message.ResponseMeta.TeachingProjection = cloneScenarioTeachingProjection(record.Message.ResponseMeta.TeachingProjection)
+	}
 	record.SessionSnapshot = *cloneScenarioSession(&record.SessionSnapshot)
 	record.PublicTrace = append([]byte(nil), record.PublicTrace...)
 	record.InternalVerification = append([]byte(nil), record.InternalVerification...)
 	record.InternalAudit = append([]byte(nil), record.InternalAudit...)
 	record.ApprovalAudit = append([]byte(nil), record.ApprovalAudit...)
 	return record
+}
+
+func cloneScenarioTeachingProjection(value *domain.ScenarioTeachingProjection) *domain.ScenarioTeachingProjection {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	copy.Mastery.Concepts = append([]domain.ScenarioMasteryItem{}, value.Mastery.Concepts...)
+	copy.Mastery.Skills = append([]domain.ScenarioMasteryItem{}, value.Mastery.Skills...)
+	return &copy
 }
 
 func cloneScenarioRunEvents(events []domain.ScenarioRunEvent) []domain.ScenarioRunEvent {

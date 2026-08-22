@@ -586,6 +586,137 @@ func scenarioHintTextAllowed(world *domain.HiddenWorld, text string) bool {
 	return false
 }
 
+// scenarioTeachingProjection 把 Agent 的结构化评估归约成学生侧可见的
+// 教学状态。原始 affect、hypothesis_id、answer comparison 和 evidence id
+// 留在服务端；这里仅输出解释节奏、方向信号和脱敏后的掌握度汇总。
+func scenarioTeachingProjection(
+	result agentclient.TurnResult,
+	state domain.ScenarioLearnerState,
+	world *domain.HiddenWorld,
+) *domain.ScenarioTeachingProjection {
+	projection := &domain.ScenarioTeachingProjection{
+		TeachingState:      "normal_diagnosis",
+		ProgressAssessment: "unknown",
+		DirectionStatus:    "exploring",
+		DetailLevel:        state.ExplanationPreferences.Detail,
+		Focus:              scenarioFocusForProjection(state.CurrentFocus),
+		Mastery:            scenarioMasteryProjection(world, state),
+	}
+	if projection.DetailLevel == "" {
+		projection.DetailLevel = "balanced"
+	}
+	if decision := result.TeachingDecision; decision != nil {
+		projection.TeachingState = scenarioTeachingStateForProjection(decision.TeachingState)
+		if focus := scenarioFocusForProjection(decision.GuidanceDirection); focus != "" {
+			projection.Focus = focus
+		}
+	}
+	if assessment := result.TurnAssessment; assessment != nil {
+		projection.ProgressAssessment = scenarioProgressForProjection(assessment.ProgressAssessment)
+		projection.DirectionStatus = scenarioDirectionForProjection(*assessment)
+	}
+	return projection
+}
+
+func scenarioTeachingStateForProjection(value string) string {
+	switch value {
+	case "guided_inquiry", "unsupported_hypothesis", "anti_guess_detected", "premature_conclusion",
+		"conclusion_grilling", "evidence_reconstruction", "normal_diagnosis", "debrief",
+		"casual_chat", "clarification", "off_topic", "garbage":
+		return value
+	default:
+		return "normal_diagnosis"
+	}
+}
+
+func scenarioProgressForProjection(value string) string {
+	switch value {
+	case "progress", "partial", "no_progress", "unsupported", "contradictory", "leak_risk", "unknown":
+		return value
+	default:
+		return "unknown"
+	}
+}
+
+func scenarioDirectionForProjection(assessment agentclient.TurnAssessment) string {
+	if assessment.IsOffTopic || assessment.Intent == "off_topic" {
+		return "off_topic"
+	}
+	if assessment.IsStuck || assessment.RandomInvestigation || assessment.ProgressAssessment == "no_progress" ||
+		assessment.ProgressAssessment == "unsupported" || assessment.ProgressAssessment == "contradictory" {
+		return "needs_refocus"
+	}
+	if assessment.ProgressAssessment == "progress" {
+		return "aligned"
+	}
+	return "exploring"
+}
+
+func scenarioFocusForProjection(value string) string {
+	switch strings.TrimSpace(value) {
+	case "logs", "metrics", "config", "change", "dependency", "data", "resource":
+		return strings.TrimSpace(value)
+	default:
+		return ""
+	}
+}
+
+func scenarioMasteryProjection(world *domain.HiddenWorld, state domain.ScenarioLearnerState) domain.ScenarioMasteryProjection {
+	projection := domain.ScenarioMasteryProjection{}
+	if world == nil || world.TeachingModel == nil {
+		return projection
+	}
+	projection.ConceptsTotal = len(world.TeachingModel.Concepts)
+	for _, concept := range world.TeachingModel.Concepts {
+		level := clampScenarioMastery(state.ConceptMastery[concept.ConceptID])
+		if level >= 2 {
+			projection.ConceptsCovered++
+		}
+		if level == 0 || strings.TrimSpace(concept.Label) == "" {
+			continue
+		}
+		projection.Concepts = append(projection.Concepts, domain.ScenarioMasteryItem{
+			Label:  strings.TrimSpace(concept.Label),
+			Level:  level,
+			Weight: float64(level) / 4,
+		})
+	}
+	skillLabels := []struct {
+		id    string
+		label string
+	}{
+		{id: "log_reading", label: "日志阅读"},
+		{id: "causal_reasoning", label: "因果推理"},
+		{id: "cross_layer_debugging", label: "跨层排查"},
+	}
+	projection.SkillsTotal = len(skillLabels)
+	for _, skill := range skillLabels {
+		level := clampScenarioMastery(state.SkillMastery[skill.id])
+		if level >= 2 {
+			projection.SkillsCovered++
+		}
+		if level == 0 {
+			continue
+		}
+		projection.Skills = append(projection.Skills, domain.ScenarioMasteryItem{
+			Label:  skill.label,
+			Level:  level,
+			Weight: float64(level) / 4,
+		})
+	}
+	return projection
+}
+
+func clampScenarioMastery(value int) int {
+	if value < 0 {
+		return 0
+	}
+	if value > 4 {
+		return 4
+	}
+	return value
+}
+
 const legacyStructuredResponseEnv = "SCENARIO_ALLOW_LEGACY_STRUCTURED_RESPONSE"
 
 // validateScenarioStructuredTurn 是 Go 侧的结构化回合边界。结构化字段在
