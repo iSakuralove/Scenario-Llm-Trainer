@@ -452,6 +452,7 @@ class SingleAgentRuntime:
             forbidden_entities=_forbidden_entities(request, projected_state),
             completion_allowed=verification.completion_allowed,
             may_release=reduction.approved_releases,
+            current_user_message=request.user_message,
             evidence_request=_evidence_request_after_tool_results(
                 analysis,
                 events,

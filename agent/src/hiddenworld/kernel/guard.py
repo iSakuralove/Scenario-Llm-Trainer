@@ -190,6 +190,13 @@ class Guard:
                 "reply_internal_framing",
                 "回复不能暴露内部引导状态或把观察写成系统记录动作，请由模型重新生成。",
             )
+        normalized_reply = _normalize_public_text(reply)
+        normalized_user_message = _normalize_public_text(context.current_user_message)
+        if normalized_reply and normalized_user_message and normalized_reply == normalized_user_message:
+            raise GuardViolation(
+                "reply_echoes_user_message",
+                "回复不能原样复述当前问题，请基于已公开信息生成导师回复。",
+            )
         if any(marker in reply for marker in _TEMPLATED_PRAISE_MARKERS):
             raise GuardViolation(
                 "templated_praise",
@@ -266,6 +273,12 @@ def _reply_repeats_observation(reply: str, observation: str) -> bool:
 def _replay_chars(value: str) -> list[str]:
     normalized = unicodedata.normalize("NFKC", value or "").casefold()
     return [char for char in normalized if char.isalnum() or "\u3400" <= char <= "\u9fff"]
+
+
+def _normalize_public_text(value: str) -> str:
+    """为回显检测归一化 Unicode 与空白，但不改变实际公开回复。"""
+
+    return " ".join(unicodedata.normalize("NFKC", value or "").split()).casefold()
 
 
 def extract_forbidden_entities(

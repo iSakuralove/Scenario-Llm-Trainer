@@ -520,6 +520,17 @@ func scenarioErrorCodeRetryable(code string) bool {
 	}
 }
 
+// scenarioReplyEchoesUserMessage identifies the unsafe fallback where the
+// mentor returns the student's prompt verbatim. Both values are trimmed here
+// because the HTTP boundary already normalizes user content and model output
+// may carry incidental surrounding whitespace; the comparison itself remains
+// an exact, case-sensitive match and never exposes the prompt in an error.
+func scenarioReplyEchoesUserMessage(reply, userMessage string) bool {
+	reply = strings.TrimSpace(reply)
+	userMessage = strings.TrimSpace(userMessage)
+	return reply != "" && userMessage != "" && reply == userMessage
+}
+
 func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, input scenarioMessageInput) (message domain.ScenarioMessage, responseSession *domain.ScenarioSession, err error) {
 	if input.Diagnostics != nil {
 		input.Diagnostics.setPhase("request_validating")
@@ -786,6 +797,21 @@ func (s *Server) processScenarioMessage(ctx context.Context, user *domain.User, 
 		}
 		traceFilter.drainBypasses(s)
 		result.PublicTrace = accepted
+	}
+	// Final backend barrier: never persist or stream a mentor reply that is
+	// exactly the student's own message. This check is independent of the
+	// validation migration mode so an upstream/runtime fallback cannot bypass
+	// it. Returning an error here makes the outer SSE handler emit only
+	// turn_failed; no message or RunEvents have been committed yet.
+	if scenarioReplyEchoesUserMessage(result.Reply, input.Content) {
+		if input.Diagnostics != nil {
+			input.Diagnostics.setPhase("reply_echo_guard")
+		}
+		return domain.ScenarioMessage{}, nil, scenarioAgentHTTPError{
+			Status:  http.StatusBadGateway,
+			Code:    "reply_echoed_user_message",
+			Message: "本轮回复未通过安全校验",
+		}
 	}
 	nextState, approvals, err := approveScenarioProposals(session, question.Content.HiddenWorld, result, s.scenarioValidationMode)
 	if err != nil {

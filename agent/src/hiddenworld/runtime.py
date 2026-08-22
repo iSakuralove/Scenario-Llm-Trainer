@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import unicodedata
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from time import perf_counter
@@ -323,6 +324,7 @@ class HiddenWorldRuntime:
                 completion_allowed=verification.completion_allowed,
                 may_release=approved_releases,
                 evidence_request=_evidence_request_for_analysis(analysis, request),
+                current_user_message=request.user_message,
                 public_observation_texts=_public_guard_observation_texts(
                     request,
                     projected_state,
@@ -787,11 +789,16 @@ def _fallback_mentor_action(
         subject = "这些观察" if len(observations) > 1 else "这条观察"
         reply = f"{subject}能支撑局部判断，但还不足以连接完整因果链。"
     else:
-        reply = (
-            analysis.public_summary.strip()
-            or request.public_scenario.description.strip()
-            or request.user_message.strip()
-        )
+        candidate = analysis.public_summary.strip()
+        normalized_candidate = " ".join(unicodedata.normalize("NFKC", candidate).split()).casefold()
+        normalized_user_message = " ".join(
+            unicodedata.normalize("NFKC", request.user_message).split()
+        ).casefold()
+        if candidate and normalized_candidate != normalized_user_message:
+            reply = candidate
+        else:
+            # 兜底正文不能回显学生问题，也不能借机暴露题面之外的结论或下一步。
+            reply = "本轮没有新增公开观察。"
     return MentorAction(
         rationale="deterministic_fallback",
         reply=reply,

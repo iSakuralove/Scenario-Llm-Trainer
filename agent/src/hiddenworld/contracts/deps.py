@@ -69,6 +69,11 @@ class GuardContext:
         default_factory=list,
         metadata={"why": "本轮已经公开的观察原文，仅用于拒绝回复重复整段工具结果"},
     )
+    # 当前学生原文只用于 Guard 的回显检测，不进入 Mentor prompt、SSE 或学生投影。
+    current_user_message: str = field(
+        default="",
+        metadata={"why": "拒绝导师把当前学生问题原样作为公开回复"},
+    )
 
 
 @dataclass
