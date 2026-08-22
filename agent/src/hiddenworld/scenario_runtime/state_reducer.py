@@ -462,7 +462,15 @@ def _next_hint_state(
 ) -> tuple[int, str]:
     """提示随卡住/随机排查升级，形成进展后逐级回落。"""
 
-    explicit_help = assessment.is_stuck or analysis.is_stuck
+    # 求助类意图本身就是可归约的“卡住”信号；不能要求模型同时把
+    # ``is_stuck`` 和 intent 两个字段都填对，否则同一类学生行为会出现
+    # 有时升级 Hint、有时不升级的非确定性。保留 analysis.is_stuck 兼容
+    # Interpreter 侧已经确认的卡住状态。
+    explicit_help = (
+        assessment.is_stuck
+        or analysis.is_stuck
+        or assessment.intent in {"stuck", "help_request", "request_hint"}
+    )
     random_investigation = assessment.random_investigation
     progressed = assessment.progress_assessment in {"progress", "partial"}
 

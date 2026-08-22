@@ -554,7 +554,13 @@ func scenarioHintTransitionAllowed(current, next int, assessment *agentclient.Tu
 		return false
 	}
 	if next > current {
-		return assessment != nil && (assessment.IsStuck || assessment.RandomInvestigation)
+		return assessment != nil && (
+			assessment.IsStuck ||
+			assessment.RandomInvestigation ||
+			assessment.Intent == "stuck" ||
+			assessment.Intent == "help_request" ||
+			assessment.Intent == "request_hint"
+		)
 	}
 	if next < current {
 		return assessment != nil && (assessment.ProgressAssessment == "progress" || assessment.ProgressAssessment == "partial")
