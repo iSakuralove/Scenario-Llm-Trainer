@@ -160,6 +160,9 @@ type TeachingDecision struct {
 	PrimaryTask           string `json:"primary_task"`
 	GuidanceDirection     string `json:"guidance_direction"`
 	ReplyPolicy           string `json:"reply_policy"`
+	GuidanceScope         string `json:"guidance_scope"`
+	// Deprecated compatibility fields. Python Runtime no longer emits them;
+	// old providers remain fail-closed if they try to enable either permission.
 	AllowExplicitNextStep bool   `json:"allow_explicit_next_step"`
 	AllowRuledOutScope    bool   `json:"allow_ruled_out_scope"`
 }

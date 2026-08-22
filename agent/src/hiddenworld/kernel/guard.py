@@ -51,6 +51,11 @@ _EXPLICIT_GUIDANCE_MARKERS = (
     "排除范围",
     "排除性观察",
 )
+_EXPLICIT_ACTION_GUIDANCE_RE = re.compile(
+    r"(?:请|可以|建议|优先|重点(?:放在|看)|先)"
+    r"[^。！？!?；;]{0,8}"
+    r"(?:查看|检查|核对|确认|观察|对比|统计|测量)"
+)
 _EXPLICIT_CONCLUSION_MARKERS = (
     "问题不在",
     "根因在",
@@ -213,21 +218,26 @@ class Guard:
                 "reply_claims_observation_without_result",
                 "本轮没有形成公开观察，回复不能声称已记录动作、已完成检查或已得到结果。",
             )
-        contains_guidance = (
-            any(marker in reply for marker in _EXPLICIT_GUIDANCE_MARKERS)
-            or _IMPLICIT_GUIDANCE_RE.search(reply) is not None
+        contains_guidance = any(marker in reply for marker in _EXPLICIT_GUIDANCE_MARKERS)
+        contains_explicit_action_guidance = _EXPLICIT_ACTION_GUIDANCE_RE.search(reply) is not None
+        contains_conclusion = (
+            any(marker in reply for marker in _EXPLICIT_CONCLUSION_MARKERS)
+            or _IMPLICIT_CONCLUSION_RE.search(reply) is not None
             or _SYSTEM_CONFIRMATION_RE.search(reply) is not None
             or _SCOPE_EXCLUSION_RE.search(reply) is not None
             or _REMAINING_SCOPE_RE.search(reply) is not None
         )
-        contains_conclusion = (
-            any(marker in reply for marker in _EXPLICIT_CONCLUSION_MARKERS)
-            or _IMPLICIT_CONCLUSION_RE.search(reply) is not None
+        guidance_violation = (
+            context.guidance_scope == "none" and contains_guidance
+        ) or (
+            context.guidance_scope == "conceptual" and contains_guidance
+        ) or (
+            context.guidance_scope == "directional" and contains_explicit_action_guidance
         )
-        if contains_guidance or (contains_conclusion and not context.completion_allowed):
+        if guidance_violation or (contains_conclusion and not context.completion_allowed):
             raise GuardViolation(
                 "reply_policy_violation",
-                "回复包含明确排查路径或未获证据支持的结论，请由模型重新生成自然回复。",
+                "回复超出了本轮允许的教学引导范围或包含未获证据支持的结论，请重新生成。",
             )
         for observation in context.public_observation_texts:
             normalized_observation = " ".join((observation or "").split())

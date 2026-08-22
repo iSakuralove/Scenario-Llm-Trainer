@@ -107,6 +107,10 @@ ReplyMode = Literal[
     "clarification",
 ]
 
+# Runtime 根据学生是否求助、是否卡住和本轮是否已有公开观察决定的教学引导等级。
+# 这是权限边界，不是对某几个中文词的机械禁令。
+GuidanceScope = Literal["none", "conceptual", "directional", "explicit"]
+
 # 学生请求的证据在题目世界中的可用性。它描述的是世界模型状态，
 # 不是回复模板；Mentor 只能据此决定如何诚实表达，不能据此编造数据。
 EvidenceAvailability = Literal[

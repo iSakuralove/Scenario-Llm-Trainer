@@ -322,6 +322,7 @@ class HiddenWorldRuntime:
             guard_only=GuardContext(
                 forbidden_entities=_forbidden_entities(request, projected_state),
                 completion_allowed=verification.completion_allowed,
+                guidance_scope=_legacy_guidance_scope(analysis, request.user_message),
                 may_release=approved_releases,
                 evidence_request=_evidence_request_for_analysis(analysis, request),
                 current_user_message=request.user_message,
@@ -789,15 +790,13 @@ def _fallback_mentor_action(
         subject = "这些观察" if len(observations) > 1 else "这条观察"
         reply = f"{subject}能支撑局部判断，但还不足以连接完整因果链。"
     else:
-        candidate = analysis.public_summary.strip()
-        normalized_candidate = " ".join(unicodedata.normalize("NFKC", candidate).split()).casefold()
-        normalized_user_message = " ".join(
-            unicodedata.normalize("NFKC", request.user_message).split()
-        ).casefold()
-        if candidate and normalized_candidate != normalized_user_message:
-            reply = candidate
+        # public_summary 是内部理解摘要，不是导师正文；Guard 重试耗尽后只能
+        # 使用与当前意图匹配的确定性教学句，绝不能把任务描述直接发给学生。
+        if analysis.intent in {"help_request", "stuck", "request_hint"} or analysis.is_stuck:
+            reply = "可以先把问题拆成现象、范围和可验证的观察；本轮没有新增公开观察，先围绕题面已有现象收拢一个方向。"
+        elif analysis.intent in {"clarification", "explanation_request"}:
+            reply = "这个概念可以放回当前故障现象中理解；本轮没有新增公开观察。"
         else:
-            # 兜底正文不能回显学生问题，也不能借机暴露题面之外的结论或下一步。
             reply = "本轮没有新增公开观察。"
     return MentorAction(
         rationale="deterministic_fallback",
@@ -806,6 +805,20 @@ def _fallback_mentor_action(
         confirms_hypothesis=False,
         expected_effort="quick",
     )
+
+
+def _legacy_guidance_scope(analysis: TurnAnalysis, user_message: str) -> str:
+    """旧 Mentor 链路的最小引导权限归约，和单 Agent Runtime 保持同一边界。"""
+
+    if analysis.intent in {"help_request", "stuck", "request_hint"} or analysis.is_stuck:
+        if analysis.is_stuck and any(
+            marker in user_message for marker in ("具体步骤", "具体检查", "直接告诉我", "给我步骤", "查什么")
+        ):
+            return "explicit"
+        return "directional"
+    if analysis.intent in {"clarification", "explanation_request"}:
+        return "conceptual"
+    return "none"
 
 
 def _evidence_request_for_analysis(

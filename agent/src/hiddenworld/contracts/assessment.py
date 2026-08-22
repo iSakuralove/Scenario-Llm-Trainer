@@ -12,7 +12,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .dimensions import TeachingDimensionRef
-from .version import StudentAffect
+from .version import GuidanceScope, StudentAffect
 from .learner import RepairStatus
 
 
@@ -177,11 +177,7 @@ def direction_status_for_assessment(assessment: TurnAssessment | None) -> Direct
 
 
 class TeachingDecision(BaseModel):
-    """ScenarioAgent 的教学策略裁决。
-
-    ``allow_explicit_next_step`` 与 ``allow_ruled_out_scope`` 固定为 False，
-    把当前产品约束编码成契约，而不是只写在 prompt 里。
-    """
+    """ScenarioAgent 的教学策略裁决。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -190,8 +186,7 @@ class TeachingDecision(BaseModel):
     primary_task: PrimaryTeachingTask = "acknowledge_progress"
     guidance_direction: str = ""
     reply_policy: ReplyPolicy = "acknowledgement"
-    allow_explicit_next_step: Literal[False] = False
-    allow_ruled_out_scope: Literal[False] = False
+    guidance_scope: GuidanceScope = "none"
 
 
 class GuidanceState(BaseModel):

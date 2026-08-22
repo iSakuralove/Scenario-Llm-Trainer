@@ -96,12 +96,13 @@ func (deterministicScenarioAgentClient) Turn(_ context.Context, request agentcli
 			Strategy:      "acknowledge",
 			PrimaryTask:   "interpret_evidence",
 			ReplyPolicy:   "acknowledgement",
+			GuidanceScope: "none",
 		},
 		GuidanceState: agentclient.GuidanceState{
 			TeachingState:      "normal_diagnosis",
 			ProgressAssessment: "no_progress",
 			Navigation:         []agentclient.TeachingDimensionRef{},
-			DirectionStatus:    "exploring",
+			DirectionStatus:    "needs_refocus",
 		},
 		TurnControl: agentclient.TurnControl{AllowedActionIDs: []string{}},
 		TurnAnalysis: agentclient.TurnAnalysis{
@@ -792,10 +793,11 @@ func validateScenarioStructuredTurn(result agentclient.TurnResult, world *domain
 	}
 	if decision := result.TeachingDecision; decision != nil {
 		if !scenarioTeachingStateAllowed(decision.TeachingState) || !scenarioTeachingStrategyAllowed(decision.Strategy) ||
-			!scenarioPrimaryTeachingTaskAllowed(decision.PrimaryTask) || !scenarioReplyPolicyAllowed(decision.ReplyPolicy) {
+			!scenarioPrimaryTeachingTaskAllowed(decision.PrimaryTask) || !scenarioReplyPolicyAllowed(decision.ReplyPolicy) ||
+			(decision.GuidanceScope != "" && !scenarioGuidanceScopeAllowed(decision.GuidanceScope)) {
 			return errors.New("teaching decision enum is invalid")
 		}
-		// 这两个开关在契约中固定为 False；Go 不允许 Agent 打开它们。
+		// 旧权限字段只为兼容旧 Provider；Go 仍不允许它们绕过 guidance_scope。
 		if decision.AllowExplicitNextStep || decision.AllowRuledOutScope {
 			return errors.New("teaching decision contains forbidden permission")
 		}
@@ -1055,6 +1057,15 @@ func scenarioPrimaryTeachingTaskAllowed(value string) bool {
 func scenarioReplyPolicyAllowed(value string) bool {
 	switch value {
 	case "neutral_summary", "tool_result_only", "acknowledgement", "reflective_question", "casual_reply", "no_reply":
+		return true
+	default:
+		return false
+	}
+}
+
+func scenarioGuidanceScopeAllowed(value string) bool {
+	switch value {
+	case "none", "conceptual", "directional", "explicit":
 		return true
 	default:
 		return false

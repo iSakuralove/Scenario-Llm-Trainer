@@ -94,6 +94,12 @@ AgentContext.turn_context 是 Runtime 生成的当前 Turn 信封，优先级高
 第二轮及以后必须把用户原话视为同一轮上下文的一部分，优先依据 current_turn_observations、tool_results、action_history 和 tool_states
 判断哪些观察已经返回、哪些动作没有形成观察，再决定回复或是否还有必要提出受控工具调用。不要把 continuation 当成新的用户请求，
 不要重复调用 can_call=false 或 state=consumed 的工具；reason/blocked_reason 是 Runtime 对消费、失败和阻断原因的安全说明。
+Raw Chain-of-Thought / reasoning 不是跨 Round 状态，Runtime 不会把它放入 AgentContext、action_history、tool_results 或正式事件。
+不要假设、复述或依赖上一 Round 的原始思维过程；每个新模型请求都必须只依据当前 TurnEnvelope、InvestigationScope、
+结构化 ActionHistory、当前 Turn Observation、ToolState、budget 和安全 decision_summary 重新判断。
+如果模型上一 Round 的判断与 Runtime Observation 冲突，以 Observation 和 tool_states 为准，忽略上一 Round 判断。
+当 investigation_scope 存在时，先执行 entry_action_ids 中已授权的入口动作；只有 Runtime 在前置动作成功后新增授权，
+才允许继续调用声明链上的后继动作。scope 之外的工具不能因为看起来有帮助而调用。
 guidance_state.direction_status 是上一轮归约后的安全教学信号：aligned 表示沿证据推进，exploring 表示仍在建立链路，
 needs_refocus 表示需要收拢范围，off_topic 表示先回到当前故障。它只用于调整本轮解释和语气，不能被写成“你选错了某个内部假设”，
 也不能据此泄露答案、证据 ID 或指定未授权工具；如果当前用户消息提供了新的公开事实，应以当前轮事实覆盖旧信号。
@@ -101,8 +107,10 @@ needs_refocus 表示需要收拢范围，off_topic 表示先回到当前故障�
 failed、rejected、unsupported、timeout 或 already_completed 都不表示本轮获得了新的观察。
 工具结果会作为带来源的独立工具卡展示。工具卡负责给事实，final_reply 负责说明这条事实能证明什么、还不能证明什么；
 不能复述完整工具结果、日志、指标或配置内容，也不能把工具结果改写成固定确认句。教学模拟产生的观察必须始终按
-“教学模拟”理解和表达，不得删除、弱化或伪装成真实生产数据。不要输出“下一步”“接下来”“建议检查”、
-“排除范围”“问题不在”等明确排查路径或排除结论。可以给出中性的确认、闲聊回复，或不指向具体动作的反思性提问；
+  “教学模拟”理解和表达，不得删除、弱化或伪装成真实生产数据。不要把 guidance_scope 当成固定话术清单：
+  “如何”“怎么”“下一步”等词本身可以出现在正常教学回答中，但回复的具体程度必须服从 Runtime 给出的 guidance_scope。
+  conceptual 只解释概念，directional 可以收拢公开排查方向，explicit 才可以给出明确观察动作；
+  none 不给排查引导。可以给出中性的确认、闲聊回复，或不指向具体动作的反思性提问；
 不要把工具调用、学生意图或系统动作写成“已记录”“已确认”“已完成检查”；也不要把失败或未形成观察的工具结果
 写成已经得到日志、指标或数据。不要重新问学生从哪里入手、让学生选择检查入口，也不要把本轮回复写成场景开场白。
 如果 AgentContext.evidence_request 标记 requested_action 对应的证据不在当前题目的公开教学模拟数据中，只能诚实说明
@@ -120,7 +128,8 @@ partial 表示修复闭环仍缺一段，sufficient 表示修复动作与验证�
 保留本轮真实语义和教学决策，不解释校验过程，不复述反馈内容。若反馈指出
 reply_repeats_observation，说明公开观察已经由页面卡片单独展示；新 reply 只能增加解释、
 关联或反思，不能再次改写日志、指标、返回码、成功率、超时或失败细节。
-teaching_decision.allow_explicit_next_step 与 allow_ruled_out_scope 必须始终为 false。不得宣布根因、泄露未公开事实、
+  teaching_decision.guidance_scope 只能是 none、conceptual、directional、explicit；它由 Runtime 按学生状态复核，
+  模型不能借此扩大工具授权。不得宣布根因、泄露未公开事实、
 替学生执行未授权工具，或把未查询的具体工具当成已经执行。
 教学表达遵循以下规则：
 - “教什么”由 learner_summary 的概念/能力掌握度与当前证据决定；“怎么说”由瞬时状态和 mentor_persona 决定。
@@ -148,6 +157,14 @@ _COT_GUIDANCE = (
     "思考中不得出现答案原文、未公开证据或内部字段名。结构化 JSON 输出仍只能包含契约字段，"
     "不要在输出对象里新增 reasoning 等额外字段。"
 )
+
+_CONTINUATION_REQUEST_INSTRUCTIONS = """
+这是同一 User Turn 的 continuation request，不是新的用户消息。
+这是一个轻量的继续/停止判断：优先读取 Runtime 已回注的 current_turn_observations、tool_results、
+action_history、tool_states、InvestigationScope 和 budget，先决定是否还有被授权且属于声明链的后继工具；
+如果没有，就直接生成 final_reply。不要重新解释学生情绪或重建整轮意图，不要复述上一 Round 的模型判断，
+也不要输出或依赖 Raw Chain-of-Thought。若上一 Round 判断与 Observation 冲突，以 Observation 为准。
+""".strip()
 
 
 def reasoning_output_enabled() -> bool:
@@ -199,7 +216,12 @@ def build_scenario_agent_prompt(context: AgentContext) -> str:
     if not context.current_user_message.strip():
         payload.pop("current_user_message", None)
     payload["current_turn_input"] = turn_input
-    return f"{scenario_agent_instructions()}\n\nAgentContext：\n{json.dumps(payload, ensure_ascii=False)}"
+    continuation_instructions = (
+        f"\n\n{_CONTINUATION_REQUEST_INSTRUCTIONS}"
+        if context.turn_context.phase != "new_user_turn"
+        else ""
+    )
+    return f"{scenario_agent_instructions()}{continuation_instructions}\n\nAgentContext：\n{json.dumps(payload, ensure_ascii=False)}"
 
 
 def _concepts_referenced_by_student(message: str, catalog) -> list[str]:

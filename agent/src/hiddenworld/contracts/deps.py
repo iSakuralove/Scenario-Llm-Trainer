@@ -23,7 +23,7 @@ from .answer import PublicAnswerComparison
 from .authorization import AuthorizedActionRef
 from .learner import LearnerStateView, Turn
 from .teaching import TeachingConstraints
-from .version import EvidenceAvailability, ReplyMode
+from .version import EvidenceAvailability, GuidanceScope, ReplyMode
 from .world import Hypothesis, PublicScenario, VirtualTool
 
 
@@ -62,6 +62,7 @@ class GuardContext:
         },
     )
     completion_allowed: bool = False
+    guidance_scope: GuidanceScope = "none"
     may_release: list[str] = field(default_factory=list)
     evidence_request: EvidenceRequest | None = None
     required_reply_mode: ReplyMode | None = None
