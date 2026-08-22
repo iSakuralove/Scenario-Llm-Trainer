@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { api, ScenarioStreamReconnectable } from '../api/client'
 import type { ScenarioMessageResponse } from '../api/client'
 import type { ScenarioMessage, ScenarioQuestion, ScenarioSession } from '../types'
-import { SCENARIO_RUN_EVENT_SCHEMA_V2 } from '../types/agentRun'
+import { isScenarioRepairStatus, SCENARIO_RUN_EVENT_SCHEMA_V2 } from '../types/agentRun'
 import type { ScenarioAllowedAction, ScenarioDebugTraceEvent, ScenarioRunEventAny } from '../types/agentRun'
 
 interface ScenarioActiveRun {
@@ -456,17 +456,33 @@ function isPublicScenarioRunEvent(event: unknown): event is ScenarioRunEventAny 
 }
 
 function isWellFormedV2PublicEvent(kind: unknown, payload: unknown): boolean {
-  if (!payload || typeof payload !== 'object') return false
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false
   const value = payload as Record<string, unknown>
   const hasObject = (key: string) => Boolean(value[key] && typeof value[key] === 'object')
   const hasString = (object: unknown, key: string) => (
     Boolean(object && typeof object === 'object' && typeof (object as Record<string, unknown>)[key] === 'string')
   )
+  const hasOptionalString = (key: string) => value[key] === undefined || typeof value[key] === 'string'
+  const hasOptionalBoolean = (key: string) => value[key] === undefined || typeof value[key] === 'boolean'
+  const hasOptionalRepairStatus = () => value.repair_status === undefined || isScenarioRepairStatus(value.repair_status)
+  const hasAllowedActions = (key: string) => {
+    if (value[key] === undefined) return true
+    if (!Array.isArray(value[key])) return false
+    return value[key].every((action) => (
+      action && typeof action === 'object'
+      && typeof (action as Record<string, unknown>).action_id === 'string'
+      && typeof (action as Record<string, unknown>).catalog_version === 'string'
+      && typeof (action as Record<string, unknown>).tool_kind === 'string'
+      && typeof (action as Record<string, unknown>).title === 'string'
+    ))
+  }
   switch (kind) {
     case 'turn_started':
+      return hasOptionalString('turn_id') && hasOptionalString('task_summary')
     case 'turn_completed':
+      return hasAllowedActions('next_actions') && hasOptionalRepairStatus()
     case 'turn_failed':
-      return true
+      return hasOptionalString('error_code') && hasOptionalBoolean('retryable')
     case 'task_upserted':
       return hasObject('task') && hasString(value.task, 'task_id') && hasString(value.task, 'title')
     case 'tool_result': {
