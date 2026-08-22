@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -122,6 +123,33 @@ teaching_decision.allow_explicit_next_step 与 allow_ruled_out_scope 必须始�
 不要输出 reasoning、chain of thought、rationale 或任何额外字段。
 """.strip()
 
+# 后端开关打开时替换上面的思考禁令：模型默认在思考通道逐步推理，
+# 且思考增量经调试 SSE 展示到前端思考组件。JSON 契约边界保持不变。
+_COT_PROHIBITION = "不要输出 reasoning、chain of thought、rationale 或任何额外字段。"
+_COT_GUIDANCE = (
+    "思考输出已开启：请默认先在思考通道中逐步推理——先确认学生这轮在验证什么、已有哪些公开证据，"
+    "再对照工具结果、掌握度与教学约束决定本轮动作，最后才写结构化输出；思考过程会作为过程流展示。"
+    "思考中不得出现答案原文、未公开证据或内部字段名。结构化 JSON 输出仍只能包含契约字段，"
+    "不要在输出对象里新增 reasoning 等额外字段。"
+)
+
+
+def reasoning_output_enabled() -> bool:
+    """与 app._raw_reasoning_stream_enabled 共用同一后端开关。
+
+    开关打开时：思考增量走调试 SSE（app.py），提示词从“禁止推理”
+    切换为“默认逐步推理”；关闭时保持生产禁令。读取环境变量不做缓存，
+    便于测试与热切换。
+    """
+
+    return os.getenv("HIDDENWORLD_TEST_STREAM_RAW_REASONING", "0").strip() == "1"
+
+
+def scenario_agent_instructions() -> str:
+    if reasoning_output_enabled():
+        return SCENARIO_AGENT_INSTRUCTIONS.replace(_COT_PROHIBITION, _COT_GUIDANCE)
+    return SCENARIO_AGENT_INSTRUCTIONS
+
 
 def build_scenario_agent_prompt(context: AgentContext) -> str:
     """以安全上下文构造模型输入，当前用户消息单独保留。"""
@@ -154,7 +182,7 @@ def build_scenario_agent_prompt(context: AgentContext) -> str:
     if not context.current_user_message.strip():
         payload.pop("current_user_message", None)
     payload["current_turn_input"] = turn_input
-    return f"{SCENARIO_AGENT_INSTRUCTIONS}\n\nAgentContext：\n{json.dumps(payload, ensure_ascii=False)}"
+    return f"{scenario_agent_instructions()}\n\nAgentContext：\n{json.dumps(payload, ensure_ascii=False)}"
 
 
 def _concepts_referenced_by_student(message: str, catalog) -> list[str]:

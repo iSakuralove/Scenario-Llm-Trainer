@@ -255,9 +255,12 @@ def test_agent_context_prompt_keeps_current_message_and_excludes_hidden_fields(p
     prompt = build_scenario_agent_prompt(_context(public_scenario))
 
     assert "先看看 CPU" in prompt
-    assert "hidden_world" not in prompt
-    assert "canonical_answer" not in prompt
-    assert "completion_allowed" not in prompt
+    # 指令段可以在禁令里点名内部字段（防模型反推）；但 AgentContext 投影
+    # 段绝不能携带隐藏世界或裁判结果。
+    context_payload = prompt.split("AgentContext：", 1)[1]
+    assert "hidden_world" not in context_payload
+    assert "canonical_answer" not in context_payload
+    assert "completion_allowed" not in context_payload
 
 
 def test_response_brief_marks_only_concepts_explicitly_named_by_student(public_scenario) -> None:
@@ -429,6 +432,39 @@ def test_project_agent_context_is_a_safe_whitelist_projection(
     assert "hidden_world" not in dumped
     assert "canonical_answer" not in dumped
     assert "root_cause" not in dumped
+
+
+def test_prompt_reasoning_mode_follows_backend_flag(
+    hidden_world,
+    learner_state,
+    public_scenario,
+    monkeypatch,
+) -> None:
+    """后端开关关闭=生产禁令；打开=默认逐步推理，且 JSON 契约边界不变。"""
+
+    request = AgentTurnRequest(
+        request_id="cot-flag-1",
+        session_id="session-1",
+        state_revision=1,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="先看看 CPU",
+    )
+    context = project_agent_context(request)
+
+    monkeypatch.delenv("HIDDENWORLD_TEST_STREAM_RAW_REASONING", raising=False)
+    default_prompt = build_scenario_agent_prompt(context)
+    assert "不要输出 reasoning、chain of thought、rationale 或任何额外字段。" in default_prompt
+    assert "思考输出已开启" not in default_prompt
+
+    monkeypatch.setenv("HIDDENWORLD_TEST_STREAM_RAW_REASONING", "1")
+    enabled_prompt = build_scenario_agent_prompt(context)
+    assert "思考输出已开启" in enabled_prompt
+    assert "逐步推理" in enabled_prompt
+    assert "不要输出 reasoning、chain of thought、rationale 或任何额外字段。" not in enabled_prompt
+    # 两种模式都不允许在 JSON 输出里加契约外字段，保证解析稳定。
+    assert "不要在输出对象里新增 reasoning 等额外字段。" in enabled_prompt
 
 
 def test_project_agent_context_hypothesis_catalog_has_no_answer_markers(

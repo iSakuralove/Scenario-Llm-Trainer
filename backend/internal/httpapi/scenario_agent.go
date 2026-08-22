@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -554,13 +555,14 @@ func scenarioHintTransitionAllowed(current, next int, assessment *agentclient.Tu
 		return false
 	}
 	if next > current {
-		return assessment != nil && (
-			assessment.IsStuck ||
+		if assessment == nil {
+			return false
+		}
+		return assessment.IsStuck ||
 			assessment.RandomInvestigation ||
 			assessment.Intent == "stuck" ||
 			assessment.Intent == "help_request" ||
 			assessment.Intent == "request_hint"
-		)
 	}
 	if next < current {
 		return assessment != nil && (assessment.ProgressAssessment == "progress" || assessment.ProgressAssessment == "partial")
