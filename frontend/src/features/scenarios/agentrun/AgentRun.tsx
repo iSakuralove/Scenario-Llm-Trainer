@@ -20,6 +20,10 @@ interface AgentRunProps {
   fallbackUser?: string
   fallbackReply?: string
   active?: boolean
+  /** 显式调试流：仅在本地调试开关打开时存在，不进入公开事件。 */
+  rawReasoningChunks?: string[]
+  rawReasoningActive?: boolean
+  rawReasoningElapsedSeconds?: number
   onQuickAction?: (action: ScenarioAllowedAction) => void
   quickActionDisabled?: boolean
 }
@@ -29,6 +33,9 @@ export function AgentRun({
   fallbackUser = '',
   fallbackReply = '',
   active = false,
+  rawReasoningChunks = [],
+  rawReasoningActive = false,
+  rawReasoningElapsedSeconds,
   onQuickAction,
   quickActionDisabled = false,
 }: AgentRunProps) {
@@ -91,6 +98,9 @@ export function AgentRun({
 
           <ThinkingReasoning
             items={model.legacyReasoningItems.map((text) => ({ stage: 'composing_reply' as const, text }))}
+            rawChunks={rawReasoningChunks}
+            rawActive={rawReasoningActive}
+            rawElapsedSeconds={rawReasoningElapsedSeconds}
           />
 
           {model.tasks.length > 1 && <TaskList tasks={model.tasks} active={isProcessing} />}

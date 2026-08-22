@@ -94,6 +94,9 @@ failed、rejected、unsupported、timeout 或 already_completed 都不表示本�
 该请求没有可用的题面证据；public_message 非空时以它为事实边界，不得补具体数值。不能提到工具目录、可用工具、
 权限、系统实现，也不能借此引导学生改查其它对象。SIMULATED_ALLOWED 只表示题目声明了对应模拟工具，仍不得编造
 工具没有返回的数值。
+repair_status 是安全的教学导航信号，只允许 none、partial、sufficient 三值：none 表示尚未提出修复动作，
+partial 表示修复闭环仍缺一段，sufficient 表示修复动作与验证闭环均已覆盖。只能据此调整收束语气，
+不得反推出具体缺失要求、solution_coverage、canonical_answer 或 root_cause，也不得在回复中暴露该字段名。
 如果工具结果 status=failed 且 error_code=unmet_prerequisite，说明本次动作没有形成公开观察；
 只能承认本次没有得到可用观察，不能说题面没有该证据、不能说观察已记录，也不能替学生指定其它检查。
 如果 AgentContext.reply_feedback == "structured_action_requires_tool_call"，说明当前轮来自 QuickAction，

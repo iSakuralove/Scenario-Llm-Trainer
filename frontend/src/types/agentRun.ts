@@ -8,6 +8,11 @@
 
 export type ScenarioRunEventStatus = 'started' | 'running' | 'completed' | 'failed'
 
+/**
+ * 学生侧只允许看到修复闭环的粗粒度进度，不暴露具体缺失项或题目答案。
+ */
+export type ScenarioRepairStatus = 'none' | 'partial' | 'sufficient'
+
 export type ScenarioRunEventKind =
   | 'user_message'
   | 'reasoning_summary_delta'
@@ -53,6 +58,8 @@ export interface ScenarioPublicAnswerComparison {
   tool: 'compare_answer' | string
   status: string
   user_points: string[]
+  /** 可选的安全修复闭环投影；缺失时由会话状态或事件适配层兜底。 */
+  repair_status?: ScenarioRepairStatus
   conclusion_status: 'none' | 'partial' | 'supported' | 'contradictory'
   evidence_status: 'none' | 'insufficient' | 'partial' | 'sufficient'
   causal_status: 'missing' | 'partial' | 'sufficient'
@@ -65,6 +72,7 @@ export interface ScenarioLegacyPublicAnswerComparison {
   tool: 'compare_answer' | string
   status: string
   user_points: string[]
+  repair_status?: ScenarioRepairStatus
   support_status: 'insufficiently_specific' | 'needs_more_evidence' | 'has_evidence_conflict' | 'evidence_consistent'
   next_action: string
 }
@@ -190,11 +198,62 @@ export type ScenarioRunEventV2 =
       kind: 'assistant_delta'
       payload: { phase: 'understanding' | 'replying'; markdown_ready_delta: string }
     })
-  | (RunEventV2Base & { kind: 'turn_completed'; payload: { next_actions?: ScenarioAllowedAction[] } })
+  | (RunEventV2Base & {
+      kind: 'turn_completed'
+      payload: { next_actions?: ScenarioAllowedAction[]; repair_status?: ScenarioRepairStatus }
+    })
   | (RunEventV2Base & { kind: 'turn_failed'; payload: { error_code?: string; retryable?: boolean } })
 
 export type ScenarioRunEventAny = ScenarioRunEvent | ScenarioRunEventV2
 
 export function isScenarioRunEventV2(event: ScenarioRunEventAny): event is ScenarioRunEventV2 {
   return (event as ScenarioRunEventV2).schema_version === SCENARIO_RUN_EVENT_SCHEMA_V2
+}
+
+export function isScenarioRepairStatus(value: unknown): value is ScenarioRepairStatus {
+  return value === 'none' || value === 'partial' || value === 'sufficient'
+}
+
+/**
+ * 只从明确的公开字段提取修复状态。未知值一律丢弃，避免把内部判定字段
+ * 或未来扩展状态直接投影到学生界面。
+ */
+export function resolveRepairStatus(
+  state?: { repair_status?: unknown } | null,
+  events: ScenarioRunEventAny[] = [],
+): ScenarioRepairStatus | undefined {
+  for (const event of [...events].reverse()) {
+    const candidate = event as unknown as {
+      repair_status?: unknown
+      payload?: {
+        repair_status?: unknown
+        tool_result?: {
+          repair_status?: unknown
+          result?: { repair_status?: unknown }
+        }
+      }
+      tool?: { result?: { repair_status?: unknown } }
+    }
+    const values = [
+      candidate.repair_status,
+      candidate.payload?.repair_status,
+      candidate.payload?.tool_result?.repair_status,
+      candidate.payload?.tool_result?.result?.repair_status,
+      candidate.tool?.result?.repair_status,
+    ]
+    const status = values.find(isScenarioRepairStatus)
+    if (status) return status
+  }
+  return isScenarioRepairStatus(state?.repair_status) ? state.repair_status : undefined
+}
+
+export function repairStatusLabel(status: ScenarioRepairStatus): string {
+  switch (status) {
+    case 'partial':
+      return '修复闭环仍缺一段'
+    case 'sufficient':
+      return '修复与验证已覆盖'
+    default:
+      return '尚未形成修复闭环'
+  }
 }

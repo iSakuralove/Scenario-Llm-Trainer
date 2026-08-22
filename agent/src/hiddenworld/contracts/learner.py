@@ -18,6 +18,10 @@ from pydantic import BaseModel, ConfigDict, Field
 # 再长会开始误伤正常的话题延续。
 RECENT_OPENINGS_WINDOW = 3
 
+# 学生/Agent 只能看到修复闭环的抽象进度；内部裁判的
+# ``solution_coverage`` 与 ``missing_solution_requirements`` 永不进入公开投影。
+RepairStatus = Literal["none", "partial", "sufficient"]
+
 MasteryScore = Annotated[int, Field(ge=0, le=4)]
 DetailPreference = Literal["brief", "balanced", "detailed"]
 PreferenceLevel = Literal["low", "medium", "high"]
@@ -60,6 +64,10 @@ class LearnerState(_Strict):
     explanation_preferences: ExplanationPreferences = Field(default_factory=ExplanationPreferences)
     hint_level: int = Field(default=0, ge=0, le=4, description="当前提示强度，0 表示未提示")
     last_hint: str = Field(default="", description="最近一次已经公开给学生的提示")
+    repair_status: RepairStatus = Field(
+        default="none",
+        description="修复闭环的安全抽象进度，不含具体缺失要求",
+    )
     recent_openings: list[str] = Field(
         default_factory=list,
         description=f"最近 {RECENT_OPENINGS_WINDOW} 轮 Mentor 的开场句式，用于防复读",
@@ -95,6 +103,7 @@ class LearnerStateView(_Strict):
     explanation_preferences: ExplanationPreferences = Field(default_factory=ExplanationPreferences)
     hint_level: int = Field(default=0, ge=0, le=4)
     last_hint: str = ""
+    repair_status: RepairStatus = "none"
     recent_openings: list[str] = Field(default_factory=list)
 
 

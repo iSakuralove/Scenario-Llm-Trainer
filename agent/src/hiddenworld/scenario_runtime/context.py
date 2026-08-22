@@ -108,6 +108,7 @@ def project_agent_context(
         explanation_preferences=learner.explanation_preferences.model_copy(deep=True),
         hint_level=learner.hint_level,
         last_hint=learner.last_hint,
+        repair_status=learner.repair_status,
         recent_openings=list(learner.recent_openings),
     )
     # 上一轮 GuidanceState 是跨轮教学状态的唯一安全切片。没有它时才从
@@ -125,6 +126,10 @@ def project_agent_context(
                 "current_focus": current_focus,
                 "stalled_turns": max(prior_guidance.stalled_turns, learner.stalled_turns),
             }
+        )
+    if prior_guidance.repair_status != learner.repair_status:
+        prior_guidance = prior_guidance.model_copy(
+            update={"repair_status": learner.repair_status}
         )
 
     return AgentContext(

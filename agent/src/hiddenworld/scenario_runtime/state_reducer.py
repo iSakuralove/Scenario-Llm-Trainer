@@ -92,6 +92,8 @@ class StateReducer:
             assessment=turn_assessment,
             allow_progress_signals=advance_state,
         )
+        if answer_comparison is not None:
+            projected.repair_status = _repair_status(answer_comparison.solution_coverage)
         if advance_state:
             if teaching_decision is not None:
                 focus = teaching_decision.guidance_direction.strip()
@@ -156,6 +158,7 @@ class StateReducer:
                 navigation=navigation,
                 stalled_turns=projected.stalled_turns,
                 current_focus=projected.current_focus or prior_guidance.current_focus,
+                repair_status=projected.repair_status,
             )
         # terminal 表示会话生命周期已经结束，只能由上一轮权威会话状态回注；
         # 证据充足/答案可提交并不自动终止会话。三者故意保持独立。
@@ -193,6 +196,16 @@ def _coverage_label(decision: AntiGuessDecision) -> str:
     total = len(decision.best_evidence_set)
     found = total - len(decision.missing_evidence)
     return f"{found}/{total}"
+
+
+def _repair_status(solution_coverage: float) -> str:
+    """把内部修复覆盖率收窄为 Agent 可见的三值状态。"""
+
+    if solution_coverage <= 0.0:
+        return "none"
+    if solution_coverage >= 1.0:
+        return "sufficient"
+    return "partial"
 
 
 # 文档定义的教学状态图。表内只允许显式、可解释的迁移；模型若请求跳跃到
@@ -303,7 +316,11 @@ def _resolve_prior_guidance(request, explicit: GuidanceState | None, *, prior: L
             return GuidanceState.model_validate(value)
         except (TypeError, ValueError):
             continue
-    return GuidanceState(stalled_turns=prior.stalled_turns, current_focus=prior.current_focus)
+    return GuidanceState(
+        stalled_turns=prior.stalled_turns,
+        current_focus=prior.current_focus,
+        repair_status=prior.repair_status,
+    )
 
 
 def _resolve_prior_control(request, explicit: TurnControl | None) -> TurnControl:

@@ -121,6 +121,8 @@ type scenarioInvestigationState struct {
 	EstablishedFacts       []string `json:"established_facts"`
 	RuledOutLabels         []string `json:"ruled_out_labels"`
 	HintLevel              int      `json:"hint_level"`
+	// 只向学生暴露三值修复进度，不携带具体缺失要求、覆盖率或答案内容。
+	RepairStatus           string   `json:"repair_status"`
 }
 
 func scenarioSessionView(session *domain.ScenarioSession) scenarioSessionResponse {
@@ -133,17 +135,18 @@ func scenarioSessionView(session *domain.ScenarioSession) scenarioSessionRespons
 		QuestionID:      session.QuestionID,
 		Status:          session.Status,
 		CurrentTurn:     session.CurrentTurn,
-		MaxTurns:        session.MaxTurns,
-			RevealedClueCount: scenarioPublicClueCount(session),
-			InvestigationState: scenarioInvestigationState{
-				CurrentFocus:           session.LearnerState.CurrentFocus,
-				CurrentHypothesis:      safeScenarioHypothesisLabel(session),
-				HasCurrentHypothesis:   strings.TrimSpace(session.LearnerState.CurrentHypothesis) != "",
-				CollectedEvidenceCount: len(session.LearnerState.CollectedEvidence),
-				EstablishedFacts:       scenarioRecentFacts(session.LearnerState.EstablishedFacts, 4),
-				RuledOutLabels:         safeScenarioRuledOutLabels(session),
-				HintLevel:              session.LearnerState.HintLevel,
-			},
+		MaxTurns:       session.MaxTurns,
+		RevealedClueCount: scenarioPublicClueCount(session),
+		InvestigationState: scenarioInvestigationState{
+			CurrentFocus:           session.LearnerState.CurrentFocus,
+			CurrentHypothesis:      safeScenarioHypothesisLabel(session),
+			HasCurrentHypothesis:   strings.TrimSpace(session.LearnerState.CurrentHypothesis) != "",
+			CollectedEvidenceCount: len(session.LearnerState.CollectedEvidence),
+			EstablishedFacts:       scenarioRecentFacts(session.LearnerState.EstablishedFacts, 4),
+			RuledOutLabels:         safeScenarioRuledOutLabels(session),
+			HintLevel:              session.LearnerState.HintLevel,
+			RepairStatus:           session.LearnerState.Normalized().RepairStatus,
+		},
 		UserAnswer:       session.UserAnswer,
 		EvaluationResult: session.EvaluationResult,
 		Score:            session.Score,

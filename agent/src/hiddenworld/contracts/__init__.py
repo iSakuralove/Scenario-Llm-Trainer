@@ -48,7 +48,7 @@ from .events import (
     RunEventStatus,
     ToolEventPayload,
 )
-from .learner import ExplanationPreferences, LearnerState, LearnerStateView, Turn
+from .learner import ExplanationPreferences, LearnerState, LearnerStateView, RepairStatus, Turn
 from .mentor import ExpectedEffort, MentorAction
 from .teaching import ConstraintFacts, TeachingConstraints
 from .transport import (

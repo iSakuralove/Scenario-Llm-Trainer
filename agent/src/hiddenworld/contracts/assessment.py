@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .dimensions import TeachingDimensionRef
 from .version import StudentAffect
+from .learner import RepairStatus
 
 
 TurnIntent = Literal[
@@ -184,6 +185,8 @@ class GuidanceState(BaseModel):
     navigation: list[TeachingDimensionRef] = Field(default_factory=list)
     stalled_turns: int = Field(default=0, ge=0)
     current_focus: str = ""
+    # 只表达修复闭环是否仍缺一段；不携带内部覆盖率或缺失要求。
+    repair_status: RepairStatus = "none"
 
 
 class TurnControl(BaseModel):

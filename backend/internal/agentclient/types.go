@@ -74,6 +74,7 @@ type LearnerState struct {
 	ExplanationPreferences ExplanationPreferences         `json:"explanation_preferences"`
 	HintLevel              int                            `json:"hint_level"`
 	LastHint               string                         `json:"last_hint"`
+	RepairStatus           string                         `json:"repair_status"`
 }
 
 type ExplanationPreferences struct {
@@ -159,6 +160,7 @@ type GuidanceState struct {
 	Navigation         []TeachingDimensionRef `json:"navigation"`
 	StalledTurns       int                    `json:"stalled_turns"`
 	CurrentFocus       string                 `json:"current_focus"`
+	RepairStatus       string                 `json:"repair_status"`
 }
 
 type TurnControl struct {

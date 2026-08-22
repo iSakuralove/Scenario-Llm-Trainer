@@ -67,6 +67,7 @@ class InvestigationView(BaseModel):
     missing_concepts: list[str] = Field(default_factory=list)
     hint_level: int = Field(default=0, ge=0, le=4)
     last_hint: str = ""
+    repair_status: Literal["none", "partial", "sufficient"] = "none"
 
 
 class CausalBoundary(BaseModel):
@@ -239,6 +240,7 @@ class ResponseBriefBuilder:
             missing_concepts=missing,
             hint_level=level,
             last_hint=resolved_hint,
+            repair_status=str(getattr(state, "repair_status", "none") or "none"),
         )
 
         do_not_repeat = _unique_texts((*known, *(item.result for item in obs)))

@@ -14,7 +14,7 @@ const FADE_PX = 16
 
 interface ThinkingReasoningProps {
   items: ScenarioPublicReasoningSummary[]
-  /** 测试专用原始 reasoning 增量；正式环境始终为空。 */
+  /** 显式调试流中的原始 reasoning 增量；不进入学生侧正式事件。 */
   rawChunks?: string[]
   rawActive?: boolean
   rawElapsedSeconds?: number
@@ -36,7 +36,7 @@ export function ThinkingReasoning({
     () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false,
     [],
   )
-  // AICSS 风格：思考中自动展开并跟随打字，完成后折叠为“思考 用时 N 秒”，
+  // AICSS 风格：思考中自动展开并跟随打字，完成后折叠为“原始思维链 用时 N 秒”，
   // 用户可再点开自由滚动；历史回放不会重新铺开整段调试思维。
   const [open, setOpen] = useState(false)
   const [summaryOpen, setSummaryOpen] = useState(false)
@@ -139,13 +139,13 @@ export function ThinkingReasoning({
               setOpen((current) => !current)
             }}
             aria-expanded={expanded}
-            aria-label="切换思考过程"
+            aria-label="切换 Agent 原始思维链（调试）"
           >
             {rawActive ? (
-              <span className={`${styles.trLabel} ${styles.trShimmer}`}>思考中…</span>
+              <span className={`${styles.trLabel} ${styles.trShimmer}`}>Agent 原始思维链（调试）· 思考中…</span>
             ) : (
               <span className={styles.trLabel}>
-                <span className={styles.trVerb}>思考</span> 用时 {shownElapsedSeconds} 秒
+                <span className={styles.trVerb}>Agent 原始思维链（调试）</span> · 用时 {shownElapsedSeconds} 秒
               </span>
             )}
             {!rawActive && (

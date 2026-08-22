@@ -846,6 +846,7 @@ def _learner_view(request: AgentTurnRequest, state: LearnerState) -> LearnerStat
         explanation_preferences=state.explanation_preferences.model_copy(deep=True),
         hint_level=state.hint_level,
         last_hint=state.last_hint,
+        repair_status=state.repair_status,
         recent_openings=list(state.recent_openings),
     )
 

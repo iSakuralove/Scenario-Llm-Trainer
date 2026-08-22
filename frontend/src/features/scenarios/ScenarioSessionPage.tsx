@@ -12,7 +12,8 @@ import { redactSensitiveText } from '../../lib/redaction'
 import { useScenarioSessionStore } from '../../stores/scenarioSessionStore'
 import { AgentRun, collectProactiveClues, resolveQuickActionUserLabel } from './agentrun'
 import type { ObservationRelease } from './agentrun'
-import type { ScenarioAllowedAction } from '../../types/agentRun'
+import { repairStatusLabel, resolveRepairStatus } from '../../types/agentRun'
+import type { ScenarioAllowedAction, ScenarioRepairStatus } from '../../types/agentRun'
 import './ScenarioSessionPage.css'
 
 const MermaidRenderer = lazy(() => import('../../components/common/MermaidRenderer').then((module) => ({ default: module.MermaidRenderer })))
@@ -45,6 +46,8 @@ export function ScenarioSessionPage() {
   const sendError = useScenarioSessionStore((store) => store.sendError)
   const activeRun = useScenarioSessionStore((store) => store.activeRun)
   const completedRuns = useScenarioSessionStore((store) => store.completedRuns)
+  const completedDebugReasoning = useScenarioSessionStore((store) => store.completedDebugReasoning)
+  const completedDebugReasoningDuration = useScenarioSessionStore((store) => store.completedDebugReasoningDuration)
   const hydrateSession = useScenarioSessionStore((store) => store.hydrate)
   const sendMessage = useScenarioSessionStore((store) => store.sendMessage)
   const sendStructuredAction = useScenarioSessionStore((store) => store.sendStructuredAction)
@@ -73,10 +76,16 @@ export function ScenarioSessionPage() {
 
   // 这些 Hooks 必须在加载态和已加载态都执行，避免 React 在恢复会话后改变
   // Hooks 数量。线索数据本身不依赖 question，可以安全地在条件渲染前聚合。
+  const visibleRunEvents = useMemo(
+    () => [
+      ...messages.flatMap((message) => completedRuns[message.id] ?? message.response_meta.run_events ?? []),
+      ...(activeRun?.events ?? []),
+    ],
+    [activeRun?.events, completedRuns, messages],
+  )
   const clueReleases = useMemo(() => {
-    const runs = messages.flatMap((message) => completedRuns[message.id] ?? message.response_meta.run_events ?? [])
-    return collectProactiveClues([...runs, ...(activeRun?.events ?? [])])
-  }, [activeRun?.events, completedRuns, messages])
+    return collectProactiveClues(visibleRunEvents)
+  }, [visibleRunEvents])
   const clueKeySignature = clueReleases.map((item) => item.key).join('|')
 
   useEffect(() => {
@@ -175,6 +184,7 @@ export function ScenarioSessionPage() {
   }
   const establishedEvidenceCount = activeSession.investigation_state?.collected_evidence_count ?? 0
   const importantClueCount = Math.max(activeSession.revealed_clue_count ?? 0, clueReleases.length)
+  const repairStatus = resolveRepairStatus(activeSession.investigation_state, visibleRunEvents)
   const snapshotText = (value = '') => question.is_sanitized ? redactSensitiveText(value) : value
   const publicScenario = question.content.public_scenario
   const diagramCode = publicScenario?.architecture_diagram ?? question.content.architecture_diagram ?? ''
@@ -258,7 +268,7 @@ export function ScenarioSessionPage() {
             <span>已形成证据 {establishedEvidenceCount}</span>
             <span>重要线索 {importantClueCount}</span>
           </div>
-          <InvestigationStatePanel state={activeSession.investigation_state} />
+          <InvestigationStatePanel state={activeSession.investigation_state} repairStatus={repairStatus} />
           <ClueReleaseTimeline clues={clueReleases} animatedKeys={animatedClueKeys} snapshotText={snapshotText} />
         </div>
       </aside>
@@ -297,6 +307,8 @@ export function ScenarioSessionPage() {
                 { events: completedRuns[message.id] ?? message.response_meta.run_events ?? [] },
               )}
               fallbackReply={message.assistant_content}
+              rawReasoningChunks={completedDebugReasoning[message.id] ?? []}
+              rawReasoningElapsedSeconds={completedDebugReasoningDuration[message.id]}
               onQuickAction={message.id === messages[messages.length - 1]?.id ? handleQuickAction : undefined}
               quickActionDisabled={isSending || isQuitting || isSubmittingAnswer}
             />
@@ -313,6 +325,8 @@ export function ScenarioSessionPage() {
                 },
               )}
               active={isSending}
+              rawReasoningChunks={activeRun.reasoningChunks}
+              rawReasoningActive={isSending}
               onQuickAction={handleQuickAction}
               quickActionDisabled={isSending || isQuitting || isSubmittingAnswer}
             />
@@ -439,7 +453,13 @@ function ClueReleaseTimeline({
   )
 }
 
-function InvestigationStatePanel({ state }: { state?: ScenarioInvestigationState }) {
+function InvestigationStatePanel({
+  state,
+  repairStatus,
+}: {
+  state?: ScenarioInvestigationState
+  repairStatus?: ScenarioRepairStatus
+}) {
   const focusLabel = scenarioFocusLabel(state?.current_focus)
   const hypothesisLabel = state?.current_hypothesis?.trim() ?? ''
   const establishedFacts = state?.established_facts ?? []
@@ -471,6 +491,12 @@ function InvestigationStatePanel({ state }: { state?: ScenarioInvestigationState
           <span>提示进度</span>
           <strong>{hintLevelLabel(state?.hint_level ?? 0)}</strong>
         </div>
+        {repairStatus && (
+          <div>
+            <span>修复进度</span>
+            <strong>{repairStatusLabel(repairStatus)}</strong>
+          </div>
+        )}
       </div>
     </section>
   )

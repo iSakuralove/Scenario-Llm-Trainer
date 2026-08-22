@@ -23,6 +23,8 @@ type ScenarioLearnerState struct {
 	ExplanationPreferences ScenarioExplanationPreferences `json:"explanation_preferences"`
 	HintLevel              int                            `json:"hint_level"`
 	LastHint               string                         `json:"last_hint,omitempty"`
+	// RepairStatus 是仅供教学导航的三值抽象；不保存内部 solution coverage。
+	RepairStatus           string                         `json:"repair_status"`
 }
 
 type ScenarioExplanationPreferences struct {
@@ -225,6 +227,9 @@ func (state ScenarioLearnerState) Normalized() ScenarioLearnerState {
 	}
 	if state.HintLevel > 4 {
 		state.HintLevel = 4
+	}
+	if state.RepairStatus != "partial" && state.RepairStatus != "sufficient" {
+		state.RepairStatus = "none"
 	}
 	return state
 }

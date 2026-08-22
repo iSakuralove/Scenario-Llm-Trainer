@@ -471,7 +471,30 @@ func approveScenarioProposals(
 		approval.ReasonCode = "approved"
 		approvals = append(approvals, approval)
 	}
+	// repair_status 只能由可信的内部答案比较结果驱动；绝不接受模型通过
+	// GuidanceState 或 proposal 自行提升修复闭环状态。
+	state.RepairStatus = worldRepairStatus(result.InternalVerification.AnswerComparison, state.RepairStatus)
 	return state.Normalized(), approvals, nil
+}
+
+func scenarioRepairStatusAllowed(value string) bool {
+	return value == "none" || value == "partial" || value == "sufficient"
+}
+
+func worldRepairStatus(comparison *agentclient.InternalAnswerComparison, fallback string) string {
+	if comparison == nil {
+		if scenarioRepairStatusAllowed(fallback) {
+			return fallback
+		}
+		return "none"
+	}
+	if comparison.SolutionCoverage <= 0 {
+		return "none"
+	}
+	if comparison.SolutionCoverage >= 1 {
+		return "sufficient"
+	}
+	return "partial"
 }
 
 func scenarioSkillIDAllowed(value string) bool {
@@ -599,6 +622,9 @@ func validateScenarioStructuredTurn(result agentclient.TurnResult, world *domain
 		(state.ProgressAssessment != "" && !scenarioProgressAssessmentAllowed(state.ProgressAssessment)) {
 		return errors.New("guidance state enum is invalid")
 	} else {
+		if state.RepairStatus != "" && !scenarioRepairStatusAllowed(state.RepairStatus) {
+			return errors.New("guidance state repair_status is invalid")
+		}
 		for _, dimension := range state.Navigation {
 			if strings.TrimSpace(dimension.DimensionID) == "" || !scenarioDimensionCategoryAllowed(dimension.Category) ||
 				!scenarioDimensionStatusAllowed(dimension.Status) || !scenarioHintLevelAllowed(dimension.HintLevel) {
@@ -1555,6 +1581,7 @@ func learnerStateForAgent(state domain.ScenarioLearnerState) agentclient.Learner
 		},
 		HintLevel: state.HintLevel,
 		LastHint:  state.LastHint,
+		RepairStatus: state.RepairStatus,
 	}
 }
 

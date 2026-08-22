@@ -1,4 +1,4 @@
-import type { ScenarioRunEventAny } from './agentRun'
+import type { ScenarioRepairStatus, ScenarioRunEventAny } from './agentRun'
 
 export interface ApiEnvelope<T> {
   code: number
@@ -184,6 +184,8 @@ export interface ScenarioInvestigationState {
   established_facts?: string[]
   ruled_out_labels?: string[]
   hint_level?: number
+  /** 学生侧安全投影；不包含具体缺失修复项。 */
+  repair_status?: ScenarioRepairStatus
 }
 
 export interface ScenarioMessage {
