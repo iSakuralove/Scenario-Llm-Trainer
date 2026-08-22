@@ -414,6 +414,10 @@ async function requestScenarioMessageStream(
 ): Promise<ScenarioMessageResponse> {
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), SCENARIO_TURN_TIMEOUT_MS)
+  // 只有已经拿到响应体并进入 reader 后，底层读取异常才可能是
+  // “服务端已处理、客户端中途断流”；请求建立前的网络失败和客户端
+  // 超时都不能用同一个 request_id 续接。
+  let streamStarted = false
   try {
     const response = await fetch(buildApiURL(`/scenarios/sessions/${sessionId}/messages`), {
       method: 'POST',
@@ -455,6 +459,7 @@ async function requestScenarioMessageStream(
     }
 
     const reader = response.body.getReader()
+    streamStarted = true
     const decoder = new TextDecoder()
     let buffer = ''
     let finalPayload: ScenarioMessageResponse | null = null
@@ -545,9 +550,18 @@ async function requestScenarioMessageStream(
       session: normalizeScenarioSession(completedPayload.session),
     }
   } catch (err) {
+    // AbortController 的超时是客户端终态，不是服务端已提交后的断流。
+    // 如果把它包装成可重连，Store 会用同一个 request_id 再提交一次，
+    // 可能造成重复模型/工具执行或把业务错误误当成断线恢复。
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new ScenarioRunFailure('stream_timeout', '请求超时，请稍后重试或检查 AI Provider 配置')
+    }
     const normalized = normalizeFetchError(err)
     if (normalized instanceof ScenarioRunFailure || normalized instanceof ScenarioStreamReconnectable) {
       throw normalized
+    }
+    if (!streamStarted) {
+      throw new ScenarioRunFailure('stream_unavailable', normalized.message)
     }
     // 只有底层 reader/fetch 读取异常才允许 Store 用同一 request_id 续接；
     // HTTP、SSE error 和协议帧问题在上面均已转换为不可重放失败。
