@@ -8,11 +8,14 @@ from collections.abc import Awaitable, Callable
 from typing import Literal, Protocol
 
 from hiddenworld.contracts import (
+    ActionHistoryEntry,
     AgentContext,
     AgentModelOutput,
     AgentToolResult,
     FinalReplyOutput,
     ToolCall,
+    ToolCallsOutput,
+    ToolStateView,
 )
 
 from .batch_scheduler import BatchScheduler, _fingerprint
@@ -132,6 +135,7 @@ class AgentLoop:
                 authorized_actions=current.authorized_actions,
                 remaining_tool_calls=self.max_tool_calls - tool_calls_used,
                 completed_fingerprints=completed_fingerprints,
+                tool_states=current.tool_states,
             )
             events.extend(AgentLoopEvent("tool_rejected", item) for item in plan.rejected)
             events.extend(AgentLoopEvent("tool_deferred", item) for item in plan.deferred)
@@ -165,6 +169,7 @@ class AgentLoop:
                     )
                     for call in plan.deferred
                 )
+            current = context_after_tool_results(current, output=output, results=results)
             guidance_state = current.guidance_state
             if output.teaching_decision is not None:
                 guidance_state = guidance_state.model_copy(
@@ -193,6 +198,132 @@ class AgentLoop:
         raise AgentLoopBudgetExceeded(
             f"ScenarioAgent did not return final_reply within {self.max_model_rounds} model rounds"
         )
+
+
+def _append_action_history(
+    existing: list[ActionHistoryEntry],
+    output: AgentModelOutput | None,
+    results: list[AgentToolResult],
+) -> list[ActionHistoryEntry]:
+    """把本轮动作和结果归纳为模型下一轮可读的短历史。"""
+
+    history = list(existing)
+    if isinstance(output, ToolCallsOutput):
+        summary = _compact_action_summary(output.public_summary)
+        history.extend(
+            ActionHistoryEntry(
+                action="tool_call",
+                tool_name=call.tool_id,
+                decision_summary=summary,
+            )
+            for call in output.calls
+        )
+    history.extend(
+        ActionHistoryEntry(
+            action="tool_result",
+            tool_name=result.tool_id,
+            decision_summary=_result_decision_summary(result),
+            status=result.status,
+        )
+        for result in results
+    )
+    return history
+
+
+def context_after_tool_results(
+    context: AgentContext,
+    *,
+    output: AgentModelOutput | None,
+    results: list[AgentToolResult],
+) -> AgentContext:
+    """把工具动作和终态结果回注到同一轮安全上下文。"""
+
+    if output is None and not results:
+        return context
+    action_history = _append_action_history(context.action_history, output, results)
+    tool_states = _update_tool_states(context.tool_states, results)
+    return context.model_copy(
+        update={
+            "tool_results": [*context.tool_results, *results],
+            "action_history": action_history,
+            "tool_states": tool_states,
+            "authorized_actions": _remove_consumed_authorizations(
+                context.authorized_actions,
+                tool_states,
+            ),
+            "phase": "after_tool_call" if results else context.phase,
+        },
+        deep=True,
+    )
+
+
+def _compact_action_summary(value: str) -> str:
+    return " ".join(str(value or "").split())[:240]
+
+
+def _result_decision_summary(result: AgentToolResult) -> str:
+    if result.status == "succeeded":
+        return "工具已返回公开观察"
+    if result.status == "already_completed":
+        return "本会话已使用该工具，不重复调用"
+    if result.status == "rejected":
+        return "Runtime 未批准本次动作，未形成公开观察"
+    if result.status == "unsupported":
+        return "题目当前没有可用的该工具"
+    if result.status == "timeout":
+        return "本次调用超时，未形成公开观察"
+    return "本次动作未形成公开观察"
+
+
+def _update_tool_states(
+    current: dict[str, ToolStateView],
+    results: list[AgentToolResult],
+) -> dict[str, ToolStateView]:
+    states = {key: value.model_copy(deep=True) for key, value in current.items()}
+    for result in results:
+        if not result.tool_id:
+            continue
+        previous = states.get(result.tool_id, ToolStateView(state="available"))
+        if result.status in {"succeeded", "already_completed"}:
+            states[result.tool_id] = previous.model_copy(
+                update={
+                    "state": "consumed",
+                    "reason": "本会话已使用，不可重复调用",
+                }
+            )
+        elif result.status == "unsupported":
+            states[result.tool_id] = previous.model_copy(
+                update={
+                    "state": "unavailable",
+                    "reason": "题目当前没有声明该工具",
+                }
+            )
+        elif result.status == "rejected":
+            states[result.tool_id] = previous.model_copy(
+                update={
+                    "state": "blocked",
+                    "reason": "本轮动作未获 Runtime 批准，不重复尝试",
+                }
+            )
+        else:
+            states[result.tool_id] = previous.model_copy(
+                update={
+                    "state": "attempted",
+                    "reason": "本次动作未形成公开观察，前置条件或执行状态仍需由 Runtime 判断",
+                }
+            )
+    return states
+
+
+def _remove_consumed_authorizations(
+    authorized_actions,
+    tool_states: dict[str, ToolStateView],
+):
+    return [
+        item
+        for item in authorized_actions
+        if tool_states.get(item.action_ref, ToolStateView(state="available")).state != "consumed"
+    ]
 
 
 def _normalize_execution_result(call: ToolCall, result: object, context: AgentContext) -> AgentToolResult:

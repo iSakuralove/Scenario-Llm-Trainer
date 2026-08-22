@@ -21,6 +21,7 @@ from hiddenworld.contracts import (
     HypothesisCatalogEntry,
     LearnerStateView,
     TurnControl,
+    ToolStateView,
 )
 from hiddenworld.contracts.transport import AgentTurnRequest
 from hiddenworld.evidence_availability import resolve_evidence_request
@@ -111,6 +112,29 @@ def project_agent_context(
         repair_status=learner.repair_status,
         recent_openings=list(learner.recent_openings),
     )
+    consumed_actions = {item.strip() for item in learner.actions_taken if item.strip()}
+    default_tool_states = {
+        item.tool_id: ToolStateView(
+            state="consumed" if item.tool_id in consumed_actions else "available",
+            reason=(
+                "本会话已使用，不可重复调用"
+                if item.tool_id in consumed_actions
+                else "等待本轮明确请求"
+            ),
+        )
+        for item in catalog
+        if item.tool_id.strip()
+    }
+    provided_tool_states = getattr(request, "tool_states", {}) or {}
+    tool_states = {
+        item.tool_id: (
+            provided_tool_states[item.tool_id].model_copy(deep=True)
+            if item.tool_id in provided_tool_states
+            else default_tool_states[item.tool_id]
+        )
+        for item in catalog
+        if item.tool_id in default_tool_states
+    }
     # 上一轮 GuidanceState 是跨轮教学状态的唯一安全切片。没有它时才从
     # LearnerState 的公开字段构造最小兼容值；不能每轮无条件重置为默认状态。
     current_focus = prior_guidance.current_focus or learner.current_focus
@@ -137,6 +161,11 @@ def project_agent_context(
         conversation_summary=request.conversation_summary.strip(),
         transcript=_recent_transcript(request.transcript),
         current_user_message=request.user_message,
+        phase=getattr(request, "phase", "new_user_turn"),
+        turn_id=getattr(request, "turn_id", "") or request.request_id,
+        original_user_message=(
+            getattr(request, "original_user_message", "") or request.user_message
+        ),
         evidence_request=evidence_request,
         learner_summary=learner_summary,
         mentor_persona=request.hidden_world.teaching_model.mentor_persona.model_copy(deep=True),
@@ -148,6 +177,8 @@ def project_agent_context(
         action_catalog=catalog,
         hypothesis_catalog=hypothesis_catalog,
         authorized_actions=authorized,
+        action_history=[item.model_copy(deep=True) for item in getattr(request, "action_history", [])],
+        tool_states=tool_states,
         budget=AgentBudgetView(
             remaining_model_rounds=11,
             remaining_tool_calls=10,
@@ -257,9 +288,10 @@ def _normalize_guidance(value: GuidanceState) -> GuidanceState:
 
 def _project_authorized_actions(request: AgentTurnRequest) -> list[AuthorizedActionRef]:
     result: list[AuthorizedActionRef] = []
+    consumed_actions = _consumed_action_ids(request)
     action = request.structured_user_action
     if action is not None and action.state_revision == request.state_revision:
-        if _has_action(request, action.action_id):
+        if _has_action(request, action.action_id) and action.action_id not in consumed_actions:
             result.append(
                 AuthorizedActionRef(
                     authorization_id=f"{request.request_id}:structured:{action.action_id}",
@@ -288,7 +320,11 @@ def _project_authorized_actions(request: AgentTurnRequest) -> list[AuthorizedAct
     # 因此逐项签发授权；“候选为空/同一对象多次命中”仍保持拒绝，避免
     # 把泛泛的“看看日志”扩展成工具枚举。
     for action_ref in dict.fromkeys(candidates):
-        if any(item.action_ref == action_ref for item in result) or not _has_action(request, action_ref):
+        if (
+            any(item.action_ref == action_ref for item in result)
+            or action_ref in consumed_actions
+            or not _has_action(request, action_ref)
+        ):
             continue
         result.append(
             AuthorizedActionRef(
@@ -298,6 +334,14 @@ def _project_authorized_actions(request: AgentTurnRequest) -> list[AuthorizedAct
             )
         )
     return result
+
+
+def _consumed_action_ids(request: AgentTurnRequest) -> set[str]:
+    consumed = {item.strip() for item in request.learner_state.actions_taken if item.strip()}
+    for action_id, state in (getattr(request, "tool_states", {}) or {}).items():
+        if getattr(state, "state", "") == "consumed":
+            consumed.add(action_id)
+    return consumed
 
 
 def _legacy_virtual_tool_aliases(tool) -> tuple[str, ...]:

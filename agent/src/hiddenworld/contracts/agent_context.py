@@ -49,6 +49,35 @@ ToolResultStatus = Literal[
     "already_completed",
 ]
 
+TurnPhase = Literal["new_user_turn", "after_tool_call"]
+ActionHistoryKind = Literal["tool_call", "tool_result"]
+ToolState = Literal["available", "consumed", "attempted", "blocked", "unavailable"]
+
+
+class ActionHistoryEntry(BaseModel):
+    """本轮动作历史的安全摘要。
+
+    只记录“做了什么、针对哪个工具、Runtime 归纳出的结果”，不记录参数、授权
+    标识、隐藏证据 ID 或模型原始思考。它用于让同一轮的后续模型调用知道前一
+    次动作是谁发起、是否已经完成，避免把工具结果误当成无归属的观察。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: ActionHistoryKind
+    tool_name: str
+    decision_summary: str = Field(default="", max_length=240)
+    status: ToolResultStatus | None = None
+
+
+class ToolStateView(BaseModel):
+    """模型可见的工具生命周期摘要，不暴露 Runtime 授权细节。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    state: ToolState
+    reason: str = Field(default="", max_length=240)
+
 
 class AgentToolResult(BaseModel):
     """回注 Agent 的安全工具结果。"""
@@ -105,6 +134,11 @@ class AgentContext(BaseModel):
     conversation_summary: str = ""
     transcript: list[Turn] = Field(default_factory=list)
     current_user_message: str = ""
+    # 同一轮模型重采样时保持原始用户消息不变；phase 只区分首次理解和
+    # 工具结果回注后的继续决策，不代表前端 SSE 的 understanding/replying 阶段。
+    phase: TurnPhase = "new_user_turn"
+    turn_id: str = ""
+    original_user_message: str = ""
     # Runtime 只在模型需要重生成回复时写入内部校验反馈；它不携带答案、
     # 未公开证据或实现细节，也不应被展示给学生。
     reply_feedback: str = ""
@@ -117,6 +151,8 @@ class AgentContext(BaseModel):
     hypothesis_catalog: list[HypothesisCatalogEntry] = Field(default_factory=list)
     authorized_actions: list[AuthorizedActionRef] = Field(default_factory=list)
     tool_results: list[AgentToolResult] = Field(default_factory=list)
+    action_history: list[ActionHistoryEntry] = Field(default_factory=list)
+    tool_states: dict[str, ToolStateView] = Field(default_factory=dict)
     budget: AgentBudgetView
     # 这是上一轮归约后的安全教学状态切片。Runtime 每轮都应从持久化/请求快照
     # 回注它，而不是固定构造默认值，否则 Agent 会在每轮都误以为处于

@@ -5,16 +5,21 @@ import "situational-teaching/backend/internal/domain"
 const ContractVersion = domain.HiddenWorldContractVersion
 
 type TurnRequest struct {
-	ContractVersion string                `json:"contract_version"`
-	RequestID       string                `json:"request_id"`
-	SessionID       string                `json:"session_id"`
-	StateRevision   int                   `json:"state_revision"`
-	PublicScenario  domain.PublicScenario `json:"public_scenario"`
-	HiddenWorld     domain.HiddenWorld    `json:"hidden_world"`
-	LearnerState    LearnerState          `json:"learner_state"`
-	Transcript      []Turn                `json:"transcript"`
-	ConversationSummary string            `json:"conversation_summary"`
-	UserMessage     string                `json:"user_message"`
+	ContractVersion     string                   `json:"contract_version"`
+	RequestID           string                   `json:"request_id"`
+	SessionID           string                   `json:"session_id"`
+	StateRevision       int                      `json:"state_revision"`
+	PublicScenario      domain.PublicScenario    `json:"public_scenario"`
+	HiddenWorld         domain.HiddenWorld       `json:"hidden_world"`
+	LearnerState        LearnerState             `json:"learner_state"`
+	Transcript          []Turn                   `json:"transcript"`
+	ConversationSummary string                   `json:"conversation_summary"`
+	UserMessage         string                   `json:"user_message"`
+	Phase               string                   `json:"phase,omitempty"`
+	TurnID              string                   `json:"turn_id,omitempty"`
+	OriginalUserMessage string                   `json:"original_user_message,omitempty"`
+	ActionHistory       []ActionHistoryEntry     `json:"action_history,omitempty"`
+	ToolStates          map[string]ToolStateView `json:"tool_states,omitempty"`
 	// StructuredUserAction 是 QuickAction 点击产生的一等用户动作；
 	// Python Runtime 只把它签发成 UserActionAuthorization，Agent 自身
 	// 的 tool_call 不能充当授权。与自然语言共用 request_id / state_revision。
@@ -60,21 +65,21 @@ type TeachingDimensionRef struct {
 }
 
 type LearnerState struct {
-	CollectedEvidence      []string                       `json:"collected_evidence"`
-	RuledOutHypotheses     []string                       `json:"ruled_out_hypotheses"`
-	CurrentHypothesis      string                         `json:"current_hypothesis,omitempty"`
-	EstablishedFacts       []string                       `json:"established_facts"`
-	ActionsTaken           []string                       `json:"actions_taken"`
-	CurrentFocus           string                         `json:"current_focus"`
-	EffectiveTurns         int                            `json:"effective_turns"`
-	StalledTurns           int                            `json:"stalled_turns"`
-	RecentOpenings         []string                       `json:"recent_openings"`
-	ConceptMastery         map[string]int                 `json:"concept_mastery"`
-	SkillMastery           map[string]int                 `json:"skill_mastery"`
-	ExplanationPreferences ExplanationPreferences         `json:"explanation_preferences"`
-	HintLevel              int                            `json:"hint_level"`
-	LastHint               string                         `json:"last_hint"`
-	RepairStatus           string                         `json:"repair_status"`
+	CollectedEvidence      []string               `json:"collected_evidence"`
+	RuledOutHypotheses     []string               `json:"ruled_out_hypotheses"`
+	CurrentHypothesis      string                 `json:"current_hypothesis,omitempty"`
+	EstablishedFacts       []string               `json:"established_facts"`
+	ActionsTaken           []string               `json:"actions_taken"`
+	CurrentFocus           string                 `json:"current_focus"`
+	EffectiveTurns         int                    `json:"effective_turns"`
+	StalledTurns           int                    `json:"stalled_turns"`
+	RecentOpenings         []string               `json:"recent_openings"`
+	ConceptMastery         map[string]int         `json:"concept_mastery"`
+	SkillMastery           map[string]int         `json:"skill_mastery"`
+	ExplanationPreferences ExplanationPreferences `json:"explanation_preferences"`
+	HintLevel              int                    `json:"hint_level"`
+	LastHint               string                 `json:"last_hint"`
+	RepairStatus           string                 `json:"repair_status"`
 }
 
 type ExplanationPreferences struct {
@@ -113,35 +118,35 @@ type TurnResult struct {
 }
 
 type TurnAssessment struct {
-	Intent                string   `json:"intent"`
-	UserGoal              string   `json:"user_goal"`
-	RequestedAction       string   `json:"requested_action"`
-	RequestedActionRaw    string   `json:"requested_action_raw"`
-	ClarificationTarget   string   `json:"clarification_target"`
-	ActionMatchStatus     string   `json:"action_match_status"`
-	Actions               []string `json:"actions"`
-	HypothesisID          string   `json:"hypothesis_id"`
-	HypothesisRaw         string   `json:"hypothesis_raw"`
-	ClaimType             string   `json:"claim_type"`
-	MadeClaim             bool     `json:"made_claim"`
-	ContainsAnswerAttempt bool     `json:"contains_answer_attempt"`
-	AnswerAttemptText     string   `json:"answer_attempt_text"`
-	EstablishedFacts      []string `json:"established_facts"`
-	ProgressAssessment    string   `json:"progress_assessment"`
-	RepairStatus          string   `json:"repair_status"`
-	IsStuck               bool     `json:"is_stuck"`
-	IsOffTopic            bool     `json:"is_off_topic"`
-	IsNoise               bool     `json:"is_noise"`
-	StudentAffect         string   `json:"student_affect"`
-	Confidence            float64  `json:"confidence"`
-	HumorLevel            string         `json:"humor_level"`
-	FrustrationLevel      string         `json:"frustration_level"`
-	ConfusionLevel        string         `json:"confusion_level"`
-	ConfidenceLevel       string         `json:"confidence_level"`
-	UrgencyLevel          string         `json:"urgency_level"`
-	RandomInvestigation   bool           `json:"random_investigation"`
-	ConceptMasterySignals map[string]int `json:"concept_mastery_signals"`
-	SkillMasterySignals   map[string]int `json:"skill_mastery_signals"`
+	Intent                string            `json:"intent"`
+	UserGoal              string            `json:"user_goal"`
+	RequestedAction       string            `json:"requested_action"`
+	RequestedActionRaw    string            `json:"requested_action_raw"`
+	ClarificationTarget   string            `json:"clarification_target"`
+	ActionMatchStatus     string            `json:"action_match_status"`
+	Actions               []string          `json:"actions"`
+	HypothesisID          string            `json:"hypothesis_id"`
+	HypothesisRaw         string            `json:"hypothesis_raw"`
+	ClaimType             string            `json:"claim_type"`
+	MadeClaim             bool              `json:"made_claim"`
+	ContainsAnswerAttempt bool              `json:"contains_answer_attempt"`
+	AnswerAttemptText     string            `json:"answer_attempt_text"`
+	EstablishedFacts      []string          `json:"established_facts"`
+	ProgressAssessment    string            `json:"progress_assessment"`
+	RepairStatus          string            `json:"repair_status"`
+	IsStuck               bool              `json:"is_stuck"`
+	IsOffTopic            bool              `json:"is_off_topic"`
+	IsNoise               bool              `json:"is_noise"`
+	StudentAffect         string            `json:"student_affect"`
+	Confidence            float64           `json:"confidence"`
+	HumorLevel            string            `json:"humor_level"`
+	FrustrationLevel      string            `json:"frustration_level"`
+	ConfusionLevel        string            `json:"confusion_level"`
+	ConfidenceLevel       string            `json:"confidence_level"`
+	UrgencyLevel          string            `json:"urgency_level"`
+	RandomInvestigation   bool              `json:"random_investigation"`
+	ConceptMasterySignals map[string]int    `json:"concept_mastery_signals"`
+	SkillMasterySignals   map[string]int    `json:"skill_mastery_signals"`
 	PreferenceSignals     map[string]string `json:"preference_signals"`
 }
 
@@ -162,6 +167,21 @@ type GuidanceState struct {
 	StalledTurns       int                    `json:"stalled_turns"`
 	CurrentFocus       string                 `json:"current_focus"`
 	RepairStatus       string                 `json:"repair_status"`
+}
+
+// ActionHistoryEntry 是跨请求回注给 Python Agent 的安全动作摘要；不含参数、
+// 授权标识、证据 ID 或原始 Thought。
+type ActionHistoryEntry struct {
+	Action          string `json:"action"`
+	ToolName        string `json:"tool_name"`
+	DecisionSummary string `json:"decision_summary,omitempty"`
+	Status          string `json:"status,omitempty"`
+}
+
+// ToolStateView 只表达工具在当前会话中的粗粒度生命周期和原因。
+type ToolStateView struct {
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
 }
 
 type TurnControl struct {

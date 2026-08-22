@@ -24,6 +24,14 @@ class VirtualObservationExecutor:
                 status="unsupported",
                 error_code="unsupported_tool",
             )
+        if context.tool_states.get(call.tool_id) and context.tool_states[call.tool_id].state == "consumed":
+            return AgentToolResult(
+                call_id=call.call_id,
+                tool_id=call.tool_id,
+                tool_kind=entry.kind,
+                status="already_completed",
+                error_code="already_completed",
+            )
         if entry.kind != "compare_answer" and not any(
             item.action_ref == call.tool_id for item in context.authorized_actions
         ):

@@ -1605,9 +1605,134 @@ func learnerStateForAgent(state domain.ScenarioLearnerState) agentclient.Learner
 			Analogy:    state.ExplanationPreferences.Analogy,
 			Directness: state.ExplanationPreferences.Directness,
 		},
-		HintLevel: state.HintLevel,
-		LastHint:  state.LastHint,
+		HintLevel:    state.HintLevel,
+		LastHint:     state.LastHint,
 		RepairStatus: state.RepairStatus,
+	}
+}
+
+// scenarioActionHistoryForAgent 从已持久化的公开 V2 事件重建最近动作摘要。
+// 只保留公开观察工具，不携带参数、原始正文、证据 ID 或 compare_answer 内部工具。
+func scenarioActionHistoryForAgent(
+	messages []domain.ScenarioMessage,
+	world *domain.HiddenWorld,
+) []agentclient.ActionHistoryEntry {
+	const maxEntries = 24
+	history := make([]agentclient.ActionHistoryEntry, 0, maxEntries)
+	appendEntry := func(entry agentclient.ActionHistoryEntry) {
+		if strings.TrimSpace(entry.ToolName) == "" || !scenarioPublicObservationToolName(world, entry.ToolName) {
+			return
+		}
+		history = append(history, entry)
+	}
+	for _, message := range messages {
+		for _, event := range message.ResponseMeta.RunEvents {
+			if event.Payload == nil {
+				continue
+			}
+			switch event.Kind {
+			case "task_upserted":
+				task := event.Payload.Task
+				if task == nil || (task.State != domain.ScenarioTaskRunning && task.State != domain.ScenarioTaskPending) {
+					continue
+				}
+				toolName := task.ToolRef
+				if toolName == "" {
+					toolName = task.CallID
+				}
+				appendEntry(agentclient.ActionHistoryEntry{
+					Action:          "tool_call",
+					ToolName:        toolName,
+					DecisionSummary: "本轮请求查看该公开观察",
+				})
+			case "tool_result":
+				result := event.Payload.ToolResult
+				if result == nil {
+					continue
+				}
+				appendEntry(agentclient.ActionHistoryEntry{
+					Action:          "tool_result",
+					ToolName:        result.ToolID,
+					DecisionSummary: scenarioToolResultDecisionSummary(result.ResultStatus),
+					Status:          result.ResultStatus,
+				})
+			}
+		}
+	}
+	if len(history) <= maxEntries {
+		return history
+	}
+	return append([]agentclient.ActionHistoryEntry{}, history[len(history)-maxEntries:]...)
+}
+
+func scenarioToolStatesForAgent(
+	messages []domain.ScenarioMessage,
+	state domain.ScenarioLearnerState,
+	world *domain.HiddenWorld,
+) map[string]agentclient.ToolStateView {
+	states := make(map[string]agentclient.ToolStateView)
+	for _, action := range state.ActionsTaken {
+		action = strings.TrimSpace(action)
+		if action == "" || !scenarioPublicObservationToolName(world, action) {
+			continue
+		}
+		states[action] = agentclient.ToolStateView{State: "consumed", Reason: "本会话已使用，不可重复调用"}
+	}
+	for _, message := range messages {
+		for _, event := range message.ResponseMeta.RunEvents {
+			if event.Payload == nil {
+				continue
+			}
+			switch event.Kind {
+			case "tool_result":
+				result := event.Payload.ToolResult
+				if result == nil || !scenarioPublicObservationToolName(world, result.ToolID) {
+					continue
+				}
+				states[result.ToolID] = scenarioToolStateForResult(result.ResultStatus)
+			case "task_upserted":
+				task := event.Payload.Task
+				if task == nil {
+					continue
+				}
+				toolName := task.ToolRef
+				if toolName == "" {
+					toolName = task.CallID
+				}
+				if !scenarioPublicObservationToolName(world, toolName) {
+					continue
+				}
+				switch task.State {
+				case domain.ScenarioTaskRejected:
+					states[toolName] = agentclient.ToolStateView{State: "blocked", Reason: "本轮动作未获 Runtime 批准，不重复尝试"}
+				case domain.ScenarioTaskUnsupported:
+					states[toolName] = agentclient.ToolStateView{State: "unavailable", Reason: "题目当前没有声明该工具"}
+				}
+			}
+		}
+	}
+	return states
+}
+
+func scenarioToolStateForResult(status string) agentclient.ToolStateView {
+	switch status {
+	case "succeeded":
+		return agentclient.ToolStateView{State: "consumed", Reason: "本会话已使用，不可重复调用"}
+	case "failed", "timeout":
+		return agentclient.ToolStateView{State: "attempted", Reason: "本次动作未形成公开观察"}
+	default:
+		return agentclient.ToolStateView{State: "blocked", Reason: "本轮动作未获 Runtime 批准，不重复尝试"}
+	}
+}
+
+func scenarioToolResultDecisionSummary(status string) string {
+	switch status {
+	case "succeeded":
+		return "工具已返回公开观察"
+	case "failed", "timeout":
+		return "本次动作未形成公开观察"
+	default:
+		return "Runtime 未批准本次动作，未形成公开观察"
 	}
 }
 

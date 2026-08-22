@@ -59,7 +59,12 @@ from hiddenworld.runtime import (
     _reason_codes,
     _state_proposals,
 )
-from .agent_loop import AgentLoop, AgentLoopBudgetExceeded, AgentLoopEvent
+from .agent_loop import (
+    AgentLoop,
+    AgentLoopBudgetExceeded,
+    AgentLoopEvent,
+    context_after_tool_results,
+)
 from .batch_scheduler import BatchScheduler
 from .context import project_agent_context
 from .virtual_tools import VirtualObservationExecutor
@@ -208,14 +213,17 @@ class SingleAgentRuntime:
                 action_catalog=context.action_catalog,
                 authorized_actions=context.authorized_actions,
                 call_id=quick_call.call_id,
+                tool_states=context.tool_states,
             )
             if quick_rejection is not None:
                 # 无效 QuickAction 不能触碰虚拟世界；把拒绝结果作为模型输入，
                 # 让导师生成安全的失败说明，且不发出任何观察正文。
                 mark_phase("quick_action_rejected")
-                rejected_context = context.model_copy(
-                    update={"tool_results": [quick_rejection], "authorized_actions": []}
-                )
+                rejected_context = context_after_tool_results(
+                    context,
+                    output=None,
+                    results=[quick_rejection],
+                ).model_copy(update={"authorized_actions": []})
                 final_output = await runner.run(rejected_context)
                 if isinstance(final_output, ToolCallsOutput):
                     final_output = await _retry_final_reply(
@@ -1104,14 +1112,36 @@ def _sanitize_public_summary(summary: str, *, constraints, context: GuardContext
 def _reply_retry_context(context, events, *, feedback: str, evidence_request=None):
     """把已经执行的公开工具结果回注给一次回复重生成。"""
 
-    tool_results = [
-        item.payload
-        for item in events
-        if item.kind == "tool_result" and isinstance(item.payload, AgentToolResult)
-    ]
+    retry_context = context
+    for event in events:
+        if event.kind == "understanding" and isinstance(event.payload, ToolCallsOutput):
+            retry_context = context_after_tool_results(
+                retry_context,
+                output=event.payload,
+                results=[],
+            )
+        elif event.kind in {"tool_result", "tool_rejected"} and isinstance(event.payload, AgentToolResult):
+            retry_context = context_after_tool_results(
+                retry_context,
+                output=None,
+                results=[event.payload],
+            )
+        elif event.kind == "tool_deferred" and isinstance(event.payload, ToolCall):
+            retry_context = context_after_tool_results(
+                retry_context,
+                output=None,
+                results=[
+                    AgentToolResult(
+                        call_id=event.payload.call_id,
+                        tool_id=event.payload.tool_id,
+                        tool_kind="",
+                        status="rejected",
+                        error_code="dependency_deferred",
+                    )
+                ],
+            )
     update = {
         "authorized_actions": [],
-        "tool_results": [*context.tool_results, *tool_results],
         "reply_feedback": _reply_guard_feedback(feedback),
     }
     if evidence_request is not None:
@@ -1120,7 +1150,7 @@ def _reply_retry_context(context, events, *, feedback: str, evidence_request=Non
             availability=evidence_request.availability,
             public_message=evidence_request.public_message,
         )
-    return context.model_copy(
+    return retry_context.model_copy(
         update={
             **update,
         },

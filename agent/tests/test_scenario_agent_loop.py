@@ -115,6 +115,14 @@ async def test_agent_loop_executes_authorized_tool_then_returns_reply(public_sce
     assert executor.calls == ["inspect:metrics.cpu"]
     assert [item.kind for item in events] == ["understanding", "tool_result", "final_reply"]
     assert agent.contexts[1].tool_results[0].content == "已查询 inspect:metrics.cpu"
+    assert agent.contexts[0].phase == "new_user_turn"
+    assert agent.contexts[1].phase == "after_tool_call"
+    assert agent.contexts[1].original_user_message == "先看看 CPU"
+    assert agent.contexts[1].tool_states["inspect:metrics.cpu"].state == "consumed"
+    assert [item.tool_name for item in agent.contexts[1].action_history] == [
+        "inspect:metrics.cpu",
+        "inspect:metrics.cpu",
+    ]
 
 
 @pytest.mark.asyncio
@@ -261,6 +269,43 @@ def test_agent_context_prompt_keeps_current_message_and_excludes_hidden_fields(p
     assert "hidden_world" not in context_payload
     assert "canonical_answer" not in context_payload
     assert "completion_allowed" not in context_payload
+
+
+def test_agent_context_prompt_exposes_turn_phase_history_and_tool_state(public_scenario) -> None:
+    context = _context(public_scenario).model_copy(
+        update={
+            "phase": "after_tool_call",
+            "turn_id": "turn-1",
+            "original_user_message": "先看看 CPU",
+            "action_history": [
+                {
+                    "action": "tool_call",
+                    "tool_name": "inspect:metrics.cpu",
+                    "decision_summary": "先确认资源指标",
+                },
+                {
+                    "action": "tool_result",
+                    "tool_name": "inspect:metrics.cpu",
+                    "decision_summary": "工具已返回公开观察",
+                    "status": "succeeded",
+                },
+            ],
+            "tool_states": {
+                "inspect:metrics.cpu": {
+                    "state": "consumed",
+                    "reason": "本会话已使用，不可重复调用",
+                }
+            },
+        }
+    )
+    prompt = build_scenario_agent_prompt(context)
+    payload = json.loads(prompt.split("AgentContext：", 1)[1])
+
+    assert payload["phase"] == "after_tool_call"
+    assert payload["turn_id"] == "turn-1"
+    assert payload["original_user_message"] == "先看看 CPU"
+    assert payload["action_history"][1]["tool_name"] == "inspect:metrics.cpu"
+    assert payload["tool_states"]["inspect:metrics.cpu"]["state"] == "consumed"
 
 
 def test_response_brief_marks_only_concepts_explicitly_named_by_student(public_scenario) -> None:

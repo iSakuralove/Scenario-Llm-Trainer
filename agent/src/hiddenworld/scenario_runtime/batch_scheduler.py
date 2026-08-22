@@ -5,7 +5,13 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from hiddenworld.contracts import ActionCatalogEntry, AgentToolResult, AuthorizedActionRef, ToolCall
+from hiddenworld.contracts import (
+    ActionCatalogEntry,
+    AgentToolResult,
+    AuthorizedActionRef,
+    ToolCall,
+    ToolStateView,
+)
 
 
 @dataclass
@@ -29,11 +35,13 @@ class BatchScheduler:
         authorized_actions: list[AuthorizedActionRef],
         remaining_tool_calls: int,
         completed_fingerprints: set[str] | None = None,
+        tool_states: dict[str, ToolStateView] | None = None,
     ) -> BatchPlan:
         catalog = {item.tool_id: item for item in action_catalog}
         authorized = {item.action_ref for item in authorized_actions}
         seen: set[str] = set()
         completed = completed_fingerprints or set()
+        states = tool_states or {}
         candidates: list[ToolCall] = []
         rejected: list[AgentToolResult] = []
 
@@ -55,6 +63,9 @@ class BatchScheduler:
             entry = catalog.get(call.tool_id)
             if entry is None:
                 rejected.append(_rejected(call, "unsupported_tool"))
+                continue
+            if states.get(call.tool_id, ToolStateView(state="available")).state == "consumed":
+                rejected.append(_rejected(call, "already_completed", entry.kind))
                 continue
             if entry.kind != "compare_answer" and call.tool_id not in authorized:
                 rejected.append(_rejected(call, "user_action_required", entry.kind))
@@ -91,6 +102,7 @@ class BatchScheduler:
         action_catalog: list[ActionCatalogEntry],
         authorized_actions: list[AuthorizedActionRef],
         call_id: str = "",
+        tool_states: dict[str, ToolStateView] | None = None,
     ) -> AgentToolResult | None:
         """校验结构化动作，与普通 tool call 共用同一准入规则。
 
@@ -108,6 +120,14 @@ class BatchScheduler:
                 tool_kind="unknown",
                 status="unsupported",
                 error_code="unsupported_tool",
+            )
+        if (tool_states or {}).get(action_id, ToolStateView(state="available")).state == "consumed":
+            return AgentToolResult(
+                call_id=call_id or f"quick:{action_id}",
+                tool_id=action_id,
+                tool_kind=entry.kind,
+                status="already_completed",
+                error_code="already_completed",
             )
         if not any(item.action_ref == action_id for item in authorized_actions):
             return AgentToolResult(

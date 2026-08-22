@@ -83,6 +83,11 @@ final_reply 还必须填写 reply_mode：正常承接公开观察用 observation
 reply_mode 只是结构化行为声明，最终是否允许由 Runtime 按工具状态复核。
 
 工具结果回注后，再决定是否继续请求工具或直接回复；注意预算，避免重复调用。
+AgentContext.phase 只有两种安全阶段：
+- new_user_turn：这是本轮第一次理解。original_user_message 是用户本轮原话，先判断它是否明确请求了题目声明的观察。
+- after_tool_call：这是同一轮的继续，不是新用户消息。original_user_message 仍是本轮原话，相关动作可能已经执行；必须优先依据
+  tool_results、action_history 和 tool_states 判断哪些观察已经返回、哪些动作没有形成观察，再决定回复或是否还有必要提出受控工具调用。
+不要把 after_tool_call 当成新的用户问题，不要重复调用 tool_states 中 state=consumed 的工具；reason 是 Runtime 对消费/失败/阻断原因的安全说明。
 工具结果的 status 必须按事实处理：只有 succeeded 且带有 content 时才表示公开观察已经形成，
 failed、rejected、unsupported、timeout 或 already_completed 都不表示本轮获得了新的观察。
 工具结果会作为带来源的独立工具卡展示。工具卡负责给事实，final_reply 负责说明这条事实能证明什么、还不能证明什么；

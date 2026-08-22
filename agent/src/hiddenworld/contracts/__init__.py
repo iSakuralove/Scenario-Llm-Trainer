@@ -17,6 +17,7 @@ from .assessment import (
     TurnControl,
 )
 from .agent_context import (
+    ActionHistoryEntry,
     ActionCatalogEntry,
     AgentBudgetView,
     AgentContext,
@@ -24,6 +25,8 @@ from .agent_context import (
     AgentTurnControlView,
     EvidenceRequestView,
     HypothesisCatalogEntry,
+    TurnPhase,
+    ToolStateView,
 )
 from .authorization import AuthorizedActionRef, StructuredUserAction, UserActionAuthorization
 from .debug_trace import DebugTraceEvent
@@ -183,12 +186,15 @@ __all__ = [
     "AgentOutputEnvelope",
     "AgentSemanticDecision",
     "GuidanceState",
+    "TurnPhase",
+    "ActionHistoryEntry",
     "ActionCatalogEntry",
     "AgentBudgetView",
     "AgentContext",
     "HypothesisCatalogEntry",
     "AgentToolResult",
     "AgentTurnControlView",
+    "ToolStateView",
     "AuthorizedActionRef",
     "StructuredUserAction",
     "AllowedDirection",

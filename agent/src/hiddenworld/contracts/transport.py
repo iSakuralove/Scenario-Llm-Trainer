@@ -15,6 +15,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from .answer import InternalAnswerComparison
+from .agent_context import ActionHistoryEntry, ToolStateView, TurnPhase
 from .assessment import GuidanceState, TeachingDecision, TurnAssessment, TurnControl
 from .authorization import StructuredUserAction
 from .events import PublicTraceEvent
@@ -124,6 +125,11 @@ class AgentTurnRequest(BaseModel):
     conversation_summary: str = ""
     transcript: list[Turn] = Field(default_factory=list)
     user_message: str
+    phase: TurnPhase = "new_user_turn"
+    turn_id: str = ""
+    original_user_message: str = ""
+    action_history: list[ActionHistoryEntry] = Field(default_factory=list)
+    tool_states: dict[str, ToolStateView] = Field(default_factory=dict)
     structured_user_action: StructuredUserAction | None = None
     budget: Budget = Field(default_factory=Budget)
 
