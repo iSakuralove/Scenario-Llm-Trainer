@@ -561,12 +561,13 @@ async function requestScenarioMessageStream(
     if (normalized instanceof ScenarioRunFailure || normalized instanceof ScenarioStreamReconnectable) {
       throw normalized
     }
+    const safeMessage = sanitizeScenarioErrorMessage(normalized.message)
     if (!streamStarted) {
-      throw new ScenarioRunFailure('stream_unavailable', normalized.message)
+      throw new ScenarioRunFailure('stream_unavailable', safeMessage)
     }
     // 只有底层 reader/fetch 读取异常才允许 Store 用同一 request_id 续接；
     // HTTP、SSE error 和协议帧问题在上面均已转换为不可重放失败。
-    throw new ScenarioStreamReconnectable(normalized.message, { cause: normalized })
+    throw new ScenarioStreamReconnectable(safeMessage, { cause: normalized })
   } finally {
     window.clearTimeout(timeout)
   }

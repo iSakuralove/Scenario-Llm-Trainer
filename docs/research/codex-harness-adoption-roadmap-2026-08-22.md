@@ -184,6 +184,7 @@ replay_reply_mismatch = 0
 - 学生失败提示进一步收口：`AgentRun` 不再把 `agent_invalid_response`、`stream_invalid` 等内部错误码拼接到公开失败文案，只保留稳定的人类可读提示；错误码仍留在运行态判定中供清理和审计使用。
 - 旧事件回放也增加同一层错误净化：历史 `turn_failed.summary` 不再绕过实时流净化器把 `session is not active`、内部错误码或数据库/网络细节重新显示给学生。
 - 共享错误净化器现在只放行已登记的稳定业务文案；未命中的未知字符串统一回落为“本轮处理失败，请重试。”，避免未来新增后端异常绕过净化层。
+- 流式请求建立前的未知网络异常，以及 reader 中途断流后续接失败的异常消息，也统一经过同一净化器；不会因为异常发生在重连边界而重新泄露原始 `Error.message`。
 - 真实浏览器复现旧 API 镜像直接返回 `session is not active` 的兼容缺口：前端错误净化器现在将会话状态、请求参数和内部错误码统一映射为稳定中文文案；同一会话刷新后再次发送已显示“排查会话已结束，请重新开始”，未再暴露英文内部错误。
 - 真实浏览器再次复现 Python/Go 结果契约漏字段：`state_revision=24` 的请求已收到公开 trace 和候选正文，但旧 API 镜像在 result 收尾阶段因 `repair_status` 严格解码失败，页面只显示“排查服务返回了无效结果”，轮次仍为 24；源码已补 `TurnAssessment.repair_status`，待后续正常构建 API 镜像后再复验。
 - 已捕获连续卡住的部分 Hint 递进：同一活动会话中观察到 Hint 1→3；中间的概念澄清不会机械升级，Hint 不进入学生事实。Sol 只读审查确认固定题库、Python reducer、Go 审批、SSE 与前端均可达 Hint 4，并支持进展后的单步回落；独立 Hint 4/回落浏览器 artifact 仍待验收。本轮同步了 Python/Go 对 `stuck`、`help_request`、`request_hint` 意图的升级判定。
