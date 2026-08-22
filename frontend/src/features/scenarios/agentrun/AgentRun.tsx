@@ -105,9 +105,9 @@ export function AgentRun({
 
           <ThinkingReasoning
             items={failed ? [] : model.legacyReasoningItems.map((text) => ({ stage: 'composing_reply' as const, text }))}
-            rawChunks={rawReasoningChunks}
-            rawActive={rawReasoningActive}
-            rawElapsedSeconds={rawReasoningElapsedSeconds}
+            rawChunks={failed ? [] : rawReasoningChunks}
+            rawActive={failed ? false : rawReasoningActive}
+            rawElapsedSeconds={failed ? undefined : rawReasoningElapsedSeconds}
           />
 
           {visibleTasks.length > 1 && <TaskList tasks={visibleTasks} active={isProcessing} />}
