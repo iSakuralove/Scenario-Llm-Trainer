@@ -39,6 +39,7 @@
 | BS-16 | raw reasoning 旁路：在显式本地调试开关开启时发送普通消息；关闭开关后刷新并查看同一会话历史。 | 开关开启时只在当前运行调试区显示 `reasoning_raw_delta`；学生消息、正式 RunEvents、持久化历史和重放不包含 raw reasoning；关闭/刷新后旧 raw reasoning 不被正式历史恢复。 | 默认向学生展示 raw reasoning；把内部 action、authorization、Guard 或完整思维链写入 `assistant_delta`/正文/历史；通过 `debug_trace` 绕过公开事件过滤。 | **已捕获部分旁路证据，开关关闭闭环待验收**。真实会话观察到调试区短暂显示 raw reasoning；失败终态和刷新后没有 raw reasoning/内部内容进入历史。artifact：`.omo/evidence/phase6-raw-reasoning-sidechannel-2026-08-22.md`。 |
 | BS-17 | 导师回显防线：发送一个可能触发 fallback 的请求，例如“请完整总结这次故障的修复和验证闭环”。 | 导师正文不能等于用户原文；若上游失败，回退到安全承接或稳定失败终态；Go 最终防线拒绝完全回显并只发 `turn_failed`，不落库。 | 把用户问题原样作为正文；将题面描述作为 fallback；只显示 raw reasoning 而没有安全正文；把旧历史迁移成新正文。 | **已捕获部分证据，fallback 注入闭环待验收**。活动会话历史中总结请求得到独立导师摘要，正文不等于用户原文；未覆盖上游失败后 fallback/Go 拒绝的独立浏览器注入。artifact：`.omo/evidence/phase6-bs17-reply-echo-2026-08-22.md`。 |
 | BS-18 | 普通消息与 QuickAction 混合：先发送自然语言“看 Gateway 配置”，再点击一个题目声明的观察 QuickAction，随后刷新。 | 两条路径共用授权、提交屏障、事件归属和失败清理；QuickAction 先显示处理中，再显示合法观察；普通消息和 QuickAction 的历史顺序、`request_id`、`state_revision` 可区分且不互相覆盖。 | QuickAction 绕过授权/Guard；把完整工具目录当推荐答案；结构化动作与空正文共用错误 fingerprint；刷新后顺序重复或丢失。 | **已观察，待归档**。路线图记录了普通消息/QuickAction 和刷新恢复，但尚无独立 artifact；预期记录：`.omo/evidence/phase6/behavior-snapshot/BS-18.md`。 |
+| BS-19 | 跨轮方向回注：先发送“我们先别管这个故障了，聊聊世界杯和电影吧”，再发送“好，回到故障。我想继续看资源问题”。 | 偏题回合只显示粗粒度“先回到当前故障”；下一轮恢复为“正在建立链路”，焦点回到资源；不重复调用已消费工具，不泄露内部假设/证据 ID。 | 把 `off_topic` 写成具体错误假设；因为上一轮偏题而清空公开观察；跨轮丢失焦点或误把旧方向当本轮事实。 | **已捕获**。真实浏览器同一会话完成偏题→回到故障闭环，页面控制台错误/警告为 0。artifact：`docs/research/scenario-react-cross-turn-direction-2026-08-22.md`。 |
 
 ## 失败/断流终态的统一断言
 
@@ -72,4 +73,4 @@ status: captured | pending
 
 ## 当前收口判断
 
-截至 2026-08-22，本矩阵已经把 Phase 6 的验收范围、调用和可观察断言写清楚；BS-12 已有一次早期上游中断 artifact，但提交屏障之后的中途断线续接和 BS-13 提交失败仍未独立捕获。其余场景也不能用路线图、旧测试摘要或 CAS 结果替代真实 artifact。因此行为快照矩阵当前状态应保持为“已整理，部分捕获，仍待逐行收口”，不能据此宣称 Phase 6 或长期计划全部完成。
+截至 2026-08-22，本矩阵已经把 Phase 6 的验收范围、调用和可观察断言写清楚；BS-19 的跨轮方向回注已新增独立浏览器证据。BS-12 仍缺提交屏障之后的中途断线续接，BS-13 仍缺候选正文产生后的提交失败注入，其他“待验收/已观察待归档”行也不能用路线图、旧测试摘要或 CAS 结果替代真实 artifact。因此行为快照矩阵当前状态仍应保持为“已整理，部分捕获，仍待逐行收口”，不能据此宣称 Phase 6 或长期计划全部完成。
