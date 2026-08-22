@@ -27,7 +27,7 @@ def test_answer_comparator_keeps_target_and_missing_evidence_internal(hidden_wor
     assert comparison.best_evidence_set == ["E_RELEASE_LOG", "E_DDL_DIFF"]
     assert comparison.missing_evidence == ["E_DDL_DIFF"]
     assert comparison.completion_allowed is False
-    assert comparison.solution_coverage == 0.5
+    assert comparison.solution_coverage == 0.25
 
     public = comparison.to_public().model_dump()
     assert comparison.to_public().support_status == "needs_more_evidence"
@@ -93,3 +93,36 @@ def test_v2_comparator_does_not_trust_forged_target_id(hidden_world, learner_sta
     )
 
     assert comparison.relation == "unrelated"
+
+
+def test_completion_requires_solution_and_verification_closure(hidden_world, learner_state) -> None:
+    """证据全齐但只陈述因果链时，不能提前进入最终复盘。"""
+
+    learner_state.collected_evidence = ["E_RELEASE_LOG", "E_DDL_DIFF"]
+    attempt = AnswerAttempt(
+        answer_attempt_id="attempt-incomplete-closure",
+        session_id="session-1",
+        turn_id="turn-4",
+        revision=3,
+        text="发布时漏掉了订单表索引，查询因此退化为全表扫描。",
+    )
+
+    comparison = AnswerComparator().compare(
+        hidden_world,
+        learner_state=learner_state,
+        attempt=attempt,
+        hypothesis_id="H_INDEX",
+        contradictions=[],
+    )
+
+    assert comparison.relation == "target"
+    assert comparison.evidence_coverage == 1.0
+    assert comparison.solution_coverage == 0.0
+    expected_missing = [
+        "重建 idx_user_created 索引",
+        "补充上线前的索引校验",
+        "重建后复跑 EXPLAIN 确认走索引",
+        "观察 P99 回落",
+    ]
+    assert comparison.missing_solution_requirements == expected_missing
+    assert comparison.completion_allowed is False

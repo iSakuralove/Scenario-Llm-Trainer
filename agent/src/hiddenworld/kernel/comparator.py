@@ -55,13 +55,26 @@ class AnswerComparator:
             relation=relation,
             canonical_answer=canonical_answer,
         )
-        requirements = list(
+        requirement_sources = [
             canonical_answer.solution_requirements
             if canonical_answer is not None
-            else world.root_cause.solution_requirements
-        )
+            else world.root_cause.solution_requirements,
+            world.solution_rubric.required_actions,
+            world.solution_rubric.verification_steps,
+        ]
+        requirements: list[str] = []
+        for source in requirement_sources:
+            for item in source:
+                text = str(item).strip()
+                if text and text not in requirements:
+                    requirements.append(text)
         matched_requirements = [item for item in requirements if item and item in attempt.text]
         solution_coverage = len(matched_requirements) / len(requirements) if requirements else 1.0
+
+        # 证据链闭合只是“可以进入收束检查”的必要条件，不代表学生已经
+        # 说明了修复动作和验证闭环。最终答案必须同时覆盖题目声明的解决
+        # 要求，否则不能把一个完整因果链直接当作可完成答案。
+        completion_allowed = anti_guess.completion_allowed and solution_coverage >= 1.0
 
         return InternalAnswerComparison(
             answer_attempt_id=attempt.answer_attempt_id,
@@ -75,7 +88,7 @@ class AnswerComparator:
             missing_solution_requirements=[
                 item for item in requirements if item not in matched_requirements
             ],
-            completion_allowed=anti_guess.completion_allowed,
+            completion_allowed=completion_allowed,
             user_points=_extract_user_points(attempt.text),
         )
 

@@ -6,11 +6,11 @@
 
 ## 当前执行基线
 
-本路线图在分支 `codex/codex-harness-adoption` 上执行。当前工作区已有一批来自前序 Scenario Agent/V2 迁移的未提交修改，执行原则是保留并收束，不覆盖式清理。
+本路线图当前直接在 `main` 分支执行，不创建新分支，也不自动推送远程。当前工作区已有一批来自前序 Scenario Agent/V2 迁移的未提交修改，执行原则是保留并收束，不覆盖式清理。
 
 已确认的基线事实：
 
-- Python 定向测试在 `agent/.venv` 中运行；当前前序迁移基线为 204 passed、8 deselected、2 failed。
+- Python 定向测试在 `agent/.venv` 中运行；204 passed、8 deselected、2 failed 是前序迁移的历史基线，当前闭环修复后的全量结果见 Phase 6。
 - 失败项是 `MentorDeps` 字段白名单未同步，以及旧测试仍期待卡住时自动释放证据；新行为以 Hint 阶梯和 `hint_level` 为准。
 - Go 测试必须从 `backend/` 目录运行；当前 `internal/httpapi`、`internal/agentclient`、`internal/store` 定向测试已通过。
 - 前端基线中的 `client.ts` 类型收窄和 `AgentRun.tsx` 未使用局部变量问题已在 Phase 0 收束。
@@ -39,7 +39,7 @@
 
 验收重点：不再以整段固定回复文本作为唯一金标；每轮至少检查主教学任务、工具动作、公开观察、线索/提示变化、状态变化和禁止泄露项。当前已建立 `test_response_brief.py`、`test_scenario_behavior.py` 和 prompt 投影断言。
 
-基线证据：Python 全量 `246 passed, 8 skipped`；Go 从 `backend/` 运行 `go test ./...` 通过；前端 `npm run build` 通过。
+基线证据：前序阶段曾记录 Python `246 passed, 8 skipped`；本轮最终回归以当前环境实测的 `225 passed, 8 deselected` 为准，Go 从 `backend/` 运行 `go test ./...` 通过，前端 `npm run build` 通过。
 
 ### Phase 1：自适应教学回复简报（已完成最小内核，2026-08-22）
 
@@ -122,6 +122,10 @@ replay_reply_mismatch = 0
 - 真实浏览器已验证：普通消息在 150ms 采样时只有处理中状态，模型阶段结束后才出现工具卡；QuickAction 同样先显示处理中，再出现查询结果和导师解释。
 - V2 多工具回合恢复任务摘要卡；学生侧 QuickAction 只展示少量当前候选，不把完整工具目录伪装成推荐清单。
 - Go 固定题资产已通过 `go generate ./internal/store` 与 Agent 源题库同步，避免题目观察/工具目录跨层漂移。
+- 最终答案的“可完成”判定已补上修复闭环：必须同时满足目标关系、证据覆盖率为 1，以及题目声明的修复动作和验证步骤覆盖率为 1；只说完整因果链而没有修复/验证时，不允许进入最终复盘。
+- `ResponseBrief` 新增只读的 `closure_boundaries`，在收束任务中明确区分修复动作与验证闭环；该投影只接受公开表述或抽象任务，不读取 `CanonicalAnswer`、evidence ID 或评分字段。
+- Python 全量回归在闭环修复后为 `225 passed, 8 deselected`；Go 全量 `go test ./...`、前端 `npm run lint`/`npm run build` 和场景流式 E2E 7 条关键用例均通过。
+- 真实浏览器已有页面对应的会话已进入不可写状态，点击 QuickAction 得到 `invalid_request / session is not active`，因此该旧页面不能作为时序证据；QuickAction 的模型先规划、再执行工具的行为以 7 条 Playwright 场景流式用例为当前可靠证据，后续需用新建活动会话补一条真实浏览器证据。
 
 ### Phase 7：离线 AIJob（后置）
 
@@ -161,8 +165,16 @@ replay_reply_mismatch = 0
 
 ## 当前下一步
 
-- 将普通消息与 QuickAction 的授权准入进一步收束为同一 `ScenarioActionGate`，并补充 QuickAction 伪造动作测试。
-- 将 Python 内部事件收束为 `ScenarioRunFrame`，统一 Go 正式事件投影和临时 `run_progress`。
-- 完成真实浏览器的提交失败、CAS 冲突、断线重连和长会话关键路径验收。
-- 继续运行 12/18 Turn 行为轨迹和最终答案闭环评测；当前 Python、Go、前端 build/lint 与场景流式 E2E 的相关门槛已通过，再评估 Phase 5/6 的整体完成门槛。
-- 保持 raw reasoning 仅在测试调试旁路存在，禁止重新接回学生侧页面。
+- 先建立一个可重复创建的活动场景会话夹具，再在真实浏览器补做 QuickAction、提交失败、CAS 冲突、断线重连和 18 轮恢复证据；旧的不可写会话不再重复点击。
+- 为 `repair_status` 增加安全抽象投影（`none` / `partial` / `sufficient`），只让 Agent 知道“修复闭环是否仍缺一段”，不把 `missing_solution_requirements` 或隐藏答案投影给学生。
+- 将答案修复/验证覆盖从纯字符串包含升级为稳定的语义断言，至少覆盖“止血动作、潜在问题治理、业务幂等、恢复指标验证”四类行为，同时保留当前精确短语作为题库契约校验。
+- 把三类学生、2～10/12/18 轮、未提供数据、跑偏、卡住、过早结论、修复后复盘、重放和流式失败整理成长期行为快照；验收以教学动作、证据边界、状态变化和禁止泄露项为主，不锁死整段自然语言。
+- 在上述证据补齐后，形成一个只提交本次代码/测试/路线图的本地 `main` commit；按当前用户要求不执行 `git push`。Phase 7 离线 AIJob 继续后置，不能提前进入学生实时 Turn。
+
+## 当前验收完成度（2026-08-22，本地 main）
+
+- Phase 0～5：已完成并有测试证据。
+- Phase 6：约 85%——核心行为快照、闭环裁判、提交屏障、重放、前端安全流式和 7 条关键 E2E 已通过；剩余真实浏览器活动会话证据、`repair_status` 安全投影和自然语言修复/验证语义覆盖仍需补齐。
+- Phase 0～6（不计后置 Phase 7）：约 98%。
+- 整条路线（把明确后置的 Phase 7 也计入）：约 86%。这个比例不是代码行数，而是按每个阶段的验收门槛和剩余风险估算。
+- 当前不应宣称“长期计划全部完成”，也不应开始 Phase 7；下一验收门槛是补齐 Phase 6 剩余三项后再做最终收口。

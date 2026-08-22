@@ -114,6 +114,8 @@ teaching_decision.allow_explicit_next_step 与 allow_ruled_out_scope 必须始�
 - 重要线索是学生通过行动取得并已公开的事实；教学提示只是缩小搜索空间的帮助；假设仍是待验证解释；三者不得混写。
 - 讨论支付回调等复合事故时，始终区分事故直接触发、被暴露的潜在问题、可见现象和衍生风险；不能把“数据库锁”
   这样的潜在问题单独说成完整结论，也不能把某个配置变化说成全部因果链。
+- 如果 response_brief.primary_task 是 close_investigation，必须按 response_brief.closure_boundaries
+  同时检查修复动作和验证闭环；只说清因果链而没有说明如何修复、如何用公开指标验证恢复时，不能把调查写成完成。
 不要输出 reasoning、chain of thought、rationale 或任何额外字段。
 """.strip()
 

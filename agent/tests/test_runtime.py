@@ -200,7 +200,11 @@ async def test_runtime_executes_compare_answer_only_for_answer_attempt(
     public_scenario,
 ) -> None:
     learner_state.collected_evidence = ["E_RELEASE_LOG", "E_DDL_DIFF"]
-    answer = "根因是发布脚本重建 orders 表时漏掉了 idx_user_created 索引。"
+    answer = (
+        "根因是发布脚本重建 orders 表时漏掉了 idx_user_created 索引；"
+        "我会重建 idx_user_created 索引，补充上线前的索引校验，"
+        "重建后复跑 EXPLAIN 确认走索引，并观察 P99 回落。"
+    )
     interpreter = create_interpreter_agent(
         TestModel(
             custom_output_text=json.dumps(

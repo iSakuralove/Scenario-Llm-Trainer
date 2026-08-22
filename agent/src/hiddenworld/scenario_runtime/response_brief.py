@@ -78,6 +78,15 @@ class CausalBoundary(BaseModel):
     statement: str
 
 
+class ClosureBoundary(BaseModel):
+    """收束阶段的公开任务边界，不携带题目答案或内部评分。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["repair_action", "verification"]
+    statement: str
+
+
 class ResponseBrief(BaseModel):
     """回复生成器使用的结构化简报，不包含最终回复正文。"""
 
@@ -93,6 +102,7 @@ class ResponseBrief(BaseModel):
     hint_level: int = Field(default=0, ge=0, le=4)
     hint_text: str = ""
     causal_boundaries: list[CausalBoundary] = Field(default_factory=list)
+    closure_boundaries: list[ClosureBoundary] = Field(default_factory=list)
     do_not_repeat: list[str] = Field(default_factory=list)
     forbidden_topics: list[str] = Field(default_factory=list)
 
@@ -147,6 +157,9 @@ class ResponseBriefBuilder:
         latent_issue: str = "",
         causal_chain: Sequence[str] = (),
         causal_boundaries: Sequence[CausalBoundary | Mapping[str, Any]] = (),
+        repair_actions: Sequence[str] = (),
+        verification_steps: Sequence[str] = (),
+        closure_boundaries: Sequence[ClosureBoundary | Mapping[str, Any]] = (),
     ) -> ResponseBrief:
         """构造一份回复任务简报。
 
@@ -192,6 +205,12 @@ class ResponseBriefBuilder:
             direct_trigger=direct_trigger,
             latent_issue=latent_issue,
             causal_chain=causal_chain,
+        )
+        closure = _resolve_closure_boundaries(
+            closure_boundaries,
+            repair_actions=repair_actions,
+            verification_steps=verification_steps,
+            require_checklist=selected_task == "close_investigation",
         )
 
         view = InvestigationView(
@@ -239,6 +258,7 @@ class ResponseBriefBuilder:
             hint_level=level,
             hint_text=resolved_hint,
             causal_boundaries=boundaries,
+            closure_boundaries=closure,
             do_not_repeat=do_not_repeat,
             forbidden_topics=forbidden,
         )
@@ -406,6 +426,62 @@ def _resolve_boundaries(
     return [item for item in result if not ((item.role, item.statement) in seen or seen.add((item.role, item.statement)))]
 
 
+def _resolve_closure_boundaries(
+    items: Sequence[ClosureBoundary | Mapping[str, Any]],
+    *,
+    repair_actions: Sequence[str],
+    verification_steps: Sequence[str],
+    require_checklist: bool,
+) -> list[ClosureBoundary]:
+    """只接收已公开的收束表述；缺失时提供抽象任务，而不是答案。"""
+
+    result: list[ClosureBoundary] = []
+    for raw in items:
+        if isinstance(raw, ClosureBoundary):
+            item = raw
+        elif isinstance(raw, Mapping):
+            role = str(raw.get("role", ""))
+            statement = str(raw.get("statement", "")).strip()
+            if role not in {"repair_action", "verification"} or not statement:
+                continue
+            item = ClosureBoundary(role=role, statement=statement)  # type: ignore[arg-type]
+        else:
+            continue
+        if item.statement.strip():
+            result.append(item)
+
+    result.extend(
+        ClosureBoundary(role="repair_action", statement=str(item).strip())
+        for item in repair_actions
+        if str(item).strip()
+    )
+    result.extend(
+        ClosureBoundary(role="verification", statement=str(item).strip())
+        for item in verification_steps
+        if str(item).strip()
+    )
+
+    if require_checklist:
+        roles = {item.role for item in result}
+        if "repair_action" not in roles:
+            result.append(
+                ClosureBoundary(
+                    role="repair_action",
+                    statement="说明修复动作如何同时处理直接触发因素与潜在问题，不能只停留在单一配置止血。",
+                )
+            )
+        if "verification" not in roles:
+            result.append(
+                ClosureBoundary(
+                    role="verification",
+                    statement="说明修复后要观察哪些公开指标和业务结果，确认超时、重试、长尾与幂等是否恢复。",
+                )
+            )
+
+    seen: set[tuple[str, str]] = set()
+    return [item for item in result if not ((item.role, item.statement) in seen or seen.add((item.role, item.statement)))]
+
+
 def _public_observation_list(items: Sequence[Observation | PublicObservationBrief | Mapping[str, Any] | str]) -> list[PublicObservationBrief]:
     result: list[PublicObservationBrief] = []
     seen: set[tuple[str, bool]] = set()
@@ -452,6 +528,7 @@ def _get_text(obj: Any, name: str) -> str:
 
 
 __all__ = [
+    "ClosureBoundary",
     "CausalBoundary",
     "InvestigationView",
     "PublicObservationBrief",

@@ -164,7 +164,10 @@ class InternalAnswerComparison(BaseModel):
     solution_coverage: float = Field(default=0.0, ge=0.0, le=1.0)
     missing_solution_requirements: list[str] = Field(default_factory=list)
     completion_allowed: bool = Field(
-        description="relation == target 且 evidence_coverage >= 1.0。猜对但没有证明时为 False。",
+        description=(
+            "relation == target、evidence_coverage >= 1.0 且 solution_coverage >= 1.0。"
+            "猜对但没有证明，或只说清因果链却没有覆盖修复/验证要求时为 False。"
+        ),
     )
     user_points: list[str] = Field(default_factory=list)
 

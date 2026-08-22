@@ -1,5 +1,6 @@
 from hiddenworld.contracts import (
     ConceptDefinition,
+    GuidanceState,
     HintStep,
     LearnerState,
     Observation,
@@ -134,3 +135,28 @@ def test_causal_boundaries_are_explicit_and_separate():
     ]
     assert brief.causal_boundaries[0].statement.startswith("Gateway")
     assert brief.causal_boundaries[1].statement.startswith("少量")
+
+
+def test_close_investigation_requires_repair_and_verification_boundaries():
+    brief = ResponseBriefBuilder().build(
+        LearnerState(),
+        guidance_state=GuidanceState(teaching_state="debrief"),
+    )
+
+    assert brief.primary_task == "close_investigation"
+    assert [item.role for item in brief.closure_boundaries] == ["repair_action", "verification"]
+    rendered = brief.model_dump_json()
+    assert "canonical_answer" not in rendered
+    assert "evidence_id" not in rendered
+
+
+def test_explicit_public_closure_boundaries_are_preserved_without_internal_ids():
+    brief = ResponseBriefBuilder().build(
+        LearnerState(),
+        repair_actions=["恢复合理的入口等待配置，并治理长尾性能问题"],
+        verification_steps=["观察 504、重试率、P99 和幂等结果恢复"],
+    )
+
+    assert brief.closure_boundaries[0].role == "repair_action"
+    assert brief.closure_boundaries[1].role == "verification"
+    assert all("E_" not in item.statement for item in brief.closure_boundaries)
