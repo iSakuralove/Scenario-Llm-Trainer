@@ -1,0 +1,518 @@
+{
+  "contract_version": "scenario.v3",
+  "metadata": {
+    "stable_code": "hw-db-index-001",
+    "domain": "database",
+    "difficulty": "L3",
+    "scenario_type": "performance",
+    "tags": [
+      "MySQL",
+      "索引",
+      "发布变更",
+      "慢查询"
+    ],
+    "source": "fixed_hiddenworld",
+    "version": 1,
+    "status": "active",
+    "legacy_model_version": "hiddenworld.v1"
+  },
+  "public_scenario": {
+    "title": "订单列表接口在上午发布后突然变慢",
+    "description": "电商后台的订单列表接口从今天上午开始明显变慢。用户点开「我的订单」要等好几秒才出结果，但页面最终能正常展示，没有报错。运维在群里问是不是又出问题了，值班同学还没定位到原因。",
+    "environment": "Spring Boot 订单服务（4 个 Pod）→ MySQL 8.0 一主两从 → Redis 6 缓存。订单表 orders 约 240 万行，日增 3 万。前置有 Nginx 网关，链路上还挂了一个用户中心的 RPC 依赖。",
+    "initial_symptoms": [
+      "订单列表接口 P99 从 120ms 涨到约 4s",
+      "接口错误率没有上升，请求最终都成功返回",
+      "变慢从上午 10 点多开始，此前一周都很平稳",
+      "其他接口（下单、支付回调）响应正常"
+    ],
+    "architecture_diagram": "graph LR\n  U[用户浏览器] --> N[Nginx 网关]\n  N --> S[订单服务 x4]\n  S --> R[(Redis 缓存)]\n  S --> M[(MySQL 主库)]\n  M --> M1[(从库 1)]\n  M --> M2[(从库 2)]\n  S --> UC[用户中心 RPC]",
+    "architecture_diagram_spec": null
+  },
+  "teaching_model": {
+    "mentor_persona": {
+      "style_name": "",
+      "tone": "",
+      "detail": "balanced",
+      "directness": 0.5,
+      "humor": 0.0,
+      "timeline_focus": 0.0,
+      "question_frequency": 0.5
+    },
+    "concepts": [],
+    "evidence_availability_rules": [],
+    "hint_ladder": []
+  },
+  "concept_catalog": [],
+  "hypothesis_catalog": [
+    {
+      "hypothesis_id": "H_INDEX",
+      "label": "索引问题"
+    },
+    {
+      "hypothesis_id": "H_CPU_BOUND",
+      "label": "数据库资源被打满"
+    },
+    {
+      "hypothesis_id": "H_POOL",
+      "label": "连接池打满"
+    },
+    {
+      "hypothesis_id": "H_CACHE",
+      "label": "缓存失效或被击穿"
+    },
+    {
+      "hypothesis_id": "H_NETWORK",
+      "label": "网络或依赖服务抖动"
+    },
+    {
+      "hypothesis_id": "H_OTHER",
+      "label": "其他"
+    }
+  ],
+  "evidence_graph": [
+    {
+      "evidence_id": "E_SLOW_SQL",
+      "content": "慢查询日志里 SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC LIMIT 20 平均耗时 3.8s，占慢查询总量的 92%",
+      "category": "logs",
+      "prerequisites": [],
+      "obtained_by": [
+        "inspect:logs.slow_query"
+      ],
+      "clue_importance": "none",
+      "public_title": "",
+      "diagnostic_role": ""
+    },
+    {
+      "evidence_id": "E_EXPLAIN_FULLSCAN",
+      "content": "该语句的执行计划 type=ALL、key=NULL，没有走任何索引",
+      "category": "data",
+      "prerequisites": [
+        "E_SLOW_SQL"
+      ],
+      "obtained_by": [
+        "inspect:data.explain"
+      ],
+      "clue_importance": "none",
+      "public_title": "",
+      "diagnostic_role": ""
+    },
+    {
+      "evidence_id": "E_ROWS_EXAMINED",
+      "content": "执行计划的 rows 约 2,400,000，与 orders 表总行数一致",
+      "category": "data",
+      "prerequisites": [
+        "E_EXPLAIN_FULLSCAN"
+      ],
+      "obtained_by": [
+        "inspect:data.rows_examined"
+      ],
+      "clue_importance": "none",
+      "public_title": "",
+      "diagnostic_role": ""
+    },
+    {
+      "evidence_id": "E_RELEASE_LOG",
+      "content": "上午 10:12 有一次针对订单服务的发布，同批次包含一个 orders 表的结构变更工单",
+      "category": "change",
+      "prerequisites": [],
+      "obtained_by": [
+        "inspect:change.release_log"
+      ],
+      "clue_importance": "none",
+      "public_title": "",
+      "diagnostic_role": ""
+    },
+    {
+      "evidence_id": "E_DDL_DIFF",
+      "content": "对比变更前后的建表语句：变更后的 orders 表少了 KEY idx_user_created (user_id, created_at)",
+      "category": "change",
+      "prerequisites": [
+        "E_RELEASE_LOG"
+      ],
+      "obtained_by": [
+        "inspect:change.ddl_diff"
+      ],
+      "clue_importance": "none",
+      "public_title": "",
+      "diagnostic_role": ""
+    },
+    {
+      "evidence_id": "E_CPU_NORMAL",
+      "content": "数据库主机 CPU 使用率 35%，内存和磁盘 IO 都在正常区间",
+      "category": "metrics",
+      "prerequisites": [],
+      "obtained_by": [
+        "inspect:metrics.cpu"
+      ],
+      "clue_importance": "none",
+      "public_title": "",
+      "diagnostic_role": ""
+    },
+    {
+      "evidence_id": "E_POOL_NORMAL",
+      "content": "订单服务连接池活跃连接 12/50，等待队列长度为 0",
+      "category": "resource",
+      "prerequisites": [],
+      "obtained_by": [
+        "inspect:resource.connection_pool"
+      ],
+      "clue_importance": "none",
+      "public_title": "",
+      "diagnostic_role": ""
+    },
+    {
+      "evidence_id": "E_CACHE_NORMAL",
+      "content": "Redis 命中率 94%，与昨天同一时段持平，没有大量 key 集中过期",
+      "category": "metrics",
+      "prerequisites": [],
+      "obtained_by": [
+        "inspect:metrics.cache"
+      ],
+      "clue_importance": "none",
+      "public_title": "",
+      "diagnostic_role": ""
+    },
+    {
+      "evidence_id": "E_NETWORK_NORMAL",
+      "content": "订单服务到数据库和用户中心的 RTT 都在 1ms 以内，用户中心 RPC P99 为 8ms",
+      "category": "dependency",
+      "prerequisites": [],
+      "obtained_by": [
+        "inspect:dependency.network"
+      ],
+      "clue_importance": "none",
+      "public_title": "",
+      "diagnostic_role": ""
+    }
+  ],
+  "observation_catalog": [
+    {
+      "action": "inspect:logs.slow_query",
+      "result": "打开慢查询日志，最近一小时有 4200 条记录。排在最前面的是 SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC LIMIT 20，平均耗时 3.8s，占了全部慢查询的 92%。",
+      "is_negative": false,
+      "yields_evidence": [
+        "E_SLOW_SQL"
+      ],
+      "rules_out": [],
+      "unmet_prerequisite_result": ""
+    },
+    {
+      "action": "inspect:data.explain",
+      "result": "对这条语句执行 EXPLAIN：type=ALL，possible_keys=NULL，key=NULL，Extra 里写着 Using filesort。它没有走任何索引。",
+      "is_negative": false,
+      "yields_evidence": [
+        "E_EXPLAIN_FULLSCAN"
+      ],
+      "rules_out": [],
+      "unmet_prerequisite_result": "你要看哪条 SQL 的执行计划？订单服务这一分钟发出去的语句有六十多种。"
+    },
+    {
+      "action": "inspect:data.rows_examined",
+      "result": "执行计划里 rows 是 2,400,000 左右，和 orders 表的总行数基本一致——每次查询都在扫整张表。",
+      "is_negative": false,
+      "yields_evidence": [
+        "E_ROWS_EXAMINED"
+      ],
+      "rules_out": [],
+      "unmet_prerequisite_result": "还没有执行计划可看。"
+    },
+    {
+      "action": "inspect:change.release_log",
+      "result": "查发布记录：今天上午 10:12 订单服务发过一版，同一批次里还挂着一个 orders 表的结构变更工单，说明是「新增 refund_status 字段」。",
+      "is_negative": false,
+      "yields_evidence": [
+        "E_RELEASE_LOG"
+      ],
+      "rules_out": [],
+      "unmet_prerequisite_result": ""
+    },
+    {
+      "action": "inspect:change.ddl_diff",
+      "result": "调出变更前后的建表语句做对比。新增字段确实加上了，但变更后的表结构里少了一行：KEY idx_user_created (user_id, created_at)。",
+      "is_negative": false,
+      "yields_evidence": [
+        "E_DDL_DIFF"
+      ],
+      "rules_out": [],
+      "unmet_prerequisite_result": "你想比对哪一次变更前后的表结构？"
+    },
+    {
+      "action": "inspect:metrics.cpu",
+      "result": "数据库主机 CPU 使用率 35%，内存占用平稳，磁盘 IO 也没有排队。资源层面看不出压力。",
+      "is_negative": true,
+      "yields_evidence": [
+        "E_CPU_NORMAL"
+      ],
+      "rules_out": [
+        "H_CPU_BOUND"
+      ],
+      "unmet_prerequisite_result": ""
+    },
+    {
+      "action": "inspect:resource.connection_pool",
+      "result": "订单服务的连接池活跃连接 12，上限 50，等待队列一直是 0。没有排队拿连接的迹象。",
+      "is_negative": true,
+      "yields_evidence": [
+        "E_POOL_NORMAL"
+      ],
+      "rules_out": [
+        "H_POOL"
+      ],
+      "unmet_prerequisite_result": ""
+    },
+    {
+      "action": "inspect:metrics.cache",
+      "result": "Redis 命中率 94%，和昨天同一时段基本一样，也没有看到大批 key 在同一时刻过期。",
+      "is_negative": true,
+      "yields_evidence": [
+        "E_CACHE_NORMAL"
+      ],
+      "rules_out": [
+        "H_CACHE"
+      ],
+      "unmet_prerequisite_result": ""
+    },
+    {
+      "action": "inspect:dependency.network",
+      "result": "订单服务到数据库、到用户中心的 RTT 都在 1ms 以内，用户中心 RPC 的 P99 是 8ms。链路本身很干净。",
+      "is_negative": true,
+      "yields_evidence": [
+        "E_NETWORK_NORMAL"
+      ],
+      "rules_out": [
+        "H_NETWORK"
+      ],
+      "unmet_prerequisite_result": ""
+    }
+  ],
+  "tool_catalog": [
+    {
+      "tool_id": "tool.legacy.inspect_logs_slow_query",
+      "kind": "logs",
+      "target": "inspect:logs.slow_query",
+      "aliases": [],
+      "query_patterns": [],
+      "redacted_parameters": [],
+      "simulated_output": "打开慢查询日志，最近一小时有 4200 条记录。排在最前面的是 SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC LIMIT 20，平均耗时 3.8s，占了全部慢查询的 92%。",
+      "observation_action": "inspect:logs.slow_query",
+      "evidence_ids": [
+        "E_SLOW_SQL"
+      ]
+    },
+    {
+      "tool_id": "tool.legacy.inspect_data_explain",
+      "kind": "data",
+      "target": "inspect:data.explain",
+      "aliases": [],
+      "query_patterns": [],
+      "redacted_parameters": [],
+      "simulated_output": "对这条语句执行 EXPLAIN：type=ALL，possible_keys=NULL，key=NULL，Extra 里写着 Using filesort。它没有走任何索引。",
+      "observation_action": "inspect:data.explain",
+      "evidence_ids": [
+        "E_EXPLAIN_FULLSCAN"
+      ]
+    },
+    {
+      "tool_id": "tool.legacy.inspect_data_rows_examined",
+      "kind": "data",
+      "target": "inspect:data.rows_examined",
+      "aliases": [],
+      "query_patterns": [],
+      "redacted_parameters": [],
+      "simulated_output": "执行计划里 rows 是 2,400,000 左右，和 orders 表的总行数基本一致——每次查询都在扫整张表。",
+      "observation_action": "inspect:data.rows_examined",
+      "evidence_ids": [
+        "E_ROWS_EXAMINED"
+      ]
+    },
+    {
+      "tool_id": "tool.legacy.inspect_change_release_log",
+      "kind": "change",
+      "target": "inspect:change.release_log",
+      "aliases": [],
+      "query_patterns": [],
+      "redacted_parameters": [],
+      "simulated_output": "查发布记录：今天上午 10:12 订单服务发过一版，同一批次里还挂着一个 orders 表的结构变更工单，说明是「新增 refund_status 字段」。",
+      "observation_action": "inspect:change.release_log",
+      "evidence_ids": [
+        "E_RELEASE_LOG"
+      ]
+    },
+    {
+      "tool_id": "tool.legacy.inspect_change_ddl_diff",
+      "kind": "change",
+      "target": "inspect:change.ddl_diff",
+      "aliases": [],
+      "query_patterns": [],
+      "redacted_parameters": [],
+      "simulated_output": "调出变更前后的建表语句做对比。新增字段确实加上了，但变更后的表结构里少了一行：KEY idx_user_created (user_id, created_at)。",
+      "observation_action": "inspect:change.ddl_diff",
+      "evidence_ids": [
+        "E_DDL_DIFF"
+      ]
+    },
+    {
+      "tool_id": "tool.legacy.inspect_metrics_cpu",
+      "kind": "metrics",
+      "target": "inspect:metrics.cpu",
+      "aliases": [],
+      "query_patterns": [],
+      "redacted_parameters": [],
+      "simulated_output": "数据库主机 CPU 使用率 35%，内存占用平稳，磁盘 IO 也没有排队。资源层面看不出压力。",
+      "observation_action": "inspect:metrics.cpu",
+      "evidence_ids": [
+        "E_CPU_NORMAL"
+      ]
+    },
+    {
+      "tool_id": "tool.legacy.inspect_resource_connection_pool",
+      "kind": "resource",
+      "target": "inspect:resource.connection_pool",
+      "aliases": [],
+      "query_patterns": [],
+      "redacted_parameters": [],
+      "simulated_output": "订单服务的连接池活跃连接 12，上限 50，等待队列一直是 0。没有排队拿连接的迹象。",
+      "observation_action": "inspect:resource.connection_pool",
+      "evidence_ids": [
+        "E_POOL_NORMAL"
+      ]
+    },
+    {
+      "tool_id": "tool.legacy.inspect_metrics_cache",
+      "kind": "metrics",
+      "target": "inspect:metrics.cache",
+      "aliases": [],
+      "query_patterns": [],
+      "redacted_parameters": [],
+      "simulated_output": "Redis 命中率 94%，和昨天同一时段基本一样，也没有看到大批 key 在同一时刻过期。",
+      "observation_action": "inspect:metrics.cache",
+      "evidence_ids": [
+        "E_CACHE_NORMAL"
+      ]
+    },
+    {
+      "tool_id": "tool.legacy.inspect_dependency_network",
+      "kind": "dependency",
+      "target": "inspect:dependency.network",
+      "aliases": [],
+      "query_patterns": [],
+      "redacted_parameters": [],
+      "simulated_output": "订单服务到数据库、到用户中心的 RTT 都在 1ms 以内，用户中心 RPC 的 P99 是 8ms。链路本身很干净。",
+      "observation_action": "inspect:dependency.network",
+      "evidence_ids": [
+        "E_NETWORK_NORMAL"
+      ]
+    }
+  ],
+  "tool_dependency_graph": [
+    {
+      "action": "inspect:change.ddl_diff",
+      "depends_on": [
+        "inspect:change.release_log"
+      ]
+    },
+    {
+      "action": "inspect:data.explain",
+      "depends_on": [
+        "inspect:logs.slow_query"
+      ]
+    },
+    {
+      "action": "inspect:data.rows_examined",
+      "depends_on": [
+        "inspect:data.explain"
+      ]
+    }
+  ],
+  "hint_ladder": [],
+  "misconception_rules": [
+    {
+      "misconception_id": "M_BLAME_CACHE",
+      "pattern_hypotheses": [
+        "H_CACHE"
+      ],
+      "why_wrong": "缓存命中率并没有下降，慢的是回源之后的那条查询本身。即使缓存全部命中，穿透到库的那部分请求依然是 3.8s。"
+    },
+    {
+      "misconception_id": "M_BLAME_TRAFFIC",
+      "pattern_hypotheses": [
+        "H_CPU_BOUND"
+      ],
+      "why_wrong": "变慢是突然发生的，而流量曲线是平滑的；资源指标也没有压力。把它归因于「量涨了」会让人去扩容，而扩容对全表扫描几乎没有帮助。"
+    },
+    {
+      "misconception_id": "M_BLAME_DEPENDENCY",
+      "pattern_hypotheses": [
+        "H_NETWORK"
+      ],
+      "why_wrong": "错误率没有上升、请求全部成功返回，这不符合网络抖动的特征；抖动通常伴随超时和重试。"
+    }
+  ],
+  "solution_rubric": {
+    "required_actions": [
+      "重建 idx_user_created 联合索引",
+      "把索引校验加进发布前的检查清单，避免重建表时再次漏掉"
+    ],
+    "verification_steps": [
+      "重建后重新 EXPLAIN，确认 key 命中 idx_user_created 且 rows 大幅下降",
+      "观察订单列表接口 P99 是否回落到发布前水平",
+      "复查慢查询日志中该语句是否消失"
+    ],
+    "rollback_notes": [
+      "240 万行的表建索引有锁表窗口，选择低峰期并用 ONLINE DDL",
+      "把索引比对加进发布前检查，重建表类变更尤其要比对索引清单"
+    ]
+  },
+  "root_cause": {
+    "id": "RC_INDEX_DROPPED",
+    "category": "data",
+    "component": "MySQL orders 表",
+    "description": "orders 表结构变更后遗漏 idx_user_created (user_id, created_at) 联合索引，导致订单列表查询退化为全表扫描。",
+    "sufficient_evidence_sets": [
+      [
+        "E_SLOW_SQL",
+        "E_EXPLAIN_FULLSCAN"
+      ],
+      [
+        "E_RELEASE_LOG",
+        "E_DDL_DIFF"
+      ]
+    ],
+    "accepted_hypotheses": [
+      "H_INDEX"
+    ],
+    "solution_requirements": [
+      "重建 idx_user_created 联合索引",
+      "把索引校验加进发布前的检查清单，避免重建表时再次漏掉"
+    ]
+  },
+  "diagnostic_relations": [
+    "REL_DDL_TO_INDEX_MISSING",
+    "REL_INDEX_MISSING_TO_FULLSCAN"
+  ],
+  "canonical_answer": {
+    "canonical_conclusion": "orders 表结构变更遗漏 idx_user_created 联合索引，导致订单列表查询退化为全表扫描。",
+    "root_cause_id": "RC_INDEX_DROPPED",
+    "direct_trigger": "",
+    "latent_issues": [],
+    "phenomenon": "",
+    "derived_risks": [],
+    "required_evidence_ids": [
+      "E_SLOW_SQL",
+      "E_EXPLAIN_FULLSCAN"
+    ],
+    "required_causal_relations": [
+      "REL_DDL_TO_INDEX_MISSING",
+      "REL_INDEX_MISSING_TO_FULLSCAN"
+    ],
+    "accepted_equivalents": [
+      "发布漏掉 idx_user_created 索引，使订单查询走全表扫描。"
+    ],
+    "solution_requirements": [
+      "重建 idx_user_created 联合索引",
+      "把索引校验加进发布前的检查清单，避免重建表时再次漏掉"
+    ],
+    "answer_version": "hiddenworld.v2"
+  }
+}

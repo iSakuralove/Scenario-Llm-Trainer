@@ -1,0 +1,435 @@
+{
+  "contract_version": "scenario.v3",
+  "metadata": {
+    "stable_code": "hw-k8s-io-001",
+    "domain": "devops",
+    "difficulty": "L3",
+    "scenario_type": "troubleshooting",
+    "tags": [
+      "Kubernetes",
+      "磁盘 IO",
+      "容器",
+      "发布"
+    ],
+    "source": "fixed_hiddenworld",
+    "version": 1,
+    "status": "active",
+    "legacy_model_version": "hiddenworld.v1"
+  },
+  "public_scenario": {
+    "title": "Kubernetes 批处理任务在扩容后频繁重启",
+    "description": "夜间批处理任务在一次扩容和镜像更新后频繁重启，任务完成时间拉长。Pod 偶尔被驱逐，但应用日志没有明显业务异常，需要定位是节点资源、容器镜像还是临时盘写入造成的问题。",
+    "environment": "Kubernetes 集群 12 个节点，批处理 Pod 使用 emptyDir 临时目录，旁路日志采集容器共享工作目录，任务会生成压缩中间文件。",
+    "initial_symptoms": [
+      "批任务耗时从 20 分钟升到 70 分钟",
+      "部分 Pod 出现 Evicted 或 OOMKilled",
+      "问题从镜像发布和扩容后开始",
+      "前台 API 服务不受影响"
+    ],
+    "architecture_diagram": "graph LR\n  J[调度器] --> P[批处理 Pod]\n  P --> E[emptyDir]\n  P --> L[日志采集容器]\n  N[K8s 节点] --> P",
+    "architecture_diagram_spec": null
+  },
+  "teaching_model": {
+    "mentor_persona": {
+      "style_name": "",
+      "tone": "",
+      "detail": "balanced",
+      "directness": 0.5,
+      "humor": 0.0,
+      "timeline_focus": 0.0,
+      "question_frequency": 0.5
+    },
+    "concepts": [],
+    "evidence_availability_rules": [],
+    "hint_ladder": []
+  },
+  "concept_catalog": [],
+  "hypothesis_catalog": [
+    {
+      "hypothesis_id": "H_EMPTYDIR_IO",
+      "label": "emptyDir 临时盘写满"
+    },
+    {
+      "hypothesis_id": "H_MEMORY",
+      "label": "容器内存限制不足"
+    },
+    {
+      "hypothesis_id": "H_IMAGE",
+      "label": "镜像启动脚本异常"
+    },
+    {
+      "hypothesis_id": "H_NODE_NETWORK",
+      "label": "节点网络抖动"
+    },
+    {
+      "hypothesis_id": "H_SCHEDULER",
+      "label": "调度策略导致任务堆积"
+    },
+    {
+      "hypothesis_id": "H_OTHER",
+      "label": "其他"
+    }
+  ],
+  "evidence_graph": [
+    {
+      "evidence_id": "E_EVICTION_EVENTS",
+      "content": "多个批处理 Pod 的终止原因是 Evicted，节点事件写明 ephemeral-storage pressure。",
+      "category": "logs",
+      "prerequisites": [],
+      "obtained_by": [
+        "inspect:logs.kube_events"
+      ],
+      "clue_importance": "none",
+      "public_title": "",
+      "diagnostic_role": ""
+    },
+    {
+      "evidence_id": "E_EMPTYDIR_USAGE",
+      "content": "批处理 Pod 的 emptyDir 使用量在驱逐前超过 90%，与节点 eviction threshold 只差很小余量。",
+      "category": "resource",
+      "prerequisites": [],
+      "obtained_by": [
+        "inspect:resource.ephemeral_storage"
+      ],
+      "clue_importance": "none",
+      "public_title": "",
+      "diagnostic_role": ""
+    },
+    {
+      "evidence_id": "E_RELEASE_IMAGE",
+      "content": "本次发布把批处理镜像从 v3.4 升到 v3.5，并新增压缩中间文件步骤。",
+      "category": "change",
+      "prerequisites": [],
+      "obtained_by": [
+        "inspect:change.image_release"
+      ],
+      "clue_importance": "none",
+      "public_title": "",
+      "diagnostic_role": ""
+    },
+    {
+      "evidence_id": "E_TEMP_PATH_DIFF",
+      "content": "新镜像的配置把中间文件目录从独立挂载改成了共享 emptyDir，日志采集容器也写入同一目录。",
+      "category": "config",
+      "prerequisites": [
+        "E_RELEASE_IMAGE"
+      ],
+      "obtained_by": [
+        "inspect:config.volume_diff"
+      ],
+      "clue_importance": "none",
+      "public_title": "",
+      "diagnostic_role": ""
+    },
+    {
+      "evidence_id": "E_MEMORY_NORMAL",
+      "content": "被驱逐 Pod 在终止前内存低于 limit，没有 OOMKilled 证据。",
+      "category": "metrics",
+      "prerequisites": [],
+      "obtained_by": [
+        "inspect:metrics.memory"
+      ],
+      "clue_importance": "none",
+      "public_title": "",
+      "diagnostic_role": ""
+    },
+    {
+      "evidence_id": "E_NETWORK_NORMAL",
+      "content": "节点到镜像仓库和日志服务的网络 RTT 正常，没有重传和连接失败峰值。",
+      "category": "dependency",
+      "prerequisites": [],
+      "obtained_by": [
+        "inspect:dependency.node_network"
+      ],
+      "clue_importance": "none",
+      "public_title": "",
+      "diagnostic_role": ""
+    }
+  ],
+  "observation_catalog": [
+    {
+      "action": "inspect:logs.kube_events",
+      "result": "事件记录显示多个 Pod 因 ephemeral-storage pressure 被驱逐。",
+      "is_negative": false,
+      "yields_evidence": [
+        "E_EVICTION_EVENTS"
+      ],
+      "rules_out": [],
+      "unmet_prerequisite_result": "先指定要看的命名空间和时间窗口。"
+    },
+    {
+      "action": "inspect:resource.ephemeral_storage",
+      "result": "emptyDir 在驱逐前快速升到节点阈值附近，压缩文件和日志占用最多。",
+      "is_negative": false,
+      "yields_evidence": [
+        "E_EMPTYDIR_USAGE"
+      ],
+      "rules_out": [],
+      "unmet_prerequisite_result": "要看哪一个 Pod 或节点的临时存储使用量？"
+    },
+    {
+      "action": "inspect:change.image_release",
+      "result": "v3.5 在扩容同时上线，新增了压缩中间文件步骤。",
+      "is_negative": false,
+      "yields_evidence": [
+        "E_RELEASE_IMAGE"
+      ],
+      "rules_out": [],
+      "unmet_prerequisite_result": "请先指出要对比的镜像版本。"
+    },
+    {
+      "action": "inspect:config.volume_diff",
+      "result": "新版本把中间文件改写到共享 emptyDir，日志采集容器也使用该目录。",
+      "is_negative": false,
+      "yields_evidence": [
+        "E_TEMP_PATH_DIFF"
+      ],
+      "rules_out": [],
+      "unmet_prerequisite_result": "你想对比哪一份 Pod volume 配置？"
+    },
+    {
+      "action": "inspect:metrics.memory",
+      "result": "终止前内存低于 limit，事件不是 OOMKilled。",
+      "is_negative": true,
+      "yields_evidence": [
+        "E_MEMORY_NORMAL"
+      ],
+      "rules_out": [
+        "H_MEMORY"
+      ],
+      "unmet_prerequisite_result": ""
+    },
+    {
+      "action": "inspect:dependency.node_network",
+      "result": "节点网络延迟和重传都正常。",
+      "is_negative": true,
+      "yields_evidence": [
+        "E_NETWORK_NORMAL"
+      ],
+      "rules_out": [
+        "H_NODE_NETWORK"
+      ],
+      "unmet_prerequisite_result": ""
+    },
+    {
+      "action": "inspect:scheduler.queue",
+      "result": "调度队列没有持续堆积，任务被驱逐后才重新排队。",
+      "is_negative": true,
+      "yields_evidence": [],
+      "rules_out": [
+        "H_SCHEDULER"
+      ],
+      "unmet_prerequisite_result": ""
+    },
+    {
+      "action": "inspect:image.startup",
+      "result": "容器启动脚本成功完成，重启发生在任务写中间文件阶段。",
+      "is_negative": true,
+      "yields_evidence": [],
+      "rules_out": [
+        "H_IMAGE"
+      ],
+      "unmet_prerequisite_result": ""
+    }
+  ],
+  "tool_catalog": [
+    {
+      "tool_id": "tool.legacy.inspect_logs_kube_events",
+      "kind": "logs",
+      "target": "inspect:logs.kube_events",
+      "aliases": [],
+      "query_patterns": [],
+      "redacted_parameters": [],
+      "simulated_output": "事件记录显示多个 Pod 因 ephemeral-storage pressure 被驱逐。",
+      "observation_action": "inspect:logs.kube_events",
+      "evidence_ids": [
+        "E_EVICTION_EVENTS"
+      ]
+    },
+    {
+      "tool_id": "tool.legacy.inspect_resource_ephemeral_storage",
+      "kind": "resource",
+      "target": "inspect:resource.ephemeral_storage",
+      "aliases": [],
+      "query_patterns": [],
+      "redacted_parameters": [],
+      "simulated_output": "emptyDir 在驱逐前快速升到节点阈值附近，压缩文件和日志占用最多。",
+      "observation_action": "inspect:resource.ephemeral_storage",
+      "evidence_ids": [
+        "E_EMPTYDIR_USAGE"
+      ]
+    },
+    {
+      "tool_id": "tool.legacy.inspect_change_image_release",
+      "kind": "change",
+      "target": "inspect:change.image_release",
+      "aliases": [],
+      "query_patterns": [],
+      "redacted_parameters": [],
+      "simulated_output": "v3.5 在扩容同时上线，新增了压缩中间文件步骤。",
+      "observation_action": "inspect:change.image_release",
+      "evidence_ids": [
+        "E_RELEASE_IMAGE"
+      ]
+    },
+    {
+      "tool_id": "tool.legacy.inspect_config_volume_diff",
+      "kind": "config",
+      "target": "inspect:config.volume_diff",
+      "aliases": [],
+      "query_patterns": [],
+      "redacted_parameters": [],
+      "simulated_output": "新版本把中间文件改写到共享 emptyDir，日志采集容器也使用该目录。",
+      "observation_action": "inspect:config.volume_diff",
+      "evidence_ids": [
+        "E_TEMP_PATH_DIFF"
+      ]
+    },
+    {
+      "tool_id": "tool.legacy.inspect_metrics_memory",
+      "kind": "metrics",
+      "target": "inspect:metrics.memory",
+      "aliases": [],
+      "query_patterns": [],
+      "redacted_parameters": [],
+      "simulated_output": "终止前内存低于 limit，事件不是 OOMKilled。",
+      "observation_action": "inspect:metrics.memory",
+      "evidence_ids": [
+        "E_MEMORY_NORMAL"
+      ]
+    },
+    {
+      "tool_id": "tool.legacy.inspect_dependency_node_network",
+      "kind": "dependency",
+      "target": "inspect:dependency.node_network",
+      "aliases": [],
+      "query_patterns": [],
+      "redacted_parameters": [],
+      "simulated_output": "节点网络延迟和重传都正常。",
+      "observation_action": "inspect:dependency.node_network",
+      "evidence_ids": [
+        "E_NETWORK_NORMAL"
+      ]
+    },
+    {
+      "tool_id": "tool.legacy.inspect_scheduler_queue",
+      "kind": "scheduler",
+      "target": "inspect:scheduler.queue",
+      "aliases": [],
+      "query_patterns": [],
+      "redacted_parameters": [],
+      "simulated_output": "调度队列没有持续堆积，任务被驱逐后才重新排队。",
+      "observation_action": "inspect:scheduler.queue",
+      "evidence_ids": []
+    },
+    {
+      "tool_id": "tool.legacy.inspect_image_startup",
+      "kind": "image",
+      "target": "inspect:image.startup",
+      "aliases": [],
+      "query_patterns": [],
+      "redacted_parameters": [],
+      "simulated_output": "容器启动脚本成功完成，重启发生在任务写中间文件阶段。",
+      "observation_action": "inspect:image.startup",
+      "evidence_ids": []
+    }
+  ],
+  "tool_dependency_graph": [
+    {
+      "action": "inspect:config.volume_diff",
+      "depends_on": [
+        "inspect:change.image_release"
+      ]
+    }
+  ],
+  "hint_ladder": [],
+  "misconception_rules": [
+    {
+      "misconception_id": "M_BLAME_MEMORY",
+      "pattern_hypotheses": [
+        "H_MEMORY"
+      ],
+      "why_wrong": "终止原因是 ephemeral-storage pressure，不是 OOMKilled。"
+    },
+    {
+      "misconception_id": "M_BLAME_NETWORK",
+      "pattern_hypotheses": [
+        "H_NODE_NETWORK"
+      ],
+      "why_wrong": "网络指标正常，驱逐前临时盘已经接近阈值。"
+    },
+    {
+      "misconception_id": "M_BLAME_SCHEDULER",
+      "pattern_hypotheses": [
+        "H_SCHEDULER"
+      ],
+      "why_wrong": "调度只是重新安排被驱逐的任务，不是最初故障原因。"
+    }
+  ],
+  "solution_rubric": {
+    "required_actions": [
+      "为中间文件配置独立并有容量上限的临时存储",
+      "把磁盘使用率和 eviction threshold 纳入任务监控"
+    ],
+    "verification_steps": [
+      "压测批处理时确认临时盘低于 eviction threshold",
+      "观察 Pod 不再被驱逐",
+      "监控中间文件和日志目录的使用量"
+    ],
+    "rollback_notes": [
+      "先回滚 v3.5 volume 配置",
+      "保留节点事件和 Pod 终止原因用于复盘"
+    ]
+  },
+  "root_cause": {
+    "id": "RC_K8S_EMPTYDIR_IO",
+    "category": "resource",
+    "component": "批处理 Pod 的 emptyDir 临时盘",
+    "description": "新镜像把压缩中间文件和日志都写入同一个 emptyDir，批任务高峰时临时盘达到节点 eviction threshold，Pod 被驱逐并重启。",
+    "sufficient_evidence_sets": [
+      [
+        "E_EVICTION_EVENTS",
+        "E_EMPTYDIR_USAGE"
+      ],
+      [
+        "E_RELEASE_IMAGE",
+        "E_TEMP_PATH_DIFF"
+      ]
+    ],
+    "accepted_hypotheses": [
+      "H_EMPTYDIR_IO"
+    ],
+    "solution_requirements": [
+      "为中间文件配置独立并有容量上限的临时存储",
+      "把磁盘使用率和 eviction threshold 纳入任务监控"
+    ]
+  },
+  "diagnostic_relations": [
+    "REL_VOLUME_TO_EMPTYDIR_PRESSURE",
+    "REL_EMPTYDIR_PRESSURE_TO_EVICTION"
+  ],
+  "canonical_answer": {
+    "canonical_conclusion": "v3.5 镜像把压缩中间文件和日志写入同一 emptyDir，临时盘达到 eviction threshold，导致批处理 Pod 被驱逐。",
+    "root_cause_id": "RC_K8S_EMPTYDIR_IO",
+    "direct_trigger": "",
+    "latent_issues": [],
+    "phenomenon": "",
+    "derived_risks": [],
+    "required_evidence_ids": [
+      "E_EVICTION_EVENTS",
+      "E_EMPTYDIR_USAGE"
+    ],
+    "required_causal_relations": [
+      "REL_VOLUME_TO_EMPTYDIR_PRESSURE",
+      "REL_EMPTYDIR_PRESSURE_TO_EVICTION"
+    ],
+    "accepted_equivalents": [
+      "新镜像共用 emptyDir 造成临时盘压力，触发 Pod eviction。"
+    ],
+    "solution_requirements": [
+      "为中间文件配置独立并有容量上限的临时存储",
+      "把磁盘使用率和 eviction threshold 纳入任务监控"
+    ],
+    "answer_version": "hiddenworld.v2"
+  }
+}

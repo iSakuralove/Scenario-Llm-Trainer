@@ -1,0 +1,26 @@
+{
+  "contract_version": "scenario.v3",
+  "artifact_count": 4,
+  "artifacts": [
+    {
+      "stable_code": "hw-db-index-001",
+      "file": "hw-db-index-001.json",
+      "checksum": "4a8db339d8dcf5cb550788bc461f917ac0a79086a29a7365042c4ce4ebc023b1"
+    },
+    {
+      "stable_code": "hw-network-vip-001",
+      "file": "hw-network-vip-001.json",
+      "checksum": "47a52802134c3a0252eca80ec2395089b1ce1789d3d3641c5d0ae83d1bcff842"
+    },
+    {
+      "stable_code": "hw-k8s-io-001",
+      "file": "hw-k8s-io-001.json",
+      "checksum": "7e4c132552eb62256e94d98968b8a02740a27f6d654db5d2a7f2edad9ec9204e"
+    },
+    {
+      "stable_code": "hw-cache-key-001",
+      "file": "hw-cache-key-001.json",
+      "checksum": "726426177d184e120afc34bad7425ed3477b759bbc0f5dc8a94d71e94164f2ce"
+    }
+  ]
+}
