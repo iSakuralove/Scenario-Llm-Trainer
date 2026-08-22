@@ -1269,7 +1269,12 @@ async def test_runtime_streams_tool_activity_during_the_loop(
 
     kinds = [item.kind for item in streamed]
     assert kinds.index("agent_tool_started") < kinds.index("agent_tool_result")
+    tool_started_event = next(item for item in streamed if item.kind == "agent_tool_started")
+    assert tool_started_event.call_id == "call-1"
+    assert tool_started_event.round == 1
     tool_result_event = next(item for item in streamed if item.kind == "agent_tool_result")
+    assert tool_result_event.call_id == "call-1"
+    assert tool_result_event.round == 1
     assert tool_result_event.observation is not None
     assert tool_result_event.observation.action == "inspect:metrics.cpu"
     # 序号严格递增：循环旁路 1..k，收尾事件接着续编。

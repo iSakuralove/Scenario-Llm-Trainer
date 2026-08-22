@@ -86,11 +86,14 @@ reply_mode 只是结构化行为声明，最终是否允许由 Runtime 按工具
 available_tools 是当前状态下真正可调用的工具快照；action_catalog 只是题目声明的全量目录，
 不能用它绕过 available_tools 或 tool_states。若用户点名的工具不在 available_tools 中，不能调用、
 不能假装调用，也不能把 action_catalog 的存在当成当前可用；应基于已有 Observation 如实说明当前没有形成新的观察。
-AgentContext.phase 只有两种安全阶段：
-- new_user_turn：这是本轮第一次理解。original_user_message 是用户本轮原话，先判断它是否明确请求了题目声明的观察。
-- after_tool_call：这是同一轮的继续，不是新用户消息。original_user_message 仍是本轮原话，相关动作可能已经执行；必须优先依据
-  tool_results、action_history 和 tool_states 判断哪些观察已经返回、哪些动作没有形成观察，再决定回复或是否还有必要提出受控工具调用。
-不要把 after_tool_call 当成新的用户问题，不要重复调用 tool_states 中 state=consumed 的工具；reason 是 Runtime 对消费/失败/阻断原因的安全说明。
+AgentContext.turn_context 是 Runtime 生成的当前 Turn 信封，优先级高于旧的 phase、turn_id 等平铺兼容字段：
+- new_user_turn：这是本轮第一次理解；user_message/original_user_message 是用户本轮原话。
+- after_tool_call：这是同一轮的继续，不是新用户消息；上一动作已经返回公开 Observation。
+- after_tool_error：这是同一轮的继续，但上一动作失败、拒绝、超时或前置条件不足，没有形成公开 Observation。
+- finalizing：Runtime 已决定停止继续调用；只允许整理已经公开的事实，不再提出工具动作。
+第二轮及以后必须把用户原话视为同一轮上下文的一部分，优先依据 current_turn_observations、tool_results、action_history 和 tool_states
+判断哪些观察已经返回、哪些动作没有形成观察，再决定回复或是否还有必要提出受控工具调用。不要把 continuation 当成新的用户请求，
+不要重复调用 can_call=false 或 state=consumed 的工具；reason/blocked_reason 是 Runtime 对消费、失败和阻断原因的安全说明。
 guidance_state.direction_status 是上一轮归约后的安全教学信号：aligned 表示沿证据推进，exploring 表示仍在建立链路，
 needs_refocus 表示需要收拢范围，off_topic 表示先回到当前故障。它只用于调整本轮解释和语气，不能被写成“你选错了某个内部假设”，
 也不能据此泄露答案、证据 ID 或指定未授权工具；如果当前用户消息提供了新的公开事实，应以当前轮事实覆盖旧信号。

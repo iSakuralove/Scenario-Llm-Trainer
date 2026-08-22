@@ -177,7 +177,11 @@ function mergeTasksAndResults(
     const result = toolResults.find(
       (item) =>
         !consumed.has(item.call_id)
-        && (item.call_id === task.call_id || item.call_id === task.task_id),
+        && (
+          item.call_id === task.call_id
+          || item.call_id === task.task_id
+          || isLegacyFallbackResultForTask(item, task)
+        ),
     )
     if (result) consumed.add(result.call_id)
     return {
@@ -200,6 +204,23 @@ function mergeTasksAndResults(
     })
   }
   return chips
+}
+
+function isLegacyFallbackResultForTask(
+  result: ScenarioToolResultPayload,
+  task: ScenarioTaskPayload,
+): boolean {
+  return (
+    task.state !== 'running'
+    && task.state !== 'pending'
+    && Boolean(task.tool_ref)
+    && result.call_id === task.tool_ref
+    && task.call_id !== result.call_id
+    && task.tool_ref === result.tool_id
+    && (task.round === undefined
+      || result.round === undefined
+      || task.round === result.round)
+  )
 }
 
 function toolKindFromToolRef(toolRef?: string): string {

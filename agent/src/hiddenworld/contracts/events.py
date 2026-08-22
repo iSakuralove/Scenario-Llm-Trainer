@@ -126,6 +126,8 @@ class PublicTraceEvent(BaseModel):
 
     sequence: int
     kind: RunEventKind
+    round: int = Field(default=0, ge=0)
+    call_id: str = ""
     status: RunEventStatus = "completed"
     summary: str = ""
     text: str = ""

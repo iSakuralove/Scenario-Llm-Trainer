@@ -20,6 +20,7 @@ type TurnRequest struct {
 	OriginalUserMessage string                   `json:"original_user_message,omitempty"`
 	ActionHistory       []ActionHistoryEntry     `json:"action_history,omitempty"`
 	ToolStates          map[string]ToolStateView `json:"tool_states,omitempty"`
+	TurnContext         *TurnEnvelope            `json:"turn_context,omitempty"`
 	// GuidanceState 是上一轮 Go 已归约的安全教学导航；不包含答案、证据 ID
 	// 或内部裁判结果，只用于让下一轮 Agent 知道是否需要收拢方向。
 	GuidanceState *GuidanceState `json:"guidance_state,omitempty"`
@@ -178,14 +179,38 @@ type GuidanceState struct {
 type ActionHistoryEntry struct {
 	Action          string `json:"action"`
 	ToolName        string `json:"tool_name"`
+	Round           int    `json:"round,omitempty"`
+	CallID          string `json:"call_id,omitempty"`
 	DecisionSummary string `json:"decision_summary,omitempty"`
 	Status          string `json:"status,omitempty"`
 }
 
 // ToolStateView 只表达工具在当前会话中的粗粒度生命周期和原因。
 type ToolStateView struct {
-	State  string `json:"state"`
-	Reason string `json:"reason,omitempty"`
+	State         string `json:"state"`
+	Reason        string `json:"reason,omitempty"`
+	CallCount     int    `json:"call_count,omitempty"`
+	RepeatPolicy  string `json:"repeat_policy,omitempty"`
+	CanCall       bool   `json:"can_call"`
+	BlockedReason string `json:"blocked_reason,omitempty"`
+	LastCallID    string `json:"last_call_id,omitempty"`
+	RetryPolicy   string `json:"retry_policy,omitempty"`
+}
+
+// TurnEnvelope 是 Go → Python 的当前轮统一安全元数据。
+// 它不携带 HiddenWorld、答案或原始 Thought，只负责表达同一 Turn 的归属、
+// 继续关系、上一动作和 Runtime 阶段。
+type TurnEnvelope struct {
+	TurnID           string `json:"turn_id"`
+	StateRevision    int    `json:"state_revision"`
+	Round            int    `json:"round"`
+	Phase            string `json:"phase"`
+	InputSource      string `json:"input_source"`
+	UserMessage      string `json:"user_message"`
+	Continuation     bool   `json:"continuation"`
+	ContinuationNote string `json:"continuation_note"`
+	LastActionID     string `json:"last_action_id,omitempty"`
+	LastActionStatus string `json:"last_action_status,omitempty"`
 }
 
 type TurnControl struct {
@@ -237,6 +262,8 @@ type Proposal struct {
 type PublicTraceEvent struct {
 	Sequence    int                     `json:"sequence"`
 	Kind        string                  `json:"kind"`
+	Round       int                     `json:"round,omitempty"`
+	CallID      string                  `json:"call_id,omitempty"`
 	Status      string                  `json:"status"`
 	Summary     string                  `json:"summary"`
 	Text        string                  `json:"text"`

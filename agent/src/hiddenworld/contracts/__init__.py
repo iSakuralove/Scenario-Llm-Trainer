@@ -25,6 +25,7 @@ from .agent_context import (
     AgentTurnControlView,
     EvidenceRequestView,
     HypothesisCatalogEntry,
+    TurnEnvelope,
     TurnPhase,
     ToolStateView,
 )
@@ -187,6 +188,7 @@ __all__ = [
     "AgentSemanticDecision",
     "GuidanceState",
     "TurnPhase",
+    "TurnEnvelope",
     "ActionHistoryEntry",
     "ActionCatalogEntry",
     "AgentBudgetView",

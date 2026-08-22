@@ -152,6 +152,7 @@ type ScenarioRunEventPayload struct {
 type ScenarioTaskPayload struct {
 	TaskID    string `json:"task_id"`
 	CallID    string `json:"call_id,omitempty"`
+	Round     int    `json:"round,omitempty"`
 	Title     string `json:"title"`
 	State     string `json:"state"`
 	ToolRef   string `json:"tool_ref,omitempty"`
@@ -164,6 +165,7 @@ type ScenarioToolResultPayload struct {
 	CallID       string                 `json:"call_id"`
 	ToolID       string                 `json:"tool_id"`
 	ToolKind     string                 `json:"tool_kind"`
+	Round        int                    `json:"round,omitempty"`
 	ResultStatus string                 `json:"result_status"`
 	DurationMS   int                    `json:"duration_ms"`
 	Content      *ScenarioPublicContent `json:"content,omitempty"`

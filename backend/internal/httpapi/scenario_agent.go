@@ -1816,6 +1816,8 @@ func scenarioActionHistoryForAgent(
 				appendEntry(agentclient.ActionHistoryEntry{
 					Action:          "tool_call",
 					ToolName:        toolName,
+					Round:           task.Round,
+					CallID:          task.CallID,
 					DecisionSummary: "本轮请求查看该公开观察",
 				})
 			case "tool_result":
@@ -1826,6 +1828,8 @@ func scenarioActionHistoryForAgent(
 				appendEntry(agentclient.ActionHistoryEntry{
 					Action:          "tool_result",
 					ToolName:        result.ToolID,
+					Round:           result.Round,
+					CallID:          result.CallID,
 					DecisionSummary: scenarioToolResultDecisionSummary(result.ResultStatus),
 					Status:          result.ResultStatus,
 				})
@@ -1849,7 +1853,7 @@ func scenarioToolStatesForAgent(
 		if action == "" || !scenarioPublicObservationToolName(world, action) {
 			continue
 		}
-		states[action] = agentclient.ToolStateView{State: "consumed", Reason: "本会话已使用，不可重复调用"}
+		states[action] = agentclient.ToolStateView{State: "consumed", Reason: "本会话已使用，不可重复调用", CanCall: false, RepeatPolicy: "once_per_session", BlockedReason: "本会话已使用，不可重复调用"}
 	}
 	for _, message := range messages {
 		for _, event := range message.ResponseMeta.RunEvents {
@@ -1877,9 +1881,19 @@ func scenarioToolStatesForAgent(
 				}
 				switch task.State {
 				case domain.ScenarioTaskRejected:
-					states[toolName] = agentclient.ToolStateView{State: "blocked", Reason: "本轮动作未获 Runtime 批准，不重复尝试"}
+					states[toolName] = agentclient.ToolStateView{
+						State:         "blocked",
+						Reason:        "本轮动作未获 Runtime 批准，不重复尝试",
+						CanCall:       false,
+						BlockedReason: "本轮动作未获 Runtime 批准，不重复尝试",
+					}
 				case domain.ScenarioTaskUnsupported:
-					states[toolName] = agentclient.ToolStateView{State: "unavailable", Reason: "题目当前没有声明该工具"}
+					states[toolName] = agentclient.ToolStateView{
+						State:         "unavailable",
+						Reason:        "题目当前没有声明该工具",
+						CanCall:       false,
+						BlockedReason: "题目当前没有声明该工具",
+					}
 				}
 			}
 		}
@@ -1890,11 +1904,11 @@ func scenarioToolStatesForAgent(
 func scenarioToolStateForResult(status string) agentclient.ToolStateView {
 	switch status {
 	case "succeeded":
-		return agentclient.ToolStateView{State: "consumed", Reason: "本会话已使用，不可重复调用"}
+		return agentclient.ToolStateView{State: "consumed", Reason: "本会话已使用，不可重复调用", CanCall: false, RepeatPolicy: "once_per_session", BlockedReason: "本会话已使用，不可重复调用"}
 	case "failed", "timeout":
-		return agentclient.ToolStateView{State: "attempted", Reason: "本次动作未形成公开观察"}
+		return agentclient.ToolStateView{State: "failed_retryable", Reason: "本次动作未形成公开观察", CanCall: false, RetryPolicy: "no_retry", BlockedReason: "本次动作未形成公开观察"}
 	default:
-		return agentclient.ToolStateView{State: "blocked", Reason: "本轮动作未获 Runtime 批准，不重复尝试"}
+		return agentclient.ToolStateView{State: "blocked", Reason: "本轮动作未获 Runtime 批准，不重复尝试", CanCall: false, BlockedReason: "本轮动作未获 Runtime 批准，不重复尝试"}
 	}
 }
 
@@ -2095,16 +2109,21 @@ func projectScenarioTraceEvents(
 			return nil, false
 		}
 		return []domain.ScenarioRunEvent{
-			scenarioObservationToolResultEvent(requestID, stateRevision, world, trace.Observation, 0),
+			scenarioObservationToolResultEvent(requestID, stateRevision, world, trace.Observation, trace.CallID, trace.Round, 0),
 		}, true
 	case "agent_tool_started":
 		if !scenarioPublicObservationToolName(world, trace.ToolName) {
 			return nil, false
 		}
+		callID := trace.CallID
+		if callID == "" {
+			callID = trace.ToolName
+		}
 		return []domain.ScenarioRunEvent{
 			scenarioTaskUpsertedEvent(requestID, stateRevision, 0, domain.ScenarioTaskPayload{
-				TaskID:  "obs:" + trace.ToolName,
-				CallID:  trace.ToolName,
+				TaskID:  "obs:" + callID,
+				CallID:  callID,
+				Round:   trace.Round,
 				Title:   "查看" + scenarioActionTarget(world, trace.ToolName),
 				State:   domain.ScenarioTaskRunning,
 				ToolRef: trace.ToolName,
@@ -2118,17 +2137,22 @@ func projectScenarioTraceEvents(
 		if trace.Status == "failed" {
 			state = domain.ScenarioTaskFailed
 		}
+		callID := trace.CallID
+		if callID == "" {
+			callID = trace.ToolName
+		}
 		events := []domain.ScenarioRunEvent{
 			scenarioTaskUpsertedEvent(requestID, stateRevision, 0, domain.ScenarioTaskPayload{
-				TaskID:  "obs:" + trace.ToolName,
-				CallID:  trace.ToolName,
+				TaskID:  "obs:" + callID,
+				CallID:  callID,
+				Round:   trace.Round,
 				Title:   "查看" + scenarioActionTarget(world, trace.ToolName),
 				State:   state,
 				ToolRef: trace.ToolName,
 			}),
 		}
 		if trace.Observation != nil {
-			events = append(events, scenarioObservationToolResultEvent(requestID, stateRevision, world, trace.Observation, trace.DurationMS))
+			events = append(events, scenarioObservationToolResultEvent(requestID, stateRevision, world, trace.Observation, callID, trace.Round, trace.DurationMS))
 		}
 		return events, true
 	case "tool_started":
@@ -2186,13 +2210,19 @@ func scenarioObservationToolResultEvent(
 	stateRevision int,
 	world *domain.HiddenWorld,
 	observation *agentclient.PublicObservation,
+	callID string,
+	round int,
 	durationMS int,
 ) domain.ScenarioRunEvent {
 	toolKind := scenarioToolKindForAction(world, observation.Action)
+	if strings.TrimSpace(callID) == "" {
+		callID = "obs:" + observation.Action
+	}
 	return scenarioToolResultEvent(requestID, stateRevision, 0, domain.ScenarioToolResultPayload{
-		CallID:       "obs:" + observation.Action,
+		CallID:       callID,
 		ToolID:       observation.Action,
 		ToolKind:     toolKind,
+		Round:        round,
 		ResultStatus: "succeeded",
 		DurationMS:   durationMS,
 		Content: &domain.ScenarioPublicContent{

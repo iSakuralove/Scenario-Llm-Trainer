@@ -49,9 +49,43 @@ ToolResultStatus = Literal[
     "already_completed",
 ]
 
-TurnPhase = Literal["new_user_turn", "after_tool_call"]
+TurnPhase = Literal["new_user_turn", "after_tool_call", "after_tool_error", "finalizing"]
+TurnInputSource = Literal["user_message", "quick_action", "tool_callback"]
 ActionHistoryKind = Literal["tool_call", "tool_result"]
-ToolState = Literal["available", "consumed", "attempted", "blocked", "unavailable"]
+ToolState = Literal[
+    "available",
+    "authorized",
+    "in_flight",
+    "consumed",
+    "blocked",
+    "failed_retryable",
+    "failed_terminal",
+    # 兼容旧题目/旧 Go 事件的状态；新 Runtime 不再主动产生 attempted。
+    "attempted",
+    "unavailable",
+]
+
+
+class TurnEnvelope(BaseModel):
+    """Runtime 为每次 Agent 决策生成的当前 Turn 安全信封。
+
+    旧的 phase/turn_id 字段仍保留在 AgentContext 里用于兼容，但模型应以这个
+    结构为同一轮归属、继续关系和上一动作状态的唯一解释来源。该对象只含
+    Runtime 已知的公开元数据，不包含答案、证据 ID 或原始 Thought。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    turn_id: str = ""
+    state_revision: int = Field(default=0, ge=0)
+    round: int = Field(default=0, ge=0)
+    phase: TurnPhase = "new_user_turn"
+    input_source: TurnInputSource = "user_message"
+    user_message: str = ""
+    continuation: bool = False
+    continuation_note: str = ""
+    last_action_id: str = ""
+    last_action_status: ToolResultStatus | None = None
 
 
 class ActionHistoryEntry(BaseModel):
@@ -66,6 +100,8 @@ class ActionHistoryEntry(BaseModel):
 
     action: ActionHistoryKind
     tool_name: str
+    round: int = Field(default=0, ge=0)
+    call_id: str = ""
     decision_summary: str = Field(default="", max_length=240)
     status: ToolResultStatus | None = None
 
@@ -77,6 +113,12 @@ class ToolStateView(BaseModel):
 
     state: ToolState
     reason: str = Field(default="", max_length=240)
+    call_count: int = Field(default=0, ge=0)
+    repeat_policy: str = "once_per_session"
+    can_call: bool = True
+    blocked_reason: str = Field(default="", max_length=240)
+    last_call_id: str = ""
+    retry_policy: str = "no_retry"
 
 
 class AgentToolResult(BaseModel):
@@ -155,9 +197,11 @@ class AgentContext(BaseModel):
     hypothesis_catalog: list[HypothesisCatalogEntry] = Field(default_factory=list)
     authorized_actions: list[AuthorizedActionRef] = Field(default_factory=list)
     tool_results: list[AgentToolResult] = Field(default_factory=list)
+    current_turn_observations: list[AgentToolResult] = Field(default_factory=list)
     action_history: list[ActionHistoryEntry] = Field(default_factory=list)
     tool_states: dict[str, ToolStateView] = Field(default_factory=dict)
     budget: AgentBudgetView
+    turn_context: TurnEnvelope = Field(default_factory=TurnEnvelope)
     # 这是上一轮归约后的安全教学状态切片。Runtime 每轮都应从持久化/请求快照
     # 回注它，而不是固定构造默认值，否则 Agent 会在每轮都误以为处于
     # normal_diagnosis，丢失卡住、核验和当前焦点。

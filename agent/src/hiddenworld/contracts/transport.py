@@ -15,7 +15,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from .answer import InternalAnswerComparison
-from .agent_context import ActionHistoryEntry, ToolStateView, TurnPhase
+from .agent_context import ActionHistoryEntry, ToolStateView, TurnEnvelope, TurnPhase
 from .assessment import GuidanceState, TeachingDecision, TurnAssessment, TurnControl
 from .authorization import StructuredUserAction
 from .events import PublicTraceEvent
@@ -128,6 +128,7 @@ class AgentTurnRequest(BaseModel):
     phase: TurnPhase = "new_user_turn"
     turn_id: str = ""
     original_user_message: str = ""
+    turn_context: TurnEnvelope | None = None
     action_history: list[ActionHistoryEntry] = Field(default_factory=list)
     tool_states: dict[str, ToolStateView] = Field(default_factory=dict)
     # 上一轮 Go 归约后的安全教学导航；缺失时 Runtime 从 learner_state 构造兼容默认值。

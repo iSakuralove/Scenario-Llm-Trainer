@@ -196,7 +196,7 @@ class SingleAgentRuntime:
         async def on_loop_event(event: AgentLoopEvent) -> None:
             if event.kind == "tool_batch_started":
                 await loop_streamer.emit_tool_started(
-                    [call.tool_id for call in event.payload]
+                    event.payload
                 )
             elif event.kind == "tool_result" and isinstance(event.payload, AgentToolResult):
                 await loop_streamer.emit_tool_result(event.payload)
@@ -317,6 +317,9 @@ class SingleAgentRuntime:
             except AgentLoopBudgetExceeded as exc:
                 raise PublicBoundaryRejected(str(exc)) from exc
 
+        # AgentLoop 已经拿到 final_reply 或预算/错误终态；从这里开始不再接受
+        # 新的 Observation 计划，TurnEnvelope 的生命周期进入 finalizing。
+        mark_phase("finalizing")
         mark_phase("assessment")
         successful_actions = [
             item.payload.tool_id
@@ -686,6 +689,7 @@ class _LoopTraceStreamer:
         self.streamed_actions: set[str] = set()
         self._successful_actions: list[str] = []
         self._sequence = 0
+        self._round = 0
 
     def _next_sequence(self) -> int:
         self._sequence += 1
@@ -697,13 +701,16 @@ class _LoopTraceStreamer:
         if self.on_public_trace is not None:
             await self.on_public_trace(sequenced)
 
-    async def emit_tool_started(self, tool_ids) -> None:
-        for tool_id in tool_ids:
+    async def emit_tool_started(self, calls) -> None:
+        self._round += 1
+        for call in calls:
             await self._emit(
                 PublicTraceEvent(
                     sequence=0,
                     kind="agent_tool_started",
-                    tool_name=tool_id,
+                    round=self._round,
+                    call_id=call.call_id,
+                    tool_name=call.tool_id,
                     status="started",
                 )
             )
@@ -714,6 +721,8 @@ class _LoopTraceStreamer:
                 PublicTraceEvent(
                     sequence=0,
                     kind="agent_tool_result",
+                    round=self._round,
+                    call_id=result.call_id,
                     tool_name=result.tool_id,
                     status="failed",
                 )
@@ -739,6 +748,8 @@ class _LoopTraceStreamer:
                 PublicTraceEvent(
                     sequence=0,
                     kind="agent_tool_result",
+                    round=self._round,
+                    call_id=result.call_id,
                     tool_name=result.tool_id,
                     status="completed",
                 )
@@ -748,6 +759,8 @@ class _LoopTraceStreamer:
             PublicTraceEvent(
                 sequence=0,
                 kind="agent_tool_result",
+                round=self._round,
+                call_id=result.call_id,
                 tool_name=result.tool_id,
                 status="completed",
                 observation=PublicObservation(

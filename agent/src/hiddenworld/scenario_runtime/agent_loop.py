@@ -170,7 +170,12 @@ class AgentLoop:
                     )
                     for call in plan.deferred
                 )
-            current = context_after_tool_results(current, output=output, results=results)
+            current = context_after_tool_results(
+                current,
+                output=output,
+                results=results,
+                round_index=round_index + 1,
+            )
             guidance_state = current.guidance_state
             if output.teaching_decision is not None:
                 guidance_state = guidance_state.model_copy(
@@ -188,7 +193,6 @@ class AgentLoop:
                 )
             current = current.model_copy(
                 update={
-                    "tool_results": [*current.tool_results, *results],
                     "guidance_state": guidance_state,
                     "budget": current.budget.model_copy(
                         update={
@@ -208,6 +212,8 @@ def _append_action_history(
     existing: list[ActionHistoryEntry],
     output: AgentModelOutput | None,
     results: list[AgentToolResult],
+    *,
+    round_index: int = 0,
 ) -> list[ActionHistoryEntry]:
     """把本轮动作和结果归纳为模型下一轮可读的短历史。"""
 
@@ -218,6 +224,8 @@ def _append_action_history(
             ActionHistoryEntry(
                 action="tool_call",
                 tool_name=call.tool_id,
+                round=round_index,
+                call_id=call.call_id,
                 decision_summary=summary,
             )
             for call in output.calls
@@ -226,6 +234,8 @@ def _append_action_history(
         ActionHistoryEntry(
             action="tool_result",
             tool_name=result.tool_id,
+            round=round_index,
+            call_id=result.call_id,
             decision_summary=_result_decision_summary(result),
             status=result.status,
         )
@@ -239,23 +249,55 @@ def context_after_tool_results(
     *,
     output: AgentModelOutput | None,
     results: list[AgentToolResult],
+    round_index: int | None = None,
 ) -> AgentContext:
     """把工具动作和终态结果回注到同一轮安全上下文。"""
 
     if output is None and not results:
         return context
-    action_history = _append_action_history(context.action_history, output, results)
+    effective_round = round_index if round_index is not None else context.turn_context.round + 1
+    action_history = _append_action_history(
+        context.action_history,
+        output,
+        results,
+        round_index=effective_round,
+    )
     tool_states = _update_tool_states(context.tool_states, results)
+    has_error = any(item.status != "succeeded" for item in results)
+    next_phase = "after_tool_error" if has_error else "after_tool_call"
+    successful_results = [
+        item for item in results if item.status == "succeeded" and item.content.strip()
+    ]
+    last_result = results[-1] if results else None
+    envelope = context.turn_context.model_copy(
+        update={
+            "round": effective_round,
+            "phase": next_phase,
+            "continuation": True,
+            "continuation_note": (
+                "这是同一用户轮次的继续；上一动作未形成公开观察，请基于失败状态决定是否收束。"
+                if has_error
+                else "这是同一用户轮次的继续；上一动作已经返回公开观察，请基于 Observation 决策。"
+            ),
+            "last_action_id": last_result.call_id if last_result is not None else "",
+            "last_action_status": last_result.status if last_result is not None else None,
+        }
+    )
     return context.model_copy(
         update={
             "tool_results": [*context.tool_results, *results],
+            "current_turn_observations": [
+                *context.current_turn_observations,
+                *successful_results,
+            ],
             "action_history": action_history,
             "tool_states": tool_states,
             "authorized_actions": _remove_consumed_authorizations(
                 context.authorized_actions,
                 tool_states,
             ),
-            "phase": "after_tool_call" if results else context.phase,
+            "phase": next_phase if results else context.phase,
+            "turn_context": envelope,
         },
         deep=True,
     )
@@ -288,32 +330,58 @@ def _update_tool_states(
         if not result.tool_id:
             continue
         previous = states.get(result.tool_id, ToolStateView(state="available"))
+        call_count = previous.call_count + 1
+        common = {
+            "call_count": call_count,
+            "last_call_id": result.call_id,
+        }
         if result.status in {"succeeded", "already_completed"}:
             states[result.tool_id] = previous.model_copy(
                 update={
+                    **common,
                     "state": "consumed",
                     "reason": "本会话已使用，不可重复调用",
+                    "blocked_reason": "本会话已使用，不可重复调用",
+                    "can_call": False,
                 }
             )
         elif result.status == "unsupported":
             states[result.tool_id] = previous.model_copy(
                 update={
+                    **common,
                     "state": "unavailable",
                     "reason": "题目当前没有声明该工具",
+                    "blocked_reason": "题目当前没有声明该工具",
+                    "can_call": False,
                 }
             )
         elif result.status == "rejected":
             states[result.tool_id] = previous.model_copy(
                 update={
+                    **common,
                     "state": "blocked",
                     "reason": "本轮动作未获 Runtime 批准，不重复尝试",
+                    "blocked_reason": "本轮动作未获 Runtime 批准，不重复尝试",
+                    "can_call": False,
+                }
+            )
+        elif result.status in {"timeout", "failed"}:
+            states[result.tool_id] = previous.model_copy(
+                update={
+                    **common,
+                    "state": "failed_retryable",
+                    "reason": "本次动作未形成公开观察",
+                    "blocked_reason": "本次动作未形成公开观察",
+                    "can_call": False,
                 }
             )
         else:
             states[result.tool_id] = previous.model_copy(
                 update={
+                    **common,
                     "state": "attempted",
                     "reason": "本次动作未形成公开观察，前置条件或执行状态仍需由 Runtime 判断",
+                    "can_call": False,
                 }
             )
     return states

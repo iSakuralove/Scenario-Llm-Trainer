@@ -400,3 +400,86 @@ Runtime 教学枚举仍由 Go/Python 私有持有；学生侧只展示调查状�
 - Go 会话详情测试断言状态切片存在，且内部假设/证据 ID 不出现在响应 JSON；
 - 前端真实浏览器确认新会话同时看到状态面板和空的常驻线索区，工具回合后公开计数与页面状态一致；
 - 现有原始思维链测试流仍走独立 `reasoning_raw_delta`，不进入会话历史或调查状态切片。
+
+## Scenario 10: TurnEnvelope 与工具调用身份必须稳定
+
+### 1. Scope / Trigger
+
+修改 Python `AgentContext`、`AgentLoop`、`TurnEnvelope`，Go
+`TurnRequest`/`projectScenarioTraceEvents`，或前端 Scenario TaskList 与工具结果归并时，必须遵守本契约。
+
+### 2. Signatures
+
+```python
+class TurnEnvelope:
+    turn_id: str
+    state_revision: int
+    round: int
+    phase: Literal[
+        "new_user_turn",
+        "after_tool_call",
+        "after_tool_error",
+        "finalizing",
+    ]
+    input_source: str
+    user_message: str
+    continuation: bool
+    current_turn_observations: list[str]
+```
+
+```go
+// backend/internal/httpapi/scenario_agent.go
+func projectScenarioTraceEvents(trace []agentclient.PublicTraceEvent) []ScenarioRunEvent
+```
+
+### 3. Contracts
+
+- 同一 Turn 的首轮请求必须使用 `phase=new_user_turn` 并保留用户原话；工具回注不能被当成新的用户消息。
+- 成功工具结果必须使用 `phase=after_tool_call`；拒绝、失败、超时或前置条件不足必须使用 `phase=after_tool_error`。
+- `agent_tool_started` 与对应 `agent_tool_result` 必须拥有相同的 `round` 和 `call_id`。新事件的任务身份固定为 `task_id=obs:<call_id>`。
+- `round` 只描述同一 Turn 内的子轮次，不能替代 `call_id`；两个合法的同工具调用必须由不同 `call_id` 区分。
+- 失败结果不能进入成功 Observation、证据集合或公开成功任务；`can_call=false` 的工具不得重复执行。
+- 前端可以为旧历史终态事件提供窄 fallback，但只允许在同工具同轮存在唯一 pending/running 候选时合并，不能按工具名全局去重。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 结果 |
+|---|---|
+| started/result 缺少或不一致的 `call_id`/`round` | 新 Runtime 事件视为非法，必须在产生端补齐；不能由前端静默伪造新调用 |
+| 同一工具被合法调用两次且 `call_id` 不同 | 保持两条独立任务，不得按工具名合并 |
+| 旧终态事件为 `obs:<tool_ref>` 且存在唯一同工具 pending 调用 | 只读回放可合并到该调用，并保留候选的真实 `call_id` |
+| 工具已消费或前置条件不足 | `after_tool_error`，不新增成功 Observation，不显示成功勾选 |
+| Runtime 进入 `finalizing` | 不得重新发起工具动作，只能使用已回注事实完成回复 |
+
+### 5. Good/Base/Bad Cases
+
+- Good：started 和 result 都是 `call_id=call-2, round=1`，TaskList 从 running 原地变为 completed。
+- Base：旧历史只有 `task_id=obs:inspect:change.gateway_release`，且页面有唯一同工具 pending 任务时，兼容归并一次。
+- Bad：started 使用 `call-2`、result 使用工具名作为 call id；前端因此渲染两条同名任务。
+- Bad：为“修复重复”按工具名全局去重，导致同一 Turn 内两次真实调用被错误合并。
+
+### 6. Tests Required
+
+- Python Runtime 测试断言 started/result 的 `call_id` 与 `round` 完全相等。
+- Go 事件投影测试断言同一调用的 task id、round、call id 在实时事件和最终回放中一致。
+- 前端归并测试覆盖 canonical identity、旧 fallback 和两个不同 call id 的同工具调用。
+- 浏览器验收覆盖成功调用、刷新恢复和重复消费后的 `after_tool_error`/无 Observation 路径，并检查正式历史不含 raw Thought。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+# 成功 Observation 分支只写工具名，丢失调用身份和轮次
+emit_tool_result(task_id=f"obs:{result.tool_name}")
+```
+
+#### Correct
+
+```python
+emit_tool_result(
+    task_id=f"obs:{result.call_id}",
+    call_id=result.call_id,
+    round=self._round,
+)
+```

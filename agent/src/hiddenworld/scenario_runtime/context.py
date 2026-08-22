@@ -20,6 +20,7 @@ from hiddenworld.contracts import (
     GuidanceState,
     HypothesisCatalogEntry,
     LearnerStateView,
+    TurnEnvelope,
     TurnControl,
     ToolStateView,
 )
@@ -161,6 +162,36 @@ def project_agent_context(
             update={"repair_status": learner.repair_status}
         )
 
+    supplied_envelope = getattr(request, "turn_context", None)
+    if supplied_envelope is not None:
+        turn_envelope = supplied_envelope.model_copy(deep=True)
+    else:
+        input_source = "quick_action" if request.structured_user_action is not None else "user_message"
+        last_result = next(
+            (
+                item
+                for item in reversed(getattr(request, "action_history", []))
+                if item.action == "tool_result"
+            ),
+            None,
+        )
+        turn_envelope = TurnEnvelope(
+            turn_id=getattr(request, "turn_id", "") or request.request_id,
+            state_revision=request.state_revision,
+            round=0,
+            phase=getattr(request, "phase", "new_user_turn"),
+            input_source=input_source,
+            user_message=request.user_message,
+            continuation=getattr(request, "phase", "new_user_turn") != "new_user_turn",
+            continuation_note=(
+                "这是同一用户轮次的继续，不是新的用户请求。"
+                if getattr(request, "phase", "new_user_turn") != "new_user_turn"
+                else "这是本轮用户消息第一次进入 Agent。"
+            ),
+            last_action_id=(last_result.call_id if last_result is not None else ""),
+            last_action_status=(last_result.status if last_result is not None else None),
+        )
+
     return AgentContext(
         public_scenario=request.public_scenario,
         conversation_summary=request.conversation_summary.strip(),
@@ -185,6 +216,7 @@ def project_agent_context(
         authorized_actions=authorized,
         action_history=[item.model_copy(deep=True) for item in getattr(request, "action_history", [])],
         tool_states=tool_states,
+        turn_context=turn_envelope,
         budget=AgentBudgetView(
             remaining_model_rounds=11,
             remaining_tool_calls=10,

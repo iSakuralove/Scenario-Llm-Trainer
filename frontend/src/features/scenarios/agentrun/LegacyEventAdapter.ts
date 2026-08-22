@@ -79,7 +79,7 @@ export function buildAgentRunViewModel(events: ScenarioRunEventAny[]): AgentRunV
           understandingSettled = true
         },
         upsertTask(task) {
-          tasksById.set(task.task_id, { ...tasksById.get(task.task_id), ...task })
+          upsertTaskWithLegacyFallback(tasksById, task)
         },
         linkTaskResult(callId, resultStatus) {
           for (const [taskId, task] of tasksById) {
@@ -116,6 +116,56 @@ export function buildAgentRunViewModel(events: ScenarioRunEventAny[]): AgentRunV
   model.understanding = understandingChunks.length > 0 ? { chunks: understandingChunks, settled: understandingSettled } : null
   model.tasks = [...tasksById.values()]
   return model
+}
+
+/**
+ * V2 正式事件应始终以 task_id/call_id 关联同一次工具调用。旧运行中曾有
+ * agent_tool_started 使用模型 call_id、agent_tool_result 回退到 tool_ref 的
+ * 情况；仅按 task_id 会把同一次调用拆成两行。只在终态事件明确呈现这种
+ * fallback 身份、且当前轮只有一个同工具的未完成任务时收口，避免把同一轮
+ * 合法的两次独立调用按工具名误合并。
+ */
+function upsertTaskWithLegacyFallback(
+  tasksById: Map<string, ScenarioTaskPayload>,
+  task: ScenarioTaskPayload,
+): void {
+  const current = tasksById.get(task.task_id)
+  if (current) {
+    tasksById.set(task.task_id, { ...current, ...task })
+    return
+  }
+
+  if (isLegacyFallbackTerminalTask(task)) {
+    const candidates = [...tasksById.entries()].filter(([, candidate]) => (
+      candidate.state === 'pending'
+      || candidate.state === 'running'
+    ) && candidate.tool_ref === task.tool_ref
+      && (task.round === undefined
+        || candidate.round === undefined
+        || candidate.round === task.round))
+    if (candidates.length === 1) {
+      const [candidateId, candidate] = candidates[0]
+      tasksById.set(candidateId, {
+        ...candidate,
+        ...task,
+        task_id: candidate.task_id,
+        call_id: candidate.call_id ?? task.call_id,
+        round: candidate.round ?? task.round,
+      })
+      return
+    }
+  }
+
+  tasksById.set(task.task_id, task)
+}
+
+function isLegacyFallbackTerminalTask(task: ScenarioTaskPayload): boolean {
+  return (
+    (task.state === 'completed' || task.state === 'failed')
+    && Boolean(task.tool_ref)
+    && task.task_id === `obs:${task.tool_ref}`
+    && (task.call_id === undefined || task.call_id === task.tool_ref)
+  )
 }
 
 interface ViewModelCallbacks {

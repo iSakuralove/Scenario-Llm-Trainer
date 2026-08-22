@@ -150,6 +150,7 @@ export interface ScenarioPublicContent {
 export interface ScenarioTaskPayload {
   task_id: string
   call_id?: string
+  round?: number
   title: string
   state: ToolCallState
   tool_ref?: string
@@ -161,6 +162,7 @@ export interface ScenarioToolResultPayload {
   call_id: string
   tool_id: string
   tool_kind: string
+  round?: number
   result_status: ToolResultStatus
   duration_ms: number
   content?: ScenarioPublicContent
