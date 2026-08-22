@@ -104,9 +104,24 @@ replay_reply_mismatch = 0
 - 模型每轮只接收当前消息、最近 2～4 个完整回合、结构化 LearnerStateView、InvestigationView、公开线索/提示/观察和安全简报。
 - 12/18 Turn 轨迹中，解释递减、调查主线不丢、触发因素和潜在问题不混淆。
 
+当前收束进度（2026-08-22）：
+
+- `project_agent_context` 已固定只向模型投影最近 4 个完整回合（最多 8 条 user/mentor 消息），当前学生消息独立保留。
+- GuidanceState、Hint 等级和上一轮 terminal 切片会在重放/重新投影时保持稳定；completion 判定、答案比较和内部 ID 不进入模型上下文。
+- 新增 `agent/tests/test_phase5_long_session.py`，覆盖 12/18 轮解释递减、Hint 1→4 逐级提升、进展后回落、上下文深拷贝隔离和 18 轮 request/state_revision 递增。
+- 定向验证：Phase 5/支付回调行为/评测矩阵共 `20 passed`；Python 全量当前 `222 passed, 8 deselected`。
+
 ### Phase 6：效果回归和旧路径退役
 
 建立行为快照而非全文快照，覆盖：基础学生、工程学生、知识碎片化学生、未提供数据、跑偏、卡住、过早结论、止血/治本区分、修复验证、重复请求、断线重连、CAS 冲突、未授权工具、伪造结果和 raw reasoning 旁路。
+
+当前收束进度（2026-08-22）：
+
+- 前端不再把 `debug_trace/reasoning_raw_delta` 传入学生侧 `AgentRun`；学生只看到安全的理解摘要、通用处理中状态、公开工具结果和导师正文。
+- 新增前端 E2E 回归：即使调试旁路携带内部 action/authorization 文本，学生消息区也不得渲染原始思维内容。
+- 真实浏览器已验证：普通消息在 150ms 采样时只有处理中状态，模型阶段结束后才出现工具卡；QuickAction 同样先显示处理中，再出现查询结果和导师解释。
+- V2 多工具回合恢复任务摘要卡；学生侧 QuickAction 只展示少量当前候选，不把完整工具目录伪装成推荐清单。
+- Go 固定题资产已通过 `go generate ./internal/store` 与 Agent 源题库同步，避免题目观察/工具目录跨层漂移。
 
 ### Phase 7：离线 AIJob（后置）
 
@@ -149,4 +164,5 @@ replay_reply_mismatch = 0
 - 将普通消息与 QuickAction 的授权准入进一步收束为同一 `ScenarioActionGate`，并补充 QuickAction 伪造动作测试。
 - 将 Python 内部事件收束为 `ScenarioRunFrame`，统一 Go 正式事件投影和临时 `run_progress`。
 - 完成真实浏览器的提交失败、CAS 冲突、断线重连和长会话关键路径验收。
-- 继续运行 12/18 Turn 行为轨迹和最终答案闭环评测，完成 Phase 5/6 后再退役旧写入路径。
+- 继续运行 12/18 Turn 行为轨迹和最终答案闭环评测；当前 Python、Go、前端 build/lint 与场景流式 E2E 的相关门槛已通过，再评估 Phase 5/6 的整体完成门槛。
+- 保持 raw reasoning 仅在测试调试旁路存在，禁止重新接回学生侧页面。

@@ -32,6 +32,10 @@ export function ThinkingReasoning({
   rawActive = false,
   rawElapsedSeconds,
 }: ThinkingReasoningProps) {
+  const prefersReducedMotion = useMemo(
+    () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false,
+    [],
+  )
   // AICSS 风格：思考中自动展开并跟随打字，完成后折叠为“思考 用时 N 秒”，
   // 用户可再点开自由滚动；历史回放不会重新铺开整段调试思维。
   const [open, setOpen] = useState(false)
@@ -45,18 +49,10 @@ export function ThinkingReasoning({
   const viewportRef = useRef<HTMLDivElement>(null)
 
   const rawText = rawChunks.join('')
-  const typingDone = typedLength >= rawText.length
-  const prefersReducedMotion = useMemo(
-    () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false,
-    [],
-  )
+  const typingDone = prefersReducedMotion || typedLength >= rawText.length
 
   useEffect(() => {
     if (typingDone) return
-    if (prefersReducedMotion) {
-      setTypedLength(rawText.length)
-      return
-    }
     const timer = window.setInterval(() => {
       setTypedLength((prev) => {
         if (prev >= rawText.length) return prev
@@ -97,7 +93,7 @@ export function ThinkingReasoning({
   }, [rawActive, typingDone])
 
   const expanded = rawActive || open
-  const typedText = rawText.slice(0, typedLength)
+  const typedText = prefersReducedMotion ? rawText : rawText.slice(0, typedLength)
 
   const measureFade = () => {
     const el = viewportRef.current

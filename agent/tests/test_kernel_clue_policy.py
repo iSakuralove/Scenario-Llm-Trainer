@@ -19,7 +19,7 @@ def test_clue_gate_releases_multiple_explicitly_requested_evidence_in_one_turn(h
 
 
 def test_clue_gate_gives_nothing_when_the_student_names_no_action(hidden_world) -> None:
-    """常规通路的死角：说不出动作的学生一条都拿不到。"""
+    """没有明确动作时（包括卡住状态）不能自动释放证据。"""
     assert ClueGate().approve(
         hidden_world,
         actions=[],
@@ -28,23 +28,36 @@ def test_clue_gate_gives_nothing_when_the_student_names_no_action(hidden_world) 
     ) == []
 
 
-def test_stall_unlock_releases_one_entry_level_evidence(hidden_world) -> None:
-    release = ClueGate().approve_on_stall(hidden_world, collected_evidence=[])
+def test_stalled_policy_keeps_evidence_release_separate_from_hint_state(learner_state) -> None:
+    """连续卡住只进入教学状态，不能被伪装成学生获得了证据。"""
+    learner_state.stalled_turns = 3
+    analysis = TurnAnalysis(
+        public_summary="我不知道从哪里开始。",
+        actions=[],
+        hypothesis_id="",
+        hypothesis_raw="",
+        made_claim=False,
+        contains_answer_attempt=False,
+        answer_attempt_text="",
+        established_facts=[],
+        is_stuck=True,
+        is_noise=False,
+        student_affect="frustrated",
+        confidence=0.3,
+    )
 
-    assert release == "E_SLOW_SQL"
-    node = hidden_world.evidence_by_id(release)
-    assert node is not None
-    # 兜底释放只放入口级证据：有前置的节点会跳过整段推理链。
-    assert node.prerequisites == []
+    constraints = TeachingPolicy().compile(
+        learner_state,
+        analysis=analysis,
+        completion_allowed=False,
+        evidence_coverage="0/2",
+        may_release=[],
+        allowed_category=None,
+        contradictions=[],
+    )
 
-
-def test_stall_unlock_skips_already_collected_and_prerequisite_gated_evidence(hidden_world) -> None:
-    collected = [
-        node.evidence_id for node in hidden_world.evidence_graph if not node.prerequisites
-    ]
-
-    # 所有无前置证据都拿过之后不再兜底，绝不退而释放有前置的节点。
-    assert ClueGate().approve_on_stall(hidden_world, collected_evidence=collected) == ""
+    assert constraints.may_release == []
+    assert constraints.facts.stalled_turns == 3
 
 
 def test_policy_compiles_boundaries_without_choosing_a_mentor_action(learner_state) -> None:

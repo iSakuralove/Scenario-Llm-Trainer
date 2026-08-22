@@ -83,6 +83,43 @@ test('student sees safe Codex-style run events during scenario troubleshooting',
   await expect(page.locator('.message-thread')).not.toContainText('standard_procedure')
 })
 
+test('debug reasoning remains out of the student-facing scenario transcript', async ({ page }) => {
+  const sessionId = 'e2e-debug-reasoning-hidden-session'
+  const userContent = '先看网关配置'
+  const reply = '先确认入口层的公开配置，再用日志验证时间线。'
+  const runEvents = [
+    { request_id: 'run-debug-hidden', sequence: 1, kind: 'user_message', status: 'completed', text: userContent },
+    {
+      request_id: 'run-debug-hidden', sequence: 2, kind: 'reasoning_summary_completed', status: 'completed',
+      reasoning: { stage: 'understanding_message', text: '已识别你想先核对入口层配置。' },
+    },
+    { request_id: 'run-debug-hidden', sequence: 3, kind: 'reply_delta', status: 'running', text: reply },
+    { request_id: 'run-debug-hidden', sequence: 4, kind: 'turn_completed', status: 'completed', summary: '本轮排查已完成。' },
+  ]
+
+  await setupScenarioEntry(page, sessionId)
+  await page.route(`**/api/v1/scenarios/sessions/${sessionId}/messages`, async (route) => {
+    await fulfillSSE(route, [
+      ['run_event', runEvents[0]],
+      ['debug_trace', { request_id: 'run-debug-hidden', sequence: 99, kind: 'reasoning_raw_delta', text: 'inspect:secret_internal_action authorization approved' }],
+      ...runEvents.slice(1).map((event) => ['run_event', event] as [string, unknown]),
+      ['finish', scenarioFinishPayload(sessionId, userContent, reply, runEvents)],
+    ])
+  })
+
+  await loginAs(page, 'student')
+  await page.goto('/scenarios')
+  await page.getByRole('button', { name: '开始排查' }).click()
+  await page.getByPlaceholder('输入你的排查提问...').fill(userContent)
+  await page.getByRole('button', { name: '发送' }).click()
+
+  const run = page.getByTestId('scenario-agent-run')
+  await expect(run).toContainText(reply)
+  await expect(run.getByTestId('scenario-agent-raw-reasoning')).toHaveCount(0)
+  await expect(run).not.toContainText('inspect:secret_internal_action')
+  await expect(run).not.toContainText('authorization approved')
+})
+
 test('answer attempt shows the real compare_answer tool with public-only details', async ({ page }) => {
   const sessionId = 'e2e-answer-tool-session'
   const userContent = '我认为目前的证据还需要继续验证索引问题'
@@ -168,7 +205,7 @@ test('answer attempt shows the real compare_answer tool with public-only details
   await toolButton.click()
   await expect(run).toContainText('答案对比')
   await expect(run).toContainText('还需要更多直接观察')
-  await expect(run).toContainText('继续补充能支撑这个结论的直接观察。')
+  await expect(run).toContainText('直接观察')
   // compare_answer 已无参数：界面不出现任何 answer_attempt_id 字样。
   await expect(run).not.toContainText('answer_attempt_id')
   for (const forbidden of ['claim_alignment', 'completion_allowed', 'missing_evidence', 'correct', 'target']) {
@@ -373,10 +410,12 @@ test('v2 run events render task list, quick actions and argument-free tool resul
     '回调访问日志',
     '网关 VIP 发布记录',
     '网关 VIP 后端池与路由差异',
-    '订单库回调写入日志',
-    'MySQL 慢查询日志',
   ]) {
     await expect(quickActions.getByRole('button', { name: label })).toBeVisible()
+  }
+  // Runtime 可以下发更多候选，但学生侧只展示少量当前可检查动作，避免把工具目录伪装成推荐清单。
+  for (const label of ['订单库回调写入日志', 'MySQL 慢查询日志']) {
+    await expect(quickActions.getByRole('button', { name: label })).toHaveCount(0)
   }
   await expect(quickActions).not.toContainText('可选检查')
   const quickAction = quickActions.getByRole('button', { name: '网关 VIP 后端池与路由差异' })

@@ -45,8 +45,6 @@ export function ScenarioSessionPage() {
   const sendError = useScenarioSessionStore((store) => store.sendError)
   const activeRun = useScenarioSessionStore((store) => store.activeRun)
   const completedRuns = useScenarioSessionStore((store) => store.completedRuns)
-  const completedDebugReasoning = useScenarioSessionStore((store) => store.completedDebugReasoning)
-  const completedDebugReasoningDuration = useScenarioSessionStore((store) => store.completedDebugReasoningDuration)
   const hydrateSession = useScenarioSessionStore((store) => store.hydrate)
   const sendMessage = useScenarioSessionStore((store) => store.sendMessage)
   const sendStructuredAction = useScenarioSessionStore((store) => store.sendStructuredAction)
@@ -62,10 +60,6 @@ export function ScenarioSessionPage() {
   const [isAnswerOpen, setAnswerOpen] = useState(false)
   const clueKeysRef = useRef<string[] | null>(null)
   const [animatedClueKeys, setAnimatedClueKeys] = useState<string[]>([])
-  const hasDebugReasoning = Boolean(
-    (activeRun?.reasoningChunks.length ?? 0) > 0
-    || Object.values(completedDebugReasoning).some((chunks) => chunks.length > 0),
-  )
   const isTurnInFlight = isSending || Boolean(
     activeRun && !activeRun.events.some((event) => event.kind === 'turn_failed'),
   )
@@ -282,11 +276,7 @@ export function ScenarioSessionPage() {
             <div className="chat-title-line">
               <strong>渐进式排查会话</strong>
             </div>
-            <span>
-              {hasDebugReasoning
-                ? '导师只依据已公开信息回应；调试内容不会计入会话记录。'
-                : '导师只依据已公开信息回应，不提前展示隐藏答案。'}
-            </span>
+            <span>导师只依据已公开信息回应，不提前展示隐藏答案。</span>
           </div>
           <button
             className="ghost-button compact"
@@ -302,8 +292,6 @@ export function ScenarioSessionPage() {
             <AgentRun
               key={message.id}
               events={completedRuns[message.id] ?? message.response_meta.run_events ?? []}
-              debugReasoning={completedDebugReasoning[message.id]}
-              debugReasoningElapsed={completedDebugReasoningDuration[message.id]}
               fallbackUser={resolveQuickActionUserLabel(
                 message.user_content,
                 { events: completedRuns[message.id] ?? message.response_meta.run_events ?? [] },
@@ -316,7 +304,6 @@ export function ScenarioSessionPage() {
           {activeRun && (
             <AgentRun
               events={activeRun.events}
-              debugReasoning={activeRun.reasoningChunks}
               fallbackUser={resolveQuickActionUserLabel(
                 activeRun.structuredAction?.title ?? activeRun.userContent,
                 {

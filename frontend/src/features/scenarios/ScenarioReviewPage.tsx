@@ -25,23 +25,29 @@ export function ScenarioReviewPage() {
   const { id = '' } = useParams()
   const [review, setReview] = useState<Awaited<ReturnType<typeof api.scenarioReview>> | null>(null)
   const [loadError, setLoadError] = useState('')
+  const [loadedRequestKey, setLoadedRequestKey] = useState('')
+  const requestKey = `${token}:${id}`
 
   useEffect(() => {
     let cancelled = false
-    setReview(null)
-    setLoadError('')
     void api.scenarioReview(token, id)
       .then((data) => {
-        if (!cancelled) setReview(data)
+        if (cancelled) return
+        setReview(data)
+        setLoadError('')
+        setLoadedRequestKey(requestKey)
       })
       .catch((error) => {
-        if (!cancelled) setLoadError(error instanceof Error ? error.message : '复盘读取失败')
+        if (cancelled) return
+        setLoadError(error instanceof Error ? error.message : '复盘读取失败')
+        setLoadedRequestKey(requestKey)
       })
     return () => {
       cancelled = true
     }
-  }, [token, id])
+  }, [requestKey, token, id])
 
+  if (loadedRequestKey !== requestKey) return <Loading title="生成复盘" />
   if (loadError) {
     return (
       <EmptyState

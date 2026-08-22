@@ -8,6 +8,7 @@ import type {
 } from '../../../types/agentRun'
 import { buildAgentRunViewModel } from './LegacyEventAdapter'
 import { QuickActions } from './QuickActions'
+import { TaskList } from './TaskList'
 import { ToolKindIcon } from './ToolKindIcon'
 import { StreamingText } from './StreamingText'
 import { ThinkingReasoning } from './ThinkingReasoning'
@@ -16,9 +17,6 @@ import styles from './AgentRun.module.css'
 
 interface AgentRunProps {
   events: ScenarioRunEventAny[]
-  /** 测试调试流：只在显式 debug_trace SSE 开启时存在，不属于正式历史。 */
-  debugReasoning?: string[]
-  debugReasoningElapsed?: number
   fallbackUser?: string
   fallbackReply?: string
   active?: boolean
@@ -28,8 +26,6 @@ interface AgentRunProps {
 
 export function AgentRun({
   events,
-  debugReasoning = [],
-  debugReasoningElapsed,
   fallbackUser = '',
   fallbackReply = '',
   active = false,
@@ -95,10 +91,9 @@ export function AgentRun({
 
           <ThinkingReasoning
             items={model.legacyReasoningItems.map((text) => ({ stage: 'composing_reply' as const, text }))}
-            rawChunks={debugReasoning}
-            rawActive={active}
-            rawElapsedSeconds={debugReasoningElapsed}
           />
+
+          {model.tasks.length > 1 && <TaskList tasks={model.tasks} active={isProcessing} />}
 
           {toolChips.map((chip) => (
             <ToolChipRow key={chip.key} chip={chip} />
