@@ -128,6 +128,7 @@ type TurnAssessment struct {
 	AnswerAttemptText     string   `json:"answer_attempt_text"`
 	EstablishedFacts      []string `json:"established_facts"`
 	ProgressAssessment    string   `json:"progress_assessment"`
+	RepairStatus          string   `json:"repair_status"`
 	IsStuck               bool     `json:"is_stuck"`
 	IsOffTopic            bool     `json:"is_off_topic"`
 	IsNoise               bool     `json:"is_noise"`
