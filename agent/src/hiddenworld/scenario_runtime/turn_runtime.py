@@ -822,10 +822,11 @@ def _assessment_from_single_agent(request, final_output, events, successful_acti
                 request.structured_user_action.normalized_scope.strip()
                 or request.structured_user_action.action_id.strip()
             )
+        request_summary = request.user_message.strip() if successful_actions else ""
         return TurnAssessment(
             intent="investigate" if successful_actions or request.structured_user_action is not None else "chat",
             requested_action=structured_scope,
-            requested_action_raw=structured_scope,
+            requested_action_raw=structured_scope or request_summary,
             action_match_status="matched" if successful_actions else "none",
             actions=list(dict.fromkeys(successful_actions)),
             progress_assessment="progress" if successful_actions else "unknown",
@@ -877,6 +878,15 @@ def _assessment_from_single_agent(request, final_output, events, successful_acti
                 "skill_mastery_signals": {},
                 "preference_signals": {},
             }
+        )
+    requested_action_raw = (
+        assessment.requested_action_raw.strip()
+        or assessment.requested_action.strip()
+        or (request.user_message.strip() if successful_actions else "")
+    )
+    if requested_action_raw != assessment.requested_action_raw:
+        assessment = assessment.model_copy(
+            update={"requested_action_raw": requested_action_raw}
         )
     return assessment
 

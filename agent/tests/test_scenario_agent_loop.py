@@ -37,7 +37,11 @@ from hiddenworld.scenario_runtime import (
     VirtualObservationExecutor,
     project_agent_context,
 )
-from hiddenworld.scenario_runtime.turn_runtime import SingleAgentRuntime, _analysis_from_single_agent
+from hiddenworld.scenario_runtime.turn_runtime import (
+    SingleAgentRuntime,
+    _analysis_from_single_agent,
+    _assessment_from_single_agent,
+)
 
 
 def _context(public_scenario: PublicScenario) -> AgentContext:
@@ -735,6 +739,43 @@ def test_fixed_vip_latency_scope_starts_from_the_deepest_ready_action() -> None:
     assert [item.tool_id for item in context.available_tools] == [
         "inspect:logs.service_callback",
     ]
+
+
+def test_runtime_keeps_assessment_and_analysis_request_summary_identical(
+    hidden_world,
+    learner_state,
+    public_scenario,
+) -> None:
+    request = AgentTurnRequest(
+        request_id="assessment-analysis-request-summary",
+        session_id="session-1",
+        state_revision=1,
+        public_scenario=public_scenario,
+        hidden_world=hidden_world,
+        learner_state=learner_state,
+        user_message="先看看 CPU",
+    )
+    output = ToolCallsOutput(
+        kind="tool_calls",
+        public_summary="检查 CPU",
+        calls=[ToolCall(call_id="cpu", tool_id="inspect:metrics.cpu")],
+    )
+
+    assessment = _assessment_from_single_agent(
+        request,
+        output,
+        [],
+        ["inspect:metrics.cpu"],
+    )
+    analysis = _analysis_from_single_agent(
+        request,
+        output,
+        [],
+        ["inspect:metrics.cpu"],
+        assessment=assessment,
+    )
+
+    assert assessment.requested_action_raw == analysis.requested_action_raw == "先看看 CPU"
 
 
 @pytest.mark.asyncio
