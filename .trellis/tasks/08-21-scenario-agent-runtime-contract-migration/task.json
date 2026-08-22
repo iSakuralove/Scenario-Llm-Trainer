@@ -18,7 +18,14 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "08-22-v3-turn-envelope-loop",
+    "08-22-v3-tool-dependency-scheduler",
+    "08-22-v3-state-projections",
+    "08-22-v3-payment-callback-contract",
+    "08-22-v3-go-event-commit-boundary",
+    "08-22-v3-frontend-tool-timeline"
+  ],
   "parent": null,
   "relatedFiles": [],
   "notes": "",
